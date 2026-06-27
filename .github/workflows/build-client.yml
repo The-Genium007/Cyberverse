@@ -1,0 +1,53 @@
+name: build-client
+# Compile le client Cyberverse porté (plugin RED4ext) en .dll Windows, dans le cloud.
+# GNS via vcpkg (manifest mode), SDK/red-lib via submodules. Upload du .dll en artefact.
+
+on:
+  push:
+    branches: [ port/2.31 ]
+    paths:
+      - 'client/red4ext/**'
+      - '.github/workflows/build-client.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: MSVC dev env (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: VCPKG_ROOT depuis le runner
+        shell: pwsh
+        run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Configurer (Ninja + vcpkg, Release)
+        working-directory: client/red4ext
+        run: cmake --preset ninja-vcpkg -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compiler
+        working-directory: client/red4ext
+        run: cmake --build --preset ninja-vcpkg
+
+      - name: Localiser le .dll
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Recurse client/red4ext/build -Filter Cyberverse.Red4Ext.dll | Select-Object -First 1
+          if (-not $dll) { Write-Error "DLL introuvable"; exit 1 }
+          Write-Host "DLL: $($dll.FullName)  ($($dll.Length) o)"
+          $dest = "staging/red4ext/plugins/Cyberverse"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item $dll.FullName $dest/
+
+      - name: Upload artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyberverse-client-overlay
+          path: staging/**
+          if-no-files-found: error
