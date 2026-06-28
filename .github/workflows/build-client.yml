@@ -1,6 +1,7 @@
 name: build-client
 # Compile le client Cyberverse porté (plugin RED4ext) en .dll Windows, dans le cloud.
-# GNS via vcpkg (manifest mode), SDK/red-lib via submodules. Upload du .dll en artefact.
+# GNS via vcpkg (manifest mode) AVEC cache binaire GitHub Actions → GNS compilé une seule
+# fois, réutilisé aux runs suivantes. SDK/red-lib via submodules. Upload du .dll en artefact.
 
 on:
   push:
@@ -9,6 +10,9 @@ on:
       - 'client/red4ext/**'
       - '.github/workflows/build-client.yml'
   workflow_dispatch:
+
+env:
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
   build:
@@ -22,6 +26,13 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Variables cache GHA pour vcpkg
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '')
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '')
 
       - name: VCPKG_ROOT depuis le runner
         shell: pwsh
