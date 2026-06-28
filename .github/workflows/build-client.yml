@@ -46,15 +46,25 @@ jobs:
         working-directory: client/red4ext
         run: cmake --build --preset ninja-vcpkg
 
-      - name: Localiser le .dll
+      - name: Rassembler l'overlay (plugin + DLL runtime GNS)
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Recurse client/red4ext/build -Filter Cyberverse.Red4Ext.dll | Select-Object -First 1
-          if (-not $dll) { Write-Error "DLL introuvable"; exit 1 }
-          Write-Host "DLL: $($dll.FullName)  ($($dll.Length) o)"
           $dest = "staging/red4ext/plugins/Cyberverse"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          # 1) le plugin
+          $dll = Get-ChildItem -Recurse client/red4ext/build -Filter Cyberverse.Red4Ext.dll | Select-Object -First 1
+          if (-not $dll) { Write-Error "Plugin DLL introuvable"; exit 1 }
           Copy-Item $dll.FullName $dest/
+          Write-Host "Plugin : $($dll.FullName)  ($($dll.Length) o)"
+          # 2) DLL runtime depuis vcpkg_installed (GNS + deps : openssl, protobuf, abseil...)
+          $bin = Get-ChildItem -Recurse client/red4ext/build -Directory -Filter bin |
+                 Where-Object { $_.FullName -like "*vcpkg_installed*" -and $_.FullName -like "*x64-windows*" -and $_.FullName -notlike "*debug*" } |
+                 Select-Object -First 1
+          if (-not $bin) { Write-Error "vcpkg_installed/x64-windows/bin introuvable"; exit 1 }
+          Get-ChildItem $bin.FullName -Filter *.dll | ForEach-Object {
+            Copy-Item $_.FullName $dest/; Write-Host "Runtime : $($_.Name)"
+          }
+          Write-Host "=== overlay final ==="; Get-ChildItem -Recurse staging | Select-Object FullName, Length
 
       - name: Upload artefact
         uses: actions/upload-artifact@v4
