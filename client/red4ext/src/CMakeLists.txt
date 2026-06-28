@@ -22,6 +22,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${PROJECT_HEADER_FILES} ${PROJECT_S
 
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE RED4ext::SDK)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE zpp_bits)
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE GameNetworkingSockets::static)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE GameNetworkingSockets::shared)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE RedLib)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE protocol)

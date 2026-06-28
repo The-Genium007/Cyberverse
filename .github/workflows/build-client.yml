@@ -38,26 +38,35 @@ jobs:
         shell: pwsh
         run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
-      - name: Configurer (Ninja + vcpkg statique, Release)
+      - name: Configurer (Ninja + vcpkg, Release)
         working-directory: client/red4ext
-        # Triplet STATIQUE (CRT dynamique /MD = compat jeu) → GNS+openssl+protobuf liés
-        # dans le plugin → un seul .dll autonome, zéro dépendance DLL externe (plus d'erreur 126).
-        run: cmake --preset ninja-vcpkg -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+        run: cmake --preset ninja-vcpkg -DCMAKE_BUILD_TYPE=Release
 
       - name: Compiler
         working-directory: client/red4ext
         run: cmake --build --preset ninja-vcpkg
 
-      - name: Rassembler l'overlay (plugin autonome)
+      - name: Rassembler l'overlay (plugin + DLL runtime dans bin/x64)
         shell: pwsh
         run: |
-          $dest = "staging/red4ext/plugins/Cyberverse"
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $plug = "staging/red4ext/plugins/Cyberverse"
+          $bin  = "staging/bin/x64"
+          New-Item -ItemType Directory -Force -Path $plug,$bin | Out-Null
+          # plugin → red4ext/plugins/Cyberverse/
           $dll = Get-ChildItem -Recurse client/red4ext/build -Filter Cyberverse.Red4Ext.dll | Select-Object -First 1
           if (-not $dll) { Write-Error "Plugin DLL introuvable"; exit 1 }
-          Copy-Item $dll.FullName $dest/
-          Write-Host "Plugin autonome : $($dll.FullName)  ($($dll.Length) o)"
-          Get-ChildItem -Recurse staging | Select-Object FullName, Length
+          Copy-Item $dll.FullName $plug/
+          Write-Host "Plugin : $($dll.FullName)  ($($dll.Length) o)"
+          # DLL runtime → bin/x64/ (à côté de l'exe = sur le chemin de recherche DLL).
+          # libprotoc (compilateur protobuf) exclu : inutile au runtime, ~10 Mo.
+          $vbin = Get-ChildItem -Recurse client/red4ext/build -Directory -Filter bin |
+                  Where-Object { $_.FullName -like "*vcpkg_installed*" -and $_.FullName -like "*x64-windows*" -and $_.FullName -notlike "*debug*" -and $_.FullName -notlike "*static*" } |
+                  Select-Object -First 1
+          if (-not $vbin) { Write-Error "vcpkg bin introuvable"; exit 1 }
+          Get-ChildItem $vbin.FullName -Filter *.dll | Where-Object { $_.Name -ne 'libprotoc.dll' } | ForEach-Object {
+            Copy-Item $_.FullName $bin/; Write-Host "Runtime → bin/x64 : $($_.Name)"
+          }
+          Write-Host "=== overlay final ==="; Get-ChildItem -Recurse staging | Select-Object FullName, Length
 
       - name: Upload artefact
         uses: actions/upload-artifact@v4
