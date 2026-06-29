@@ -21,6 +21,12 @@
 
 #include <zpp_bits.h>
 
+// Protocole TesseraSynth (FlatBuffers) + en-tetes generes.
+#include <flatbuffers/flatbuffers.h>
+#include "generated/protocol_generated.h"
+
+#include <set>
+
 bool NetworkGameSystem::Load()
 {
     if (SteamDatagramErrMsg errMsg; !GameNetworkingSockets_Init(nullptr, errMsg))
@@ -133,13 +139,11 @@ void NetworkGameSystem::ConnectionStatusChangedCallback(SteamNetConnectionStatus
         DWORD buf_len = 255;
         GetUserNameA(buf, &buf_len);
 
-        SDK->logger->Info(PLUGIN, "Socket connected, authenticating");
-        InitAuthServerBound auth_packet = {};
-        auth_packet.protocol_version = PROTOCOL_VERSION_CURRENT;
-        auth_packet.username = buf;
-
-        // TODO: Maybe we could manage this singleton access better? But then, the Game's GameSystem Container is the owner of "this"
-        Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(0, auth_packet);
+        SDK->logger->Info(PLUGIN, "Socket connected, sending Join (TesseraSynth)");
+        auto* system = Red::GetGameSystem<NetworkGameSystem>();
+        system->SendJoin(std::string(buf));
+        // Notre serveur n'a pas d'ACK d'auth : connexion etablie = pret.
+        system->FullyConnected = true;
     } else {
         Red::GetGameSystem<NetworkGameSystem>()->FullyConnected = false;
     }
@@ -218,7 +222,6 @@ void NetworkGameSystem::SetEntityPosition(const RED4ext::ent::EntityID entityId,
 
 void NetworkGameSystem::PollIncomingMessages()
 {
-    // TODO: More resonable quit condition.
     while (true)
     {
         ISteamNetworkingMessage* pIncomingMsg = nullptr;
@@ -227,196 +230,132 @@ void NetworkGameSystem::PollIncomingMessages()
         {
             break;
         }
-
         if (numMsgs < 0)
         {
             SDK->logger->ErrorF(PLUGIN, "Error polling messages: %d", numMsgs);
             return;
         }
 
-        // TODO: Handle or enqueue the message
-        //SDK->logger->InfoF(PLUGIN, "Received a packet with %d bytes", pIncomingMsg->m_cbSize);
-
-        auto [data, in] = zpp::bits::data_in();
-        const auto begin = (std::byte*)pIncomingMsg->GetData();
-        data.assign(begin, begin + pIncomingMsg->GetSize());
-
-        MessageFrame frame = {};
-        if (zpp::bits::failure(in(frame)))
+        // Un ServerEnvelope FlatBuffers par message. On verifie le buffer avant lecture.
+        const auto* bytes = static_cast<const uint8_t*>(pIncomingMsg->GetData());
+        const auto size = static_cast<size_t>(pIncomingMsg->GetSize());
+        flatbuffers::Verifier verifier(bytes, size);
+        if (verifier.VerifyBuffer<cyberpunk_rp::protocol::ServerEnvelope>(nullptr))
         {
-            SDK->logger->Error(PLUGIN, "Faulty packet");
-            pIncomingMsg->Release();
-            continue;
-        }
-
-        // TODO: This should both be more generic probably _AND_ we need to consider how we want to hand this off to C#,
-        // given that they may want to control _all_ packet logic. This however depends on how flexible and moddable we
-        // want our, e.g. auth handling, to be.
-        switch (frame.message_type)
-        {
-        case EINIT_AUTH_RESULT:
-        {
-            AuthResultClientBound auth_result_packet = {};
-            if (zpp::bits::failure(in(auth_result_packet)))
+            const auto* env = flatbuffers::GetRoot<cyberpunk_rp::protocol::ServerEnvelope>(bytes);
+            if (env != nullptr && env->msg_type() == cyberpunk_rp::protocol::ServerMsg_Snapshot)
             {
-                SDK->logger->Error(PLUGIN, "Faulty packet: AuthResultClientBound");
-                pIncomingMsg->Release();
-                continue;
-            }
-
-            switch (auth_result_packet.auth_result)
-            {
-            case EAuthResult_Ok:
-                SDK->logger->Info(PLUGIN, "Login accepted");
-                FullyConnected = true;
-                if (m_hasEnqueuedLoadLastCheckpoint && m_systemRequestsHandler)
-                {
-                    SDK->logger->Info(PLUGIN, "Loading the savegame");
-                    Red::CallVirtual(m_systemRequestsHandler, "LoadLastCheckpoint", false);
-                }
-                // TODO: Follow-Up action
-                break;
-            case EAuthResult_ValidationFailed:
-                SDK->logger->Warn(PLUGIN, "Login: Validation failed");
-                break;
-            case EAuthResult_VersionMismatch:
-                SDK->logger->Warn(PLUGIN, "Login: Version mismatch");
-                break;
-            default:
-                SDK->logger->ErrorF(PLUGIN, "Unknown auth result: %d", auth_result_packet.auth_result);
+                HandleSnapshot(env->msg_as_Snapshot());
             }
         }
-        break;
-
-        case eSpawnEntity:
+        else
         {
-            SpawnEntity spawn_entity = {};
-            if (zpp::bits::failure(in(spawn_entity)))
-            {
-                SDK->logger->Error(PLUGIN, "Faulty packet: SpawnEntity");
-                pIncomingMsg->Release();
-                continue;
-            }
-
-            if (m_networkedEntitiesLookup.contains(spawn_entity.networkedEntityId))
-            {
-                SDK->logger->WarnF(PLUGIN, "Already have a spawned entity for %llu", spawn_entity.networkedEntityId);
-                continue;
-            }
-
-            // TODO: separate spawning component
-            // TODO: SpawnTransientEntity should return the EntityId for a Map<NetworkedEntityId, LocalEntityId>, especially for further updates.
-            SDK->logger->InfoF(PLUGIN, "Spawning entity %llu", spawn_entity.recordId);
-            RED4ext::TweakDBID entityName = { spawn_entity.recordId };
-            RED4ext::Vector4 worldPosition = { spawn_entity.spawnPosition.x, spawn_entity.spawnPosition.y, spawn_entity.spawnPosition.z, 1.0 };
-            RED4ext::Quaternion worldOrientation = { 0.0, 0.0, 0.0, 1.0 };
-
-            RED4ext::ent::EntityID entityId;
-            if (!Red::CallVirtual(this, "SpawnTransientEntity", entityId, entityName, worldPosition, worldOrientation))
-            {
-                SDK->logger->Warn(PLUGIN, "Failed to spawn entity!");
-            }
-
-            // TODO: Validation. already contained? Error!
-            SDK->logger->InfoF(PLUGIN, "Got Entity Id %llu for networkId %llu", entityId.hash, spawn_entity.networkedEntityId);
-            m_networkedEntitiesLookup.insert(std::make_pair(spawn_entity.networkedEntityId, entityId));
-        }
-        break;
-
-        case eTeleportEntity:
-        {
-            TeleportEntity teleport = {};
-            if (zpp::bits::failure(in(teleport)))
-            {
-                SDK->logger->Error(PLUGIN, "Faulty packet: TeleportEntity");
-                pIncomingMsg->Release();
-                continue;
-            }
-
-            if (!m_networkedEntitiesLookup.contains(teleport.networkedEntityId))
-            {
-                SDK->logger->WarnF(PLUGIN, "Entity Teleport packet for unknown networkedEntityId %llu. Map size %d",
-                                   teleport.networkedEntityId, m_networkedEntitiesLookup.size());
-                break;
-            }
-
-            const auto entityId = m_networkedEntitiesLookup[teleport.networkedEntityId];
-            const RED4ext::Vector4 worldPosition = { teleport.targetPosition.x, teleport.targetPosition.y, teleport.targetPosition.z, 1.0 };
-
-            // TODO: If teleport flag is set
-            //SetEntityPosition(entityId, worldPosition, teleport.yaw);
-
-            const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
-            if (!entity.has_value())
-            {
-                SDK->logger->Info(PLUGIN, "Skipping TeleportEntity");
-                break;
-            }
-
-            const auto yawSource = Cyberverse::Utils::Quaternion_ToEulerAngles(Cyberverse::Utils::Entity_GetWorldOrientation(entity.value())).Yaw;
-            const auto positionSource = Cyberverse::Utils::Entity_GetWorldPosition(entity.value());
-
-            if (positionSource.X == 0.0 && positionSource.Y == 0.0 && positionSource.Z == 0.0)
-            {
-                // TODO: let's pray that this doesn't have a side effect when players DO reside at (0, 0, 0)
-                // The first interpolation would go from (0, 0, 0) to target position, but that would despawn and destroy
-                // the entity, since it's too far away.
-                SDK->logger->Warn(PLUGIN, "Server Bug: Teleport Entity without the teleport flag for a fresh spawned entity");
-                SetEntityPosition(entityId, worldPosition, teleport.yaw);
-                break;
-            }
-
-            SDK->logger->TraceF(PLUGIN, "New Interpolation Data (entity %llu): yaw %f -> %f, position: (%f, %f, %f) -> (%f, %f, %f)", teleport.networkedEntityId, yawSource, teleport.yaw, positionSource.X, positionSource.Y, positionSource.Z, teleport.targetPosition.x, teleport.targetPosition.y, teleport.targetPosition.z);
-
-            if (m_LastTeleportCommand.contains(entityId))
-            {
-                // TODO: Alternatively we could query the command and if it's still running just skipping enqueing a new comand
-                //  but that probably means more lags/teleports again, because the gap between teleports becomes larger.
-                //  but then, does stopping really change a thing? The best would be to _update_ the existing command,
-                //  but is that working? who knows!
-                const auto commandRef = m_LastTeleportCommand[entityId];
-                Red::CallVirtual(this, "StopAICommand", entity.value(), commandRef);
-            }
-
-            // TODO: This should probably be a map<id, list<data>>, so that a server that eagerly sends too much data doesn't increase interpolation delay
-            //  in contrast, we can just increase the time velocity of the interpolator
-            const auto interpolation_data = InterpolationData(Cyberverse::Utils::Vector4To3(positionSource), teleport.targetPosition, yawSource, teleport.yaw, 0.1f);
-            m_interpolationData[entityId] = interpolation_data;
-        }
-        break;
-
-        case eDestroyEntity:
-        {
-            DestroyEntity destroy_entity = {};
-            if (zpp::bits::failure(in(destroy_entity)))
-            {
-                SDK->logger->Error(PLUGIN, "Faulty packet: DestroyEntity");
-                pIncomingMsg->Release();
-                continue;
-            }
-
-            if (!m_networkedEntitiesLookup.contains(destroy_entity.networkedEntityId))
-            {
-                SDK->logger->WarnF(PLUGIN, "Have no spawned entity for %llu", destroy_entity.networkedEntityId);
-                continue;
-            }
-
-            const auto entityId = m_networkedEntitiesLookup[destroy_entity.networkedEntityId];
-            if (!Red::CallVirtual(this, "DestroyTransientEntity", entityId))
-            {
-                SDK->logger->Warn(PLUGIN, "Failed to destroy entity!");
-            }
-
-            m_networkedEntitiesLookup.erase(entityId);
-        }
-        break;
-
-        default:
-            printf("Message Type: %d\n", frame.message_type);
-            break;
+            SDK->logger->Warn(PLUGIN, "Paquet serveur invalide (FlatBuffers)");
         }
 
         pIncomingMsg->Release();
+    }
+}
+
+void NetworkGameSystem::SendJoin(const std::string& displayName)
+{
+    if (m_pInterface == nullptr)
+    {
+        return;
+    }
+    flatbuffers::FlatBufferBuilder builder;
+    const auto name = builder.CreateString(displayName);
+    const auto join = cyberpunk_rp::protocol::CreateJoin(builder, name);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_Join, join.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(
+        m_hConnection, builder.GetBufferPointer(), builder.GetSize(),
+        k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
+{
+    if (m_pInterface == nullptr)
+    {
+        return;
+    }
+    flatbuffers::FlatBufferBuilder builder;
+    const cyberpunk_rp::protocol::Vec3 pos(x, y, z);
+    const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(builder, &pos, yaw);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_PositionUpdate, pu.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(
+        m_hConnection, builder.GetBufferPointer(), builder.GetSize(),
+        k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot)
+{
+    if (snapshot == nullptr)
+    {
+        return;
+    }
+
+    // Le serveur exclut deja le joueur local : `players` = uniquement les autres.
+    std::set<uint64_t> present;
+    const auto* players = snapshot->players();
+    if (players != nullptr)
+    {
+        for (const auto* ps : *players)
+        {
+            if (ps == nullptr || ps->position() == nullptr)
+            {
+                continue;
+            }
+            const uint64_t id = ps->id();
+            present.insert(id);
+
+            const auto* pos = ps->position();
+            const RED4ext::Vector4 worldPosition = { pos->x(), pos->y(), pos->z(), 1.0f };
+            const float yaw = ps->yaw();
+
+            const auto existing = m_networkedEntitiesLookup.find(id);
+            if (existing == m_networkedEntitiesLookup.end())
+            {
+                // Id inconnu -> spawn d'un avatar distant.
+                RED4ext::TweakDBID record("Character.Panam");
+                RED4ext::Quaternion worldOrientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+                RED4ext::ent::EntityID entityId;
+                if (Red::CallVirtual(this, "SpawnTransientEntity", entityId, record, worldPosition, worldOrientation))
+                {
+                    m_networkedEntitiesLookup.insert(std::make_pair(id, entityId));
+                    SDK->logger->InfoF(PLUGIN, "Spawn avatar reseau %llu -> entity %llu", id, entityId.hash);
+                }
+                else
+                {
+                    SDK->logger->Warn(PLUGIN, "Echec spawn avatar reseau");
+                }
+            }
+            else
+            {
+                // Id connu -> teleporte a la nouvelle pose (interpolation a ajouter plus tard).
+                SetEntityPosition(existing->second, worldPosition, yaw);
+            }
+        }
+    }
+
+    // Ids disparus du snapshot -> despawn.
+    for (auto it = m_networkedEntitiesLookup.begin(); it != m_networkedEntitiesLookup.end();)
+    {
+        if (!present.contains(it->first))
+        {
+            if (!Red::CallVirtual(this, "DestroyTransientEntity", it->second))
+            {
+                SDK->logger->Warn(PLUGIN, "Echec despawn avatar reseau");
+            }
+            it = m_networkedEntitiesLookup.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
     }
 }
 
@@ -435,12 +374,8 @@ bool NetworkGameSystem::OnGameRestored()
     const auto position = Cyberverse::Utils::Entity_GetWorldPosition(player);
     SDK->logger->InfoF(PLUGIN, "Player at (%f, %f, %f, %f)", position.X, position.Y, position.Z, position.W);
 
-    PlayerJoinWorld join_packet = {};
-    join_packet.position = { position.X, position.Y, position.Z };
-
-    // TODO: Maybe we could manage this singleton access better? But then, the Game's GameSystem Container is the owner
-    // of "this"
-    Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(0, join_packet);
+    // Couture TesseraSynth : le Join part a la connexion GNS (ConnectionStatusChangedCallback),
+    // pas ici. L'ancien PlayerJoinWorld (zpp) n'est pas compris par notre serveur FlatBuffers.
 
     m_gameRestored = true;
     return res;
@@ -461,8 +396,7 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     const auto orientation = Cyberverse::Utils::Entity_GetWorldOrientation(player);
     const auto [Roll, Pitch, Yaw] = Cyberverse::Utils::Quaternion_ToEulerAngles(orientation);
 
-    const PlayerPositionUpdate position_update = { {  X, Y, Z }, Yaw};
-    this->EnqueueMessage(1, position_update);
+    this->SendPositionUpdate(X, Y, Z, Yaw);
 }
 
 void NetworkGameSystem::InterpolatePuppets(const float deltaTime)

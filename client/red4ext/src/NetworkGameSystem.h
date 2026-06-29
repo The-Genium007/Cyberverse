@@ -21,6 +21,9 @@
 
 #include <serverbound/WorldPacketsServerBound.h>
 
+// Protocole TesseraSynth (FlatBuffers) — forward decl pour ne pas tirer l'en-tête généré ici.
+namespace cyberpunk_rp::protocol { struct Snapshot; }
+
 class NetworkGameSystem : public Red::IGameSystem
 {
 private:
@@ -49,6 +52,13 @@ private:
 protected:
     void PollIncomingMessages();
     void TrackPlayerPosition(float deltaTime);
+
+    // --- Couture protocole TesseraSynth (FlatBuffers) ---
+    // Envoient un ClientEnvelope (Join / PositionUpdate) au serveur Rust autoritaire.
+    void SendJoin(const std::string& displayName);
+    void SendPositionUpdate(float x, float y, float z, float yaw);
+    // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
+    void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
 
 public:
     bool FullyConnected = false;

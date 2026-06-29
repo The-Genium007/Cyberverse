@@ -39,5 +39,9 @@ add_subdirectory(deps/red-lib)
 add_library(protocol INTERFACE)
 target_include_directories(protocol INTERFACE "../../shared/protocol")
 
+# FlatBuffers (header-only vendu, 25.12.19) pour le protocole TesseraSynth
+add_library(flatbuffers_hdr INTERFACE)
+target_include_directories(flatbuffers_hdr INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/deps/flatbuffers")
+
 # Include the main project.
 add_subdirectory(src)
