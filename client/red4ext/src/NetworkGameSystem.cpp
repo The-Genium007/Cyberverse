@@ -97,11 +97,19 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
         // We auto-connect on the first tick with the CLI address. We don't connect earlier because the message loop
         // isn't run there yet and we are prone to time out.
         const auto commandLine = GetCommandLineA();
+        // DIAGNOSTIC TesseraSynth : tracer ce que voit réellement le tick réseau au 1er passage.
+        SDK->logger->InfoF(PLUGIN, "[net] 1er tick — GetCommandLineA = %s", commandLine ? commandLine : "(null)");
         const auto host = ParseHostFromCommandLine(commandLine);
         const auto port = ParsePortFromCommandLine(commandLine);
         if (host.has_value() && port.has_value())
         {
+            SDK->logger->InfoF(PLUGIN, "[net] args OK : host=%s port=%d", host->c_str(), port.value());
             ConnectToServer(host.value(), port.value());
+        }
+        else
+        {
+            SDK->logger->Warn(PLUGIN, "[net] pas d'adresse serveur sur la ligne de commande "
+                                      "(--cyberverse-server-address= / --cyberverse-server-port=)");
         }
         m_hasTriedToConnect = true; // We lie here, to prevent parsing the cli every time.
     }
