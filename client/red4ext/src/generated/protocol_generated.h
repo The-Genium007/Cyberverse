@@ -30,6 +30,27 @@ struct PlayerStateBuilder;
 struct Snapshot;
 struct SnapshotBuilder;
 
+struct Kicked;
+struct KickedBuilder;
+
+struct WorldState;
+struct WorldStateBuilder;
+
+struct ClientTimeReport;
+struct ClientTimeReportBuilder;
+
+struct AdminCommand;
+struct AdminCommandBuilder;
+
+struct CommandResult;
+struct CommandResultBuilder;
+
+struct PermissionSync;
+struct PermissionSyncBuilder;
+
+struct Leave;
+struct LeaveBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -40,31 +61,40 @@ enum ClientMsg : uint8_t {
   ClientMsg_NONE = 0,
   ClientMsg_Join = 1,
   ClientMsg_PositionUpdate = 2,
+  ClientMsg_ClientTimeReport = 3,
+  ClientMsg_AdminCommand = 4,
+  ClientMsg_Leave = 5,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_PositionUpdate
+  ClientMsg_MAX = ClientMsg_Leave
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[3] {
+inline const ClientMsg (&EnumValuesClientMsg())[6] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
-    ClientMsg_PositionUpdate
+    ClientMsg_PositionUpdate,
+    ClientMsg_ClientTimeReport,
+    ClientMsg_AdminCommand,
+    ClientMsg_Leave
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[4] = {
+  static const char * const names[7] = {
     "NONE",
     "Join",
     "PositionUpdate",
+    "ClientTimeReport",
+    "AdminCommand",
+    "Leave",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_PositionUpdate)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_Leave)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -81,6 +111,18 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::PositionUpdate> {
   static const ClientMsg enum_value = ClientMsg_PositionUpdate;
 };
 
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::ClientTimeReport> {
+  static const ClientMsg enum_value = ClientMsg_ClientTimeReport;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::AdminCommand> {
+  static const ClientMsg enum_value = ClientMsg_AdminCommand;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::Leave> {
+  static const ClientMsg enum_value = ClientMsg_Leave;
+};
+
 template <bool B = false>
 bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ClientMsg type);
 template <bool B = false>
@@ -89,29 +131,41 @@ bool VerifyClientMsgVector(::flatbuffers::VerifierTemplate<B> &verifier, const :
 enum ServerMsg : uint8_t {
   ServerMsg_NONE = 0,
   ServerMsg_Snapshot = 1,
+  ServerMsg_Kicked = 2,
+  ServerMsg_WorldState = 3,
+  ServerMsg_CommandResult = 4,
+  ServerMsg_PermissionSync = 5,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_Snapshot
+  ServerMsg_MAX = ServerMsg_PermissionSync
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[2] {
+inline const ServerMsg (&EnumValuesServerMsg())[6] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
-    ServerMsg_Snapshot
+    ServerMsg_Snapshot,
+    ServerMsg_Kicked,
+    ServerMsg_WorldState,
+    ServerMsg_CommandResult,
+    ServerMsg_PermissionSync
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[3] = {
+  static const char * const names[7] = {
     "NONE",
     "Snapshot",
+    "Kicked",
+    "WorldState",
+    "CommandResult",
+    "PermissionSync",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_Snapshot)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_PermissionSync)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -122,6 +176,22 @@ template<typename T> struct ServerMsgTraits {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::Snapshot> {
   static const ServerMsg enum_value = ServerMsg_Snapshot;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::Kicked> {
+  static const ServerMsg enum_value = ServerMsg_Kicked;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::WorldState> {
+  static const ServerMsg enum_value = ServerMsg_WorldState;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CommandResult> {
+  static const ServerMsg enum_value = ServerMsg_CommandResult;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::PermissionSync> {
+  static const ServerMsg enum_value = ServerMsg_PermissionSync;
 };
 
 template <bool B = false>
@@ -161,16 +231,27 @@ FLATBUFFERS_STRUCT_END(Vec3, 12);
 struct Join FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef JoinBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_DISPLAY_NAME = 4
+    VT_DISPLAY_NAME = 4,
+    VT_TOKEN = 6,
+    VT_PROTOCOL_VERSION = 8
   };
   const ::flatbuffers::String *display_name() const {
     return GetPointer<const ::flatbuffers::String *>(VT_DISPLAY_NAME);
+  }
+  const ::flatbuffers::String *token() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_TOKEN);
+  }
+  uint32_t protocol_version() const {
+    return GetField<uint32_t>(VT_PROTOCOL_VERSION, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_DISPLAY_NAME) &&
            verifier.VerifyString(display_name()) &&
+           VerifyOffset(verifier, VT_TOKEN) &&
+           verifier.VerifyString(token()) &&
+           VerifyField<uint32_t>(verifier, VT_PROTOCOL_VERSION, 4) &&
            verifier.EndTable();
   }
 };
@@ -181,6 +262,12 @@ struct JoinBuilder {
   ::flatbuffers::uoffset_t start_;
   void add_display_name(::flatbuffers::Offset<::flatbuffers::String> display_name) {
     fbb_.AddOffset(Join::VT_DISPLAY_NAME, display_name);
+  }
+  void add_token(::flatbuffers::Offset<::flatbuffers::String> token) {
+    fbb_.AddOffset(Join::VT_TOKEN, token);
+  }
+  void add_protocol_version(uint32_t protocol_version) {
+    fbb_.AddElement<uint32_t>(Join::VT_PROTOCOL_VERSION, protocol_version, 0);
   }
   explicit JoinBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -195,19 +282,28 @@ struct JoinBuilder {
 
 inline ::flatbuffers::Offset<Join> CreateJoin(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::String> display_name = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> display_name = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> token = 0,
+    uint32_t protocol_version = 0) {
   JoinBuilder builder_(_fbb);
+  builder_.add_protocol_version(protocol_version);
+  builder_.add_token(token);
   builder_.add_display_name(display_name);
   return builder_.Finish();
 }
 
 inline ::flatbuffers::Offset<Join> CreateJoinDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const char *display_name = nullptr) {
+    const char *display_name = nullptr,
+    const char *token = nullptr,
+    uint32_t protocol_version = 0) {
   auto display_name__ = display_name ? _fbb.CreateString(display_name) : 0;
+  auto token__ = token ? _fbb.CreateString(token) : 0;
   return cyberpunk_rp::protocol::CreateJoin(
       _fbb,
-      display_name__);
+      display_name__,
+      token__,
+      protocol_version);
 }
 
 struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -389,6 +485,395 @@ inline ::flatbuffers::Offset<Snapshot> CreateSnapshotDirect(
       players__);
 }
 
+struct Kicked FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef KickedBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_REASON = 4
+  };
+  const ::flatbuffers::String *reason() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_REASON);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_REASON) &&
+           verifier.VerifyString(reason()) &&
+           verifier.EndTable();
+  }
+};
+
+struct KickedBuilder {
+  typedef Kicked Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_reason(::flatbuffers::Offset<::flatbuffers::String> reason) {
+    fbb_.AddOffset(Kicked::VT_REASON, reason);
+  }
+  explicit KickedBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Kicked> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Kicked>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Kicked> CreateKicked(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> reason = 0) {
+  KickedBuilder builder_(_fbb);
+  builder_.add_reason(reason);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<Kicked> CreateKickedDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *reason = nullptr) {
+  auto reason__ = reason ? _fbb.CreateString(reason) : 0;
+  return cyberpunk_rp::protocol::CreateKicked(
+      _fbb,
+      reason__);
+}
+
+struct WorldState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef WorldStateBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_HOUR = 4,
+    VT_MINUTE = 6,
+    VT_WEATHER = 8
+  };
+  uint8_t hour() const {
+    return GetField<uint8_t>(VT_HOUR, 0);
+  }
+  uint8_t minute() const {
+    return GetField<uint8_t>(VT_MINUTE, 0);
+  }
+  const ::flatbuffers::String *weather() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_WEATHER);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_HOUR, 1) &&
+           VerifyField<uint8_t>(verifier, VT_MINUTE, 1) &&
+           VerifyOffset(verifier, VT_WEATHER) &&
+           verifier.VerifyString(weather()) &&
+           verifier.EndTable();
+  }
+};
+
+struct WorldStateBuilder {
+  typedef WorldState Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_hour(uint8_t hour) {
+    fbb_.AddElement<uint8_t>(WorldState::VT_HOUR, hour, 0);
+  }
+  void add_minute(uint8_t minute) {
+    fbb_.AddElement<uint8_t>(WorldState::VT_MINUTE, minute, 0);
+  }
+  void add_weather(::flatbuffers::Offset<::flatbuffers::String> weather) {
+    fbb_.AddOffset(WorldState::VT_WEATHER, weather);
+  }
+  explicit WorldStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<WorldState> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<WorldState>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<WorldState> CreateWorldState(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t hour = 0,
+    uint8_t minute = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> weather = 0) {
+  WorldStateBuilder builder_(_fbb);
+  builder_.add_weather(weather);
+  builder_.add_minute(minute);
+  builder_.add_hour(hour);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<WorldState> CreateWorldStateDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t hour = 0,
+    uint8_t minute = 0,
+    const char *weather = nullptr) {
+  auto weather__ = weather ? _fbb.CreateString(weather) : 0;
+  return cyberpunk_rp::protocol::CreateWorldState(
+      _fbb,
+      hour,
+      minute,
+      weather__);
+}
+
+struct ClientTimeReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ClientTimeReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_HOUR = 4,
+    VT_MINUTE = 6,
+    VT_SECOND = 8
+  };
+  uint8_t hour() const {
+    return GetField<uint8_t>(VT_HOUR, 0);
+  }
+  uint8_t minute() const {
+    return GetField<uint8_t>(VT_MINUTE, 0);
+  }
+  uint8_t second() const {
+    return GetField<uint8_t>(VT_SECOND, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_HOUR, 1) &&
+           VerifyField<uint8_t>(verifier, VT_MINUTE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_SECOND, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct ClientTimeReportBuilder {
+  typedef ClientTimeReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_hour(uint8_t hour) {
+    fbb_.AddElement<uint8_t>(ClientTimeReport::VT_HOUR, hour, 0);
+  }
+  void add_minute(uint8_t minute) {
+    fbb_.AddElement<uint8_t>(ClientTimeReport::VT_MINUTE, minute, 0);
+  }
+  void add_second(uint8_t second) {
+    fbb_.AddElement<uint8_t>(ClientTimeReport::VT_SECOND, second, 0);
+  }
+  explicit ClientTimeReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ClientTimeReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ClientTimeReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ClientTimeReport> CreateClientTimeReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t hour = 0,
+    uint8_t minute = 0,
+    uint8_t second = 0) {
+  ClientTimeReportBuilder builder_(_fbb);
+  builder_.add_second(second);
+  builder_.add_minute(minute);
+  builder_.add_hour(hour);
+  return builder_.Finish();
+}
+
+struct AdminCommand FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef AdminCommandBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_TEXT = 4
+  };
+  const ::flatbuffers::String *text() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_TEXT);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_TEXT) &&
+           verifier.VerifyString(text()) &&
+           verifier.EndTable();
+  }
+};
+
+struct AdminCommandBuilder {
+  typedef AdminCommand Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_text(::flatbuffers::Offset<::flatbuffers::String> text) {
+    fbb_.AddOffset(AdminCommand::VT_TEXT, text);
+  }
+  explicit AdminCommandBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<AdminCommand> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<AdminCommand>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<AdminCommand> CreateAdminCommand(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> text = 0) {
+  AdminCommandBuilder builder_(_fbb);
+  builder_.add_text(text);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<AdminCommand> CreateAdminCommandDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *text = nullptr) {
+  auto text__ = text ? _fbb.CreateString(text) : 0;
+  return cyberpunk_rp::protocol::CreateAdminCommand(
+      _fbb,
+      text__);
+}
+
+struct CommandResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CommandResultBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SUCCESS = 4,
+    VT_MESSAGE = 6
+  };
+  bool success() const {
+    return GetField<uint8_t>(VT_SUCCESS, 0) != 0;
+  }
+  const ::flatbuffers::String *message() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_MESSAGE);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_SUCCESS, 1) &&
+           VerifyOffset(verifier, VT_MESSAGE) &&
+           verifier.VerifyString(message()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CommandResultBuilder {
+  typedef CommandResult Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_success(bool success) {
+    fbb_.AddElement<uint8_t>(CommandResult::VT_SUCCESS, static_cast<uint8_t>(success), 0);
+  }
+  void add_message(::flatbuffers::Offset<::flatbuffers::String> message) {
+    fbb_.AddOffset(CommandResult::VT_MESSAGE, message);
+  }
+  explicit CommandResultBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CommandResult> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CommandResult>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CommandResult> CreateCommandResult(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool success = false,
+    ::flatbuffers::Offset<::flatbuffers::String> message = 0) {
+  CommandResultBuilder builder_(_fbb);
+  builder_.add_message(message);
+  builder_.add_success(success);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CommandResult> CreateCommandResultDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool success = false,
+    const char *message = nullptr) {
+  auto message__ = message ? _fbb.CreateString(message) : 0;
+  return cyberpunk_rp::protocol::CreateCommandResult(
+      _fbb,
+      success,
+      message__);
+}
+
+struct PermissionSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef PermissionSyncBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NODES = 4
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *nodes() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_NODES);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_NODES) &&
+           verifier.VerifyVector(nodes()) &&
+           verifier.VerifyVectorOfStrings(nodes()) &&
+           verifier.EndTable();
+  }
+};
+
+struct PermissionSyncBuilder {
+  typedef PermissionSync Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_nodes(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> nodes) {
+    fbb_.AddOffset(PermissionSync::VT_NODES, nodes);
+  }
+  explicit PermissionSyncBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<PermissionSync> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<PermissionSync>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<PermissionSync> CreatePermissionSync(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> nodes = 0) {
+  PermissionSyncBuilder builder_(_fbb);
+  builder_.add_nodes(nodes);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<PermissionSync> CreatePermissionSyncDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *nodes = nullptr) {
+  auto nodes__ = nodes ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*nodes) : 0;
+  return cyberpunk_rp::protocol::CreatePermissionSync(
+      _fbb,
+      nodes__);
+}
+
+struct Leave FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef LeaveBuilder Builder;
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           verifier.EndTable();
+  }
+};
+
+struct LeaveBuilder {
+  typedef Leave Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  explicit LeaveBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Leave> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Leave>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Leave> CreateLeave(
+    ::flatbuffers::FlatBufferBuilder &_fbb) {
+  LeaveBuilder builder_(_fbb);
+  return builder_.Finish();
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -408,6 +893,15 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::PositionUpdate *msg_as_PositionUpdate() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_PositionUpdate ? static_cast<const cyberpunk_rp::protocol::PositionUpdate *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::ClientTimeReport *msg_as_ClientTimeReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_ClientTimeReport ? static_cast<const cyberpunk_rp::protocol::ClientTimeReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::AdminCommand *msg_as_AdminCommand() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_AdminCommand ? static_cast<const cyberpunk_rp::protocol::AdminCommand *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::Leave *msg_as_Leave() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_Leave ? static_cast<const cyberpunk_rp::protocol::Leave *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -424,6 +918,18 @@ template<> inline const cyberpunk_rp::protocol::Join *ClientEnvelope::msg_as<cyb
 
 template<> inline const cyberpunk_rp::protocol::PositionUpdate *ClientEnvelope::msg_as<cyberpunk_rp::protocol::PositionUpdate>() const {
   return msg_as_PositionUpdate();
+}
+
+template<> inline const cyberpunk_rp::protocol::ClientTimeReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::ClientTimeReport>() const {
+  return msg_as_ClientTimeReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::AdminCommand *ClientEnvelope::msg_as<cyberpunk_rp::protocol::AdminCommand>() const {
+  return msg_as_AdminCommand();
+}
+
+template<> inline const cyberpunk_rp::protocol::Leave *ClientEnvelope::msg_as<cyberpunk_rp::protocol::Leave>() const {
+  return msg_as_Leave();
 }
 
 struct ClientEnvelopeBuilder {
@@ -473,6 +979,18 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::Snapshot *msg_as_Snapshot() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_Snapshot ? static_cast<const cyberpunk_rp::protocol::Snapshot *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::Kicked *msg_as_Kicked() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_Kicked ? static_cast<const cyberpunk_rp::protocol::Kicked *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::WorldState *msg_as_WorldState() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_WorldState ? static_cast<const cyberpunk_rp::protocol::WorldState *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::CommandResult *msg_as_CommandResult() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_CommandResult ? static_cast<const cyberpunk_rp::protocol::CommandResult *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::PermissionSync *msg_as_PermissionSync() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_PermissionSync ? static_cast<const cyberpunk_rp::protocol::PermissionSync *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -485,6 +1003,22 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
 
 template<> inline const cyberpunk_rp::protocol::Snapshot *ServerEnvelope::msg_as<cyberpunk_rp::protocol::Snapshot>() const {
   return msg_as_Snapshot();
+}
+
+template<> inline const cyberpunk_rp::protocol::Kicked *ServerEnvelope::msg_as<cyberpunk_rp::protocol::Kicked>() const {
+  return msg_as_Kicked();
+}
+
+template<> inline const cyberpunk_rp::protocol::WorldState *ServerEnvelope::msg_as<cyberpunk_rp::protocol::WorldState>() const {
+  return msg_as_WorldState();
+}
+
+template<> inline const cyberpunk_rp::protocol::CommandResult *ServerEnvelope::msg_as<cyberpunk_rp::protocol::CommandResult>() const {
+  return msg_as_CommandResult();
+}
+
+template<> inline const cyberpunk_rp::protocol::PermissionSync *ServerEnvelope::msg_as<cyberpunk_rp::protocol::PermissionSync>() const {
+  return msg_as_PermissionSync();
 }
 
 struct ServerEnvelopeBuilder {
@@ -532,6 +1066,18 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PositionUpdate *>(obj);
       return verifier.VerifyTable(ptr);
     }
+    case ClientMsg_ClientTimeReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ClientTimeReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_AdminCommand: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::AdminCommand *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_Leave: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::Leave *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
     default: return true;
   }
 }
@@ -557,6 +1103,22 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_Snapshot: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::Snapshot *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_Kicked: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::Kicked *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_WorldState: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::WorldState *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_CommandResult: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::CommandResult *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_PermissionSync: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PermissionSync *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

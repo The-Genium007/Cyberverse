@@ -25,6 +25,20 @@
 #include <flatbuffers/flatbuffers.h>
 #include "generated/protocol_generated.h"
 
+// Version du protocole FlatBuffers parlee par ce client. DOIT rester egale a
+// CURRENT_PROTOCOL_VERSION cote serveur (tessera-core/server/src/gateway_routing.rs) : le Gateway
+// compare les deux au Join et kicke sur mismatch ("kick : version protocole incompatible").
+//
+// Piege (vecu le 2026-07-15, jeu injouable) : protocol_version a ete ajoute au schema le
+// 2026-07-13 alors que le netcode publie datait du 2026-06-29. L'en-tete genere ne connaissait pas
+// le champ, CreateJoin ne le posait pas, FlatBuffers renvoyait le defaut 0 cote serveur -> kick a
+// chaque connexion. Rien ne cassait a la compilation : le parametre a un defaut (= 0), donc un
+// appel qui l'omet compile silencieusement et ment sur le fil.
+// => Toujours passer cette constante EXPLICITEMENT a CreateJoin, jamais s'appuyer sur le defaut.
+// => A regenerer avec l'en-tete des que protocol.fbs bouge :
+//    flatc --cpp -o client/red4ext/src/generated <chemin>/protocol.fbs   (flatc 25.12.19)
+static constexpr uint32_t kTesseraProtocolVersion = 1;
+
 #include <set>
 
 bool NetworkGameSystem::Load()
@@ -273,7 +287,13 @@ void NetworkGameSystem::SendJoin(const std::string& displayName)
     }
     flatbuffers::FlatBufferBuilder builder;
     const auto name = builder.CreateString(displayName);
-    const auto join = cyberpunk_rp::protocol::CreateJoin(builder, name);
+    // token : vide ici. Un serveur prive (identity.public = false, defaut) l'ignore ; un serveur
+    // public exige un JWT ZITADEL, que ce client ne sait pas encore fournir (a cabler avec le
+    // launcher, cf. design launcher-server-auth 2026-07-09).
+    // protocol_version : EXPLICITE, jamais laisse au defaut (= 0 => kick). Voir
+    // kTesseraProtocolVersion en tete de fichier.
+    const auto join = cyberpunk_rp::protocol::CreateJoin(
+        builder, name, /*token*/ 0, kTesseraProtocolVersion);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_Join, join.Union());
     builder.Finish(env);
