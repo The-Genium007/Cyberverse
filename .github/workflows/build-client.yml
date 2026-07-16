@@ -8,8 +8,17 @@ on:
     branches: [ port/2.31 ]
     paths:
       - 'client/red4ext/**'
+      - 'client/RedscriptModule/**'
       - '.github/workflows/build-client.yml'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publier une release netcode-v* sur The-Genium007/distribution"
+        type: boolean
+        default: false
+      version:
+        description: "Version a publier (ex: 0.1.1) — requise si publish=true"
+        default: ""
 
 # Un nouveau push annule le build en cours sur la meme ref (evite les runs redondants).
 concurrency:
@@ -103,3 +112,55 @@ jobs:
           name: cyberverse-client-overlay
           path: staging/**
           if-no-files-found: error
+
+      # ── Publication netcode-v* (declenchee a la main) ─────────────────────────────────────
+      # Ferme la boucle qui a rendu le jeu injouable le 2026-07-15 : release.yml (monorepo
+      # Tessera) consomme le netcode via une release `netcode-v*` sur The-Genium007/distribution
+      # (modset.packages.toml : `source = "netcode"`), mais RIEN ne la produisait — le zip
+      # netcode-v0.1.0 avait ete assemble et uploade a la main le 2026-06-29, puis plus jamais.
+      # Le netcode est donc le SEUL package du modset qui ne suit pas le depot : tous les autres
+      # sont des overlays relus a chaque package-dev. Il a derive 2 semaines derriere le schema
+      # (protocol_version ajoute le 07-13) jusqu'au kick systematique au Join.
+      #
+      # Declenchement MANUEL (workflow_dispatch + publish=true) et pas a chaque push : publier
+      # une release a chaque commit de la branche de travail creerait du bruit et des versions
+      # jamais epinglees. Le flux : pousser -> verifier que le build passe -> republier quand le
+      # protocole a bouge.
+      #
+      # Apres publication, cote monorepo : release.yml prend AUTOMATIQUEMENT la netcode-v* la plus
+      # haute (tri sort -V, cf. l'etape « Recuperer l'overlay netcode epingle »). Rien a epingler
+      # a la main, mais il FAUT un package-dev + promote pour que les joueurs la recoivent.
+      - name: Publier la release netcode-v* (distribution)
+        if: inputs.publish == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          [ -n "$V" ] || { echo "::error::version vide — renseigner l'entree 'version' (ex: 0.1.1)"; exit 1; }
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::secret DISTRIBUTION_TOKEN absent de ce depot — requis pour creer la release sur The-Genium007/distribution"; exit 1; }
+
+          # Le zip DOIT avoir les chemins enracines a la racine du jeu (bin/x64/..., r6/...,
+          # red4ext/...) : tessera-release les recopie tels quels dans l'install. Zipper depuis
+          # staging/ garantit exactement ca.
+          cd staging
+          7z a -tzip ../cyberverse-client.zip . >/dev/null
+          cd ..
+          echo "=== contenu du zip publie ==="
+          7z l cyberverse-client.zip | tail -n +18
+
+          gh release create "netcode-v${V}" cyberverse-client.zip \
+            --repo The-Genium007/distribution \
+            --title "netcode-v${V} — overlay Cyberverse (port 2.31)" \
+            --notes "Overlay netcode consomme par release.yml (build-composition, \`source=\"netcode\"\`).
+
+          Build : ${{ github.sha }} (branche \`${{ github.ref_name }}\`, run ${{ github.run_id }}).
+          Contenu : plugin RED4ext + DLL runtime (GNS/protobuf/abseil/openssl) + module redscript
+          \`r6/scripts/Cyberverse/\`.
+
+          Rappel : ceci ne suffit pas a livrer les joueurs — lancer ensuite \`release.yml\`
+          (package-dev puis promote) sur le monorepo pour composer et publier le modset." \
+          || gh release upload "netcode-v${V}" cyberverse-client.zip \
+            --repo The-Genium007/distribution --clobber
+          echo "::notice::netcode-v${V} publiee — lancer maintenant release.yml (package-dev + promote) sur le monorepo"
