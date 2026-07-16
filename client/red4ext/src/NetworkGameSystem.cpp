@@ -21,6 +21,8 @@
 
 #include <zpp_bits.h>
 
+#include <cstdlib> // std::getenv (token ZITADEL transmis par le launcher, cf. SendJoin)
+
 // Protocole TesseraSynth (FlatBuffers) + en-tetes generes.
 #include <flatbuffers/flatbuffers.h>
 #include "generated/protocol_generated.h"
@@ -287,13 +289,19 @@ void NetworkGameSystem::SendJoin(const std::string& displayName)
     }
     flatbuffers::FlatBufferBuilder builder;
     const auto name = builder.CreateString(displayName);
-    // token : vide ici. Un serveur prive (identity.public = false, defaut) l'ignore ; un serveur
-    // public exige un JWT ZITADEL, que ce client ne sait pas encore fournir (a cabler avec le
-    // launcher, cf. design launcher-server-auth 2026-07-09).
+    // token : JWT ZITADEL transmis par le launcher via l'environnement du process
+    // (TESSERA_JOIN_TOKEN), cf. design launcher-server-auth 2026-07-09 §2.4 et le contrat
+    // tessera-core/client-mod/INTEGRATION-server-contract.md. Le launcher pose cette variable au
+    // lancement (jamais en ligne de commande : un JWT y serait visible dans la liste des process).
+    // Absente (serveur prive identity.public=false, ou lancement hors launcher) => chaine vide,
+    // ignoree par un serveur prive ; un serveur public exige un token valide et kicke sinon
+    // ("compte requis sur ce serveur"). Ne jamais logger cette valeur (secret).
+    const char* tokenEnv = std::getenv("TESSERA_JOIN_TOKEN");
+    const auto token = builder.CreateString(tokenEnv != nullptr ? tokenEnv : "");
     // protocol_version : EXPLICITE, jamais laisse au defaut (= 0 => kick). Voir
     // kTesseraProtocolVersion en tete de fichier.
     const auto join = cyberpunk_rp::protocol::CreateJoin(
-        builder, name, /*token*/ 0, kTesseraProtocolVersion);
+        builder, name, token, kTesseraProtocolVersion);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_Join, join.Union());
     builder.Finish(env);
