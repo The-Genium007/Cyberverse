@@ -76,6 +76,25 @@ jobs:
           Get-ChildItem $vbin.FullName -Filter *.dll | Where-Object { $_.Name -ne 'libprotoc.dll' } | ForEach-Object {
             Copy-Item $_.FullName $bin/; Write-Host "Runtime -> bin/x64 : $($_.Name)"
           }
+          # Module redscript -> r6/scripts/Cyberverse/ : le plugin natif ne suffit pas, ces deux
+          # fichiers declarent le NetworkGameSystem cote script (visibles en tete du log de
+          # compilation redscript au lancement du jeu). Sans eux le netcode ne se charge pas.
+          #
+          # Ils manquaient a cet artefact : le zip netcode-v0.1.0 publie le 2026-06-29 avait donc
+          # ete complete A LA MAIN. Un artefact incomplet ne peut pas etre publie automatiquement
+          # -> le netcode n'a jamais ete republie -> il a derive 2 semaines derriere le schema,
+          # jusqu'a rendre le jeu injouable (kick protocol_version, 2026-07-15). L'artefact est
+          # desormais auto-suffisant : il correspond exactement au contenu de cyberverse-client.zip.
+          #
+          # Cyberverse.reds (hooks du menu solo) reste EXCLU : il n'est pas dans le zip publie
+          # (verifie le 2026-07-15) — seul Network/ compose le package netcode.
+          $reds = "staging/r6/scripts/Cyberverse"
+          New-Item -ItemType Directory -Force -Path $reds | Out-Null
+          foreach ($f in @('NetworkGameSystem.reds', 'PlayerActionTracker.reds')) {
+            $src = "client/RedscriptModule/src/Network/$f"
+            if (-not (Test-Path $src)) { Write-Error "Module redscript introuvable : $src"; exit 1 }
+            Copy-Item $src $reds/; Write-Host "Redscript -> r6/scripts/Cyberverse : $f"
+          }
           Write-Host "=== overlay final ==="; Get-ChildItem -Recurse staging | Select-Object FullName, Length
 
       - name: Upload artefact
