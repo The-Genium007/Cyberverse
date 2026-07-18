@@ -51,6 +51,12 @@ struct PermissionSyncBuilder;
 struct Leave;
 struct LeaveBuilder;
 
+struct PositionCorrection;
+struct PositionCorrectionBuilder;
+
+struct ShardAssignment;
+struct ShardAssignmentBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -135,37 +141,43 @@ enum ServerMsg : uint8_t {
   ServerMsg_WorldState = 3,
   ServerMsg_CommandResult = 4,
   ServerMsg_PermissionSync = 5,
+  ServerMsg_PositionCorrection = 6,
+  ServerMsg_ShardAssignment = 7,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_PermissionSync
+  ServerMsg_MAX = ServerMsg_ShardAssignment
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[6] {
+inline const ServerMsg (&EnumValuesServerMsg())[8] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
     ServerMsg_Kicked,
     ServerMsg_WorldState,
     ServerMsg_CommandResult,
-    ServerMsg_PermissionSync
+    ServerMsg_PermissionSync,
+    ServerMsg_PositionCorrection,
+    ServerMsg_ShardAssignment
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[7] = {
+  static const char * const names[9] = {
     "NONE",
     "Snapshot",
     "Kicked",
     "WorldState",
     "CommandResult",
     "PermissionSync",
+    "PositionCorrection",
+    "ShardAssignment",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_PermissionSync)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_ShardAssignment)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -192,6 +204,14 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CommandResult> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::PermissionSync> {
   static const ServerMsg enum_value = ServerMsg_PermissionSync;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::PositionCorrection> {
+  static const ServerMsg enum_value = ServerMsg_PositionCorrection;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ShardAssignment> {
+  static const ServerMsg enum_value = ServerMsg_ShardAssignment;
 };
 
 template <bool B = false>
@@ -874,6 +894,135 @@ inline ::flatbuffers::Offset<Leave> CreateLeave(
   return builder_.Finish();
 }
 
+struct PositionCorrection FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef PositionCorrectionBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_POSITION = 4,
+    VT_YAW = 6,
+    VT_REASON = 8
+  };
+  const cyberpunk_rp::protocol::Vec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::Vec3 *>(VT_POSITION);
+  }
+  float yaw() const {
+    return GetField<float>(VT_YAW, 0.0f);
+  }
+  uint8_t reason() const {
+    return GetField<uint8_t>(VT_REASON, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<cyberpunk_rp::protocol::Vec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<float>(verifier, VT_YAW, 4) &&
+           VerifyField<uint8_t>(verifier, VT_REASON, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct PositionCorrectionBuilder {
+  typedef PositionCorrection Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_position(const cyberpunk_rp::protocol::Vec3 *position) {
+    fbb_.AddStruct(PositionCorrection::VT_POSITION, position);
+  }
+  void add_yaw(float yaw) {
+    fbb_.AddElement<float>(PositionCorrection::VT_YAW, yaw, 0.0f);
+  }
+  void add_reason(uint8_t reason) {
+    fbb_.AddElement<uint8_t>(PositionCorrection::VT_REASON, reason, 0);
+  }
+  explicit PositionCorrectionBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<PositionCorrection> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<PositionCorrection>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<PositionCorrection> CreatePositionCorrection(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const cyberpunk_rp::protocol::Vec3 *position = nullptr,
+    float yaw = 0.0f,
+    uint8_t reason = 0) {
+  PositionCorrectionBuilder builder_(_fbb);
+  builder_.add_yaw(yaw);
+  builder_.add_position(position);
+  builder_.add_reason(reason);
+  return builder_.Finish();
+}
+
+struct ShardAssignment FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ShardAssignmentBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_AUTHORITATIVE = 4,
+    VT_OVERLAPS = 6
+  };
+  const ::flatbuffers::String *authoritative() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_AUTHORITATIVE);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *overlaps() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_OVERLAPS);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_AUTHORITATIVE) &&
+           verifier.VerifyString(authoritative()) &&
+           VerifyOffset(verifier, VT_OVERLAPS) &&
+           verifier.VerifyVector(overlaps()) &&
+           verifier.VerifyVectorOfStrings(overlaps()) &&
+           verifier.EndTable();
+  }
+};
+
+struct ShardAssignmentBuilder {
+  typedef ShardAssignment Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_authoritative(::flatbuffers::Offset<::flatbuffers::String> authoritative) {
+    fbb_.AddOffset(ShardAssignment::VT_AUTHORITATIVE, authoritative);
+  }
+  void add_overlaps(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> overlaps) {
+    fbb_.AddOffset(ShardAssignment::VT_OVERLAPS, overlaps);
+  }
+  explicit ShardAssignmentBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ShardAssignment> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ShardAssignment>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ShardAssignment> CreateShardAssignment(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> authoritative = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> overlaps = 0) {
+  ShardAssignmentBuilder builder_(_fbb);
+  builder_.add_overlaps(overlaps);
+  builder_.add_authoritative(authoritative);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ShardAssignment> CreateShardAssignmentDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *authoritative = nullptr,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *overlaps = nullptr) {
+  auto authoritative__ = authoritative ? _fbb.CreateString(authoritative) : 0;
+  auto overlaps__ = overlaps ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*overlaps) : 0;
+  return cyberpunk_rp::protocol::CreateShardAssignment(
+      _fbb,
+      authoritative__,
+      overlaps__);
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -991,6 +1140,12 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::PermissionSync *msg_as_PermissionSync() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_PermissionSync ? static_cast<const cyberpunk_rp::protocol::PermissionSync *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::PositionCorrection *msg_as_PositionCorrection() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_PositionCorrection ? static_cast<const cyberpunk_rp::protocol::PositionCorrection *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::ShardAssignment *msg_as_ShardAssignment() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_ShardAssignment ? static_cast<const cyberpunk_rp::protocol::ShardAssignment *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1019,6 +1174,14 @@ template<> inline const cyberpunk_rp::protocol::CommandResult *ServerEnvelope::m
 
 template<> inline const cyberpunk_rp::protocol::PermissionSync *ServerEnvelope::msg_as<cyberpunk_rp::protocol::PermissionSync>() const {
   return msg_as_PermissionSync();
+}
+
+template<> inline const cyberpunk_rp::protocol::PositionCorrection *ServerEnvelope::msg_as<cyberpunk_rp::protocol::PositionCorrection>() const {
+  return msg_as_PositionCorrection();
+}
+
+template<> inline const cyberpunk_rp::protocol::ShardAssignment *ServerEnvelope::msg_as<cyberpunk_rp::protocol::ShardAssignment>() const {
+  return msg_as_ShardAssignment();
 }
 
 struct ServerEnvelopeBuilder {
@@ -1119,6 +1282,14 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_PermissionSync: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PermissionSync *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_PositionCorrection: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PositionCorrection *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_ShardAssignment: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ShardAssignment *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
