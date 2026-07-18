@@ -108,6 +108,18 @@ public:
     static bool Load();
     /// Called from the plugin load and unload events
     static void Unload();
+
+    // Accesseur natif exposé au redscript comme `GameInstance.GetNetworkGameSystem()` (déclaré dans
+    // RedscriptModule/src/Network/NetworkGameSystem.reds). Ce backing MANQUAIT : le `native func`
+    // était déclaré côté redscript mais aucune fonction C++ ne l'enregistrait → redscript ne
+    // résolvait pas l'appel → tout r6/scripts échouait à compiler (modset entier mort au lancement,
+    // diagnostiqué 2026-07-18). Pattern calé sur Codeware (App::ResourceDepot::Get +
+    // RTTI_EXPAND_CLASS(Red::ScriptGameInstance)). Red::ToHandle partage le refcount existant du
+    // système via .Lock() (aucun double-free), cf. RedLib include/Red/Utils/Handles.hpp.
+    static Red::Handle<NetworkGameSystem> Get()
+    {
+        return Red::ToHandle(Red::GetGameSystem<NetworkGameSystem>());
+    }
 private:
     RTTI_IMPL_TYPEINFO(NetworkGameSystem);
     RTTI_IMPL_ALLOCATOR();
@@ -121,6 +133,14 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");
+});
+
+// Enregistre l'accesseur `GameInstance.GetNetworkGameSystem()` attendu par le RedscriptModule.
+// Sans ce bloc, `@addMethod(GameInstance) static native func GetNetworkGameSystem()` n'a aucun
+// backing natif → [UNRESOLVED_TYPE] à la compilation redscript → modset entier refusé. Même
+// pattern que Codeware ResourceDepot (RTTI_EXPAND_CLASS(Red::ScriptGameInstance) + RTTI_METHOD_FQN).
+RTTI_EXPAND_CLASS(Red::ScriptGameInstance, {
+    RTTI_METHOD_FQN(NetworkGameSystem::Get, "GetNetworkGameSystem");
 });
 
 // TODO: Thing about the concept of having EnqueueMessage public, it causes _this_, at least with templates: We need to
