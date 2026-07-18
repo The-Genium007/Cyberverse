@@ -267,9 +267,24 @@ void NetworkGameSystem::PollIncomingMessages()
         if (verifier.VerifyBuffer<cyberpunk_rp::protocol::ServerEnvelope>(nullptr))
         {
             const auto* env = flatbuffers::GetRoot<cyberpunk_rp::protocol::ServerEnvelope>(bytes);
-            if (env != nullptr && env->msg_type() == cyberpunk_rp::protocol::ServerMsg_Snapshot)
+            if (env != nullptr)
             {
-                HandleSnapshot(env->msg_as_Snapshot());
+                switch (env->msg_type())
+                {
+                case cyberpunk_rp::protocol::ServerMsg_Snapshot:
+                    HandleSnapshot(env->msg_as_Snapshot());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_PositionCorrection:
+                    HandlePositionCorrection(env->msg_as_PositionCorrection());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_ShardAssignment:
+                    HandleShardAssignment(env->msg_as_ShardAssignment());
+                    break;
+                default:
+                    // Autres ServerMsg (Kicked/WorldState/CommandResult/PermissionSync) : pas encore
+                    // câblés côté client, ignorés silencieusement pour l'instant.
+                    break;
+                }
             }
         }
         else
@@ -395,6 +410,82 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     }
 }
 
+void NetworkGameSystem::HandlePositionCorrection(const cyberpunk_rp::protocol::PositionCorrection* correction)
+{
+    if (correction == nullptr || correction->position() == nullptr)
+    {
+        return;
+    }
+
+    const auto* pos = correction->position();
+    const RED4ext::Vector4 worldPosition = { pos->x(), pos->y(), pos->z(), 1.0f };
+    const float yaw = correction->yaw();
+    const uint8_t reason = correction->reason(); // 0=Spawn, 1=AntiCheat, 2=Resync (diagnostic uniquement)
+
+    // Téléporte le JOUEUR LOCAL à la position autoritaire du serveur. Même facilité que pour les
+    // avatars distants (confirmée fonctionnelle en jeu, cf. SetEntityPosition) mais appliquée au
+    // joueur contrôlé. reason ne change PAS le comportement (spec : téléportation dans tous les cas),
+    // il n'est que journalisé pour le diagnostic.
+    const auto player = Cyberverse::Utils::GetPlayer();
+    if (player == nullptr)
+    {
+        SDK->logger->Warn(PLUGIN, "PositionCorrection recue mais joueur local introuvable");
+        return;
+    }
+
+    const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yaw };
+    const auto teleportFacility = Red::GetGameSystem<RED4ext::TeleportationFacility>();
+    if (!Red::CallVirtual(teleportFacility, "Teleport", player, worldPosition, angles))
+    {
+        SDK->logger->Warn(PLUGIN, "PositionCorrection : echec de la teleportation du joueur local");
+        return;
+    }
+
+    // Anti-boucle rubber-band (spec mouvement §4.3) : on saute le PROCHAIN PositionUpdate. Sans ça,
+    // le sync suivant (toutes les 0.1 s) enverrait l'ancienne position d'avant téléportation — le
+    // serveur la verrait « sauter » et renverrait une nouvelle correction, en boucle. Un seul tick
+    // suffit : au sync d'après, GetWorldPosition lit déjà la position corrigée.
+    m_skipNextPositionUpdate = true;
+
+    SDK->logger->InfoF(PLUGIN, "PositionCorrection appliquee: reason=%u pos=(%.2f, %.2f, %.2f) yaw=%.1f",
+        reason, worldPosition.X, worldPosition.Y, worldPosition.Z, yaw);
+}
+
+void NetworkGameSystem::HandleShardAssignment(const cyberpunk_rp::protocol::ShardAssignment* assignment)
+{
+    if (assignment == nullptr)
+    {
+        return;
+    }
+
+    const auto* authoritative = assignment->authoritative();
+    m_serverShard = authoritative != nullptr ? authoritative->str() : std::string();
+
+    // overlaps : vector<Offset<String>> -> CSV pour franchir simplement la couture Lua (le HUD
+    // attend une chaîne "group-0,group-2", cf. Tessera_GetServerOverlaps).
+    std::string csv;
+    const auto* overlaps = assignment->overlaps();
+    if (overlaps != nullptr)
+    {
+        for (const auto* s : *overlaps)
+        {
+            if (s == nullptr)
+            {
+                continue;
+            }
+            if (!csv.empty())
+            {
+                csv += ",";
+            }
+            csv += s->str();
+        }
+    }
+    m_serverOverlapsCsv = csv;
+
+    SDK->logger->InfoF(PLUGIN, "ShardAssignment recu: autoritatif=%s overlaps=[%s]",
+        m_serverShard.c_str(), m_serverOverlapsCsv.c_str());
+}
+
 bool NetworkGameSystem::OnGameRestored()
 {
     const auto res = IGameSystem::OnGameRestored();
@@ -426,6 +517,16 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     }
 
     m_TimeSinceLastPlayerPositionSync = 0.0f;
+
+    // Anti-boucle rubber-band : une PositionCorrection vient d'être appliquée ; on saute CE seul
+    // envoi pour laisser le moteur poser la téléportation avant de re-mesurer/ré-émettre la
+    // position (sinon on renverrait l'ancienne, redéclenchant une correction — cf.
+    // HandlePositionCorrection).
+    if (m_skipNextPositionUpdate)
+    {
+        m_skipNextPositionUpdate = false;
+        return;
+    }
 
     const auto player = Cyberverse::Utils::GetPlayer();
     const auto [X, Y, Z, W] = Cyberverse::Utils::Entity_GetWorldPosition(player);

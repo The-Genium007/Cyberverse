@@ -6,6 +6,13 @@ public native class NetworkGameSystem extends IGameSystem {
     native let FullyConnected: Bool;
     native let playerActionTracker: ref<PlayerActionTracker>;
     public native func EnqueueLoadLastCheckpoint(handler: wref<inkISystemRequestsHandler>) -> Void;
+
+    // Autorité serveur (TesseraSynth) — reflètent le dernier ShardAssignment reçu + le nombre de
+    // puppets distants suivis. Consommés par le HUD moniteur de cohérence via des wrappers
+    // @addMethod(PlayerPuppet) côté modset Tessera (Tessera_GetServerShard/Overlaps/VisiblePlayerCount).
+    public native func Tessera_GetServerShard() -> String;
+    public native func Tessera_GetServerOverlaps() -> String;
+    public native func Tessera_GetVisiblePlayerCount() -> Int32;
     
     public func SpawnTransientEntity(entityName: TweakDBID, worldPosition: Vector4, worldOrientation: Quaternion) -> EntityID {
         let npcSpec = new DynamicEntitySpec();

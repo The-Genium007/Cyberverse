@@ -16,13 +16,14 @@
 #include <RedLib.hpp>
 #include <clientbound/WorldPacketsClientBound.h>
 #include <map>
+#include <string>
 #include <steam/isteamnetworkingsockets.h>
 #include <steam/steamnetworkingtypes.h>
 
 #include <serverbound/WorldPacketsServerBound.h>
 
 // Protocole TesseraSynth (FlatBuffers) — forward decl pour ne pas tirer l'en-tête généré ici.
-namespace cyberpunk_rp::protocol { struct Snapshot; }
+namespace cyberpunk_rp::protocol { struct Snapshot; struct PositionCorrection; struct ShardAssignment; }
 
 class NetworkGameSystem : public Red::IGameSystem
 {
@@ -37,6 +38,18 @@ private:
     std::map<RED4ext::ent::EntityID, InterpolationData> m_interpolationData;
     std::map<RED4ext::ent::EntityID, RED4ext::Handle<RED4ext::AICommand>> m_LastTeleportCommand;
     float m_TimeSinceLastPlayerPositionSync;
+
+    // --- Autorité serveur (TesseraSynth) ---
+    // Dernier ShardAssignment reçu : placement autoritaire décidé par le serveur (topology.locate),
+    // poussé au HUD moniteur de cohérence via les getters natifs ci-dessous. Vides tant qu'aucun
+    // ShardAssignment n'est arrivé (le HUD affiche alors seulement son calcul local).
+    std::string m_serverShard;        // shard autoritaire, ex. "group-1"
+    std::string m_serverOverlapsCsv;  // shards tampon en CSV, ex. "group-0,group-2"
+    // Anti-boucle rubber-band : après une PositionCorrection, on saute le PROCHAIN envoi de
+    // PositionUpdate pour laisser le moteur appliquer la téléportation et éviter de ré-émettre
+    // immédiatement l'ancienne position (qui redéclencherait une correction côté serveur, cf. spec
+    // mouvement §4.3). Un seul tick suffit : le sync suivant lit la position déjà corrigée.
+    bool m_skipNextPositionUpdate = false;
 
 private:
     void OnRegisterUpdates(RED4ext::UpdateRegistrar* aRegistrar) override;
@@ -59,6 +72,11 @@ protected:
     void SendPositionUpdate(float x, float y, float z, float yaw);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
+    // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
+    // serveur et arme l'anti-boucle (m_skipNextPositionUpdate).
+    void HandlePositionCorrection(const cyberpunk_rp::protocol::PositionCorrection* correction);
+    // Placement autoritaire : mémorise shard + overlaps pour les getters natifs exposés au HUD.
+    void HandleShardAssignment(const cyberpunk_rp::protocol::ShardAssignment* assignment);
 
 public:
     bool FullyConnected = false;
@@ -75,6 +93,17 @@ public:
     template<typename T>
     bool EnqueueMessage(uint8_t channel_id, T frame);
 
+    // --- Getters exposés au HUD Lua (via des wrappers redscript @addMethod(PlayerPuppet) côté
+    // modset Tessera, qui délèguent à GameInstance.GetNetworkGameSystem()). Reflètent le dernier
+    // ShardAssignment reçu + le nombre de puppets distants suivis. Chaînes vides / 0 tant que rien
+    // n'est arrivé — le HUD retombe alors sur son calcul local seul.
+    Red::CString Tessera_GetServerShard() const { return Red::CString(m_serverShard.c_str()); }
+    Red::CString Tessera_GetServerOverlaps() const { return Red::CString(m_serverOverlapsCsv.c_str()); }
+    int32_t Tessera_GetVisiblePlayerCount() const
+    {
+        return static_cast<int32_t>(m_networkedEntitiesLookup.size());
+    }
+
     /// Called from the plugin load and unload events
     static bool Load();
     /// Called from the plugin load and unload events
@@ -86,6 +115,9 @@ private:
 
 RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(EnqueueLoadLastCheckpoint);
+    RTTI_METHOD(Tessera_GetServerShard);
+    RTTI_METHOD(Tessera_GetServerOverlaps);
+    RTTI_METHOD(Tessera_GetVisiblePlayerCount);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");
