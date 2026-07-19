@@ -116,7 +116,18 @@ public:
     // diagnostiqué 2026-07-18). Pattern calé sur Codeware (App::ResourceDepot::Get +
     // RTTI_EXPAND_CLASS(Red::ScriptGameInstance)). Red::ToHandle partage le refcount existant du
     // système via .Lock() (aucun double-free), cf. RedLib include/Red/Utils/Handles.hpp.
-    static Red::Handle<NetworkGameSystem> Get()
+    //
+    // ⚠️ NE JAMAIS nommer cette méthode `Get()`. RedLib détecte `static T::Get() -> Handle<T>` via
+    // le concept `HasSystemGetter` (red-lib Definition.hpp:32) et l'appelle depuis
+    // `SystemBuilder::BuildSystem()` pour CONSTRUIRE le game system au chargement. Or notre
+    // accesseur RÉCUPÈRE l'existant (`GetGameSystem` = null tant que le système n'est pas créé) :
+    // nommée `Get`, `BuildSystem` renvoie null → `RegisterSystem` bail (`if (!systemInstance)
+    // return;`) → le système n'est JAMAIS créé ni tické → l'auto-connexion réseau du 1er tick ne
+    // part jamais → le client ne se connecte plus DU TOUT. Régression exacte de netcode-v0.1.5
+    // (l'ajout de `Get()` pour l'accesseur a rendu le multi injouable, 2026-07-18/19). ResourceDepot
+    // (Codeware) PEUT s'appeler `Get()` : c'est un singleton `Core::Feature`, PAS un IGameSystem —
+    // il ne passe pas par `SystemBuilder`. Nous sommes un IGameSystem → nom neutre OBLIGATOIRE.
+    static Red::Handle<NetworkGameSystem> Resolve()
     {
         return Red::ToHandle(Red::GetGameSystem<NetworkGameSystem>());
     }
@@ -140,7 +151,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
 // backing natif → [UNRESOLVED_TYPE] à la compilation redscript → modset entier refusé. Même
 // pattern que Codeware ResourceDepot (RTTI_EXPAND_CLASS(Red::ScriptGameInstance) + RTTI_METHOD_FQN).
 RTTI_EXPAND_CLASS(Red::ScriptGameInstance, {
-    RTTI_METHOD_FQN(NetworkGameSystem::Get, "GetNetworkGameSystem");
+    RTTI_METHOD_FQN(NetworkGameSystem::Resolve, "GetNetworkGameSystem");
 });
 
 // TODO: Thing about the concept of having EnqueueMessage public, it causes _this_, at least with templates: We need to
