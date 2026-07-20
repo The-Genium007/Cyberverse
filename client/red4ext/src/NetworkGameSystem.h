@@ -51,7 +51,31 @@ private:
     // mouvement §4.3). Un seul tick suffit : le sync suivant lit la position déjà corrigée.
     bool m_skipNextPositionUpdate = false;
 
+    // --- Détection « modset non compilé » (incident playtest 2026-07-20) ---
+    // `SpawnTransientEntity` est déclarée en REDSCRIPT (r6/scripts/Cyberverse/NetworkGameSystem.reds).
+    // Or redscript est tout-ou-rien : un seul .reds en erreur — y compris un mod TIERS sans rapport
+    // avec Tessera — fait tomber TOUT r6/scripts. Le plugin C++, lui, est indépendant : il se
+    // connecte, envoie les positions, reçoit les snapshots. Résultat vécu en playtest : le joueur
+    // est un fantôme (les autres le voient, lui ne voit personne), sans le moindre signe à l'écran,
+    // et `Red::CallVirtual` échoue en boucle — des centaines de lignes de log par seconde.
+    //
+    // Deux compteurs, deux rôles distincts :
+    // - `m_spawnFailureCount` / `m_timeSinceSpawnFailureLog` : agrègent les logs (une ligne
+    //   périodique avec un total, au lieu d'une ligne par snapshot et par joueur) ;
+    // - `m_spawnFailureNotified` : garde one-shot de l'alerte utilisateur.
+    uint64_t m_spawnFailureCount = 0;
+    float m_timeSinceSpawnFailureLog = 0.0f;
+    bool m_spawnFailureNotified = false;
+
 private:
+    // Appelé à chaque échec de `SpawnTransientEntity`. Agrège les logs et déclenche UNE fois
+    // l'alerte native quand le seuil est franchi.
+    void OnSpawnFailure();
+    // Alerte NATIVE (Win32), volontairement pas une UI de jeu : dans ce scénario tout redscript
+    // est mort, donc l'UI kit Tessera l'est aussi. Affichée depuis un thread détaché pour ne
+    // jamais bloquer la boucle de jeu.
+    void NotifyModsetNotCompiled();
+
     void OnRegisterUpdates(RED4ext::UpdateRegistrar* aRegistrar) override;
     bool OnGameRestored() override;
 

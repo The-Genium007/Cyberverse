@@ -22,6 +22,7 @@
 #include <zpp_bits.h>
 
 #include <cstdlib> // std::getenv (token ZITADEL transmis par le launcher, cf. SendJoin)
+#include <thread>  // alerte « modset non compile » affichee hors boucle de jeu (NotifyModsetNotCompiled)
 
 // Protocole TesseraSynth (FlatBuffers) + en-tetes generes.
 #include <flatbuffers/flatbuffers.h>
@@ -40,6 +41,16 @@
 // => A regenerer avec l'en-tete des que protocol.fbs bouge :
 //    flatc --cpp -o client/red4ext/src/generated <chemin>/protocol.fbs   (flatc 25.12.19)
 static constexpr uint32_t kTesseraProtocolVersion = 1;
+
+// --- Détection « modset non compilé » (incident playtest 2026-07-20, cf. NetworkGameSystem.h) ---
+// Nombre d'échecs de spawn avant d'alerter le joueur. Le débit dépend du nombre de joueurs visibles
+// et de la cadence des snapshots (20 Hz) : un seul joueur en vue produit déjà ~20 échecs/s. 40
+// laisse donc passer un hoquet d'une seconde ou deux sans crier, tout en alertant bien avant que le
+// joueur ait eu le temps de conclure « le serveur est vide ».
+static constexpr uint64_t kSpawnFailureAlertThreshold = 40;
+// Période d'agrégation des logs, en secondes. Sans elle : ~5 Mo de lignes identiques par partie
+// (constaté sur le log d'un playtester le 2026-07-20).
+static constexpr float kSpawnFailureLogPeriodSeconds = 5.0f;
 
 #include <set>
 
@@ -138,6 +149,21 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
     PollIncomingMessages();
     TrackPlayerPosition(frame_info.deltaTime);
     InterpolatePuppets(frame_info.deltaTime);
+
+    // Log agrégé des échecs de spawn : une ligne périodique avec le total, plutôt qu'une ligne par
+    // snapshot et par joueur (~5 Mo de lignes identiques constatés sur un log de playtest).
+    if (m_spawnFailureCount > 0)
+    {
+        m_timeSinceSpawnFailureLog += frame_info.deltaTime;
+        if (m_timeSinceSpawnFailureLog >= kSpawnFailureLogPeriodSeconds)
+        {
+            m_timeSinceSpawnFailureLog = 0.0f;
+            SDK->logger->WarnF(PLUGIN,
+                "Echec spawn avatar reseau : %llu au total depuis le debut de la session "
+                "(modset redscript non compile ? voir r6/logs/redscript_rCURRENT.log)",
+                m_spawnFailureCount);
+        }
+    }
 
     m_pInterface->RunCallbacks(); // This shall be called in a loop.
 }
@@ -342,6 +368,46 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
         k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
+void NetworkGameSystem::OnSpawnFailure()
+{
+    ++m_spawnFailureCount;
+
+    // Première occurrence toujours loguée : c'est elle qui date le début du problème.
+    if (m_spawnFailureCount == 1)
+    {
+        SDK->logger->Warn(PLUGIN,
+            "Echec spawn avatar reseau — SpawnTransientEntity introuvable. Le modset redscript "
+            "n'est probablement PAS compile : voir r6/logs/redscript_rCURRENT.log");
+    }
+
+    if (!m_spawnFailureNotified && m_spawnFailureCount >= kSpawnFailureAlertThreshold)
+    {
+        m_spawnFailureNotified = true;
+        NotifyModsetNotCompiled();
+    }
+}
+
+void NetworkGameSystem::NotifyModsetNotCompiled()
+{
+    SDK->logger->WarnF(PLUGIN,
+        "%llu echecs de spawn consecutifs — alerte affichee au joueur.", m_spawnFailureCount);
+
+    // Thread détaché : MessageBox est bloquant, et on est appelé depuis la boucle de jeu.
+    // Volontairement natif Win32 et non une notification in-game : dans ce scénario, redscript
+    // n'a pas compilé, donc l'UI kit Tessera n'existe pas non plus.
+    std::thread([]() {
+        MessageBoxW(nullptr,
+            L"Tessera : les autres joueurs ne peuvent pas s'afficher.\n\n"
+            L"Le modset redscript n'a pas compile — c'est presque toujours un mod tiers "
+            L"installe a la main qui bloque tout le dossier r6\\scripts.\n\n"
+            L"Ouvre ce fichier, la fin indique le mod fautif :\n"
+            L"    r6\\logs\\redscript_rCURRENT.log\n\n"
+            L"La connexion au serveur, elle, fonctionne : les autres TE voient.",
+            L"Tessera — modset non compile",
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    }).detach();
+}
+
 void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot)
 {
     if (snapshot == nullptr)
@@ -381,7 +447,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 }
                 else
                 {
-                    SDK->logger->Warn(PLUGIN, "Echec spawn avatar reseau");
+                    OnSpawnFailure();
                 }
             }
             else
