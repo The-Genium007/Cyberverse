@@ -21,6 +21,7 @@
 
 #include <zpp_bits.h>
 
+#include <cmath>   // std::lround/std::fmod (quantization du fil, gel palier 2 — cf. QuantPos/QuantYaw)
 #include <cstdlib> // std::getenv (token ZITADEL transmis par le launcher, cf. SendJoin)
 #include <thread>  // alerte « modset non compile » affichee hors boucle de jeu (NotifyModsetNotCompiled)
 
@@ -40,7 +41,37 @@
 // => Toujours passer cette constante EXPLICITEMENT a CreateJoin, jamais s'appuyer sur le defaut.
 // => A regenerer avec l'en-tete des que protocol.fbs bouge :
 //    flatc --cpp -o client/red4ext/src/generated <chemin>/protocol.fbs   (flatc 25.12.19)
-static constexpr uint32_t kTesseraProtocolVersion = 1;
+// v2 : gel palier 2 (2026-07-23) — positions Vec3->QVec3 fixed-point, yaw float->ushort.
+static constexpr uint32_t kTesseraProtocolVersion = 2;
+
+// --- Quantization du fil (gel palier 2) — miroir EXACT de tessera-core/server/src/quant.rs ---
+// Position : fixed-point WORLD-ABSOLU, metres = bits / 131072 (2^17) — la representation native
+// du jeu. Grille absolue : une position s'encode bit-a-bit identiquement quel que soit le shard.
+// Yaw : uint16, 0..65535 = 0..360 degres. Le yaw du jeu (degres, potentiellement negatif) est
+// normalise dans [0, 360) avant quantization — meme formule que q_yaw cote Rust.
+static constexpr float kQuantPosScale = 131072.0f;
+static inline int32_t QuantPos(float meters)
+{
+    return static_cast<int32_t>(std::lround(meters * kQuantPosScale));
+}
+static inline float DequantPos(int32_t bits)
+{
+    return static_cast<float>(bits) / kQuantPosScale;
+}
+static inline uint16_t QuantYaw(float degrees)
+{
+    float normalized = std::fmod(degrees, 360.0f);
+    if (normalized < 0.0f)
+    {
+        normalized += 360.0f; // rem_euclid : [0, 360)
+    }
+    const long q = std::lround(normalized * (65536.0f / 360.0f));
+    return static_cast<uint16_t>(q % 65536); // 65536 (=360deg exactement) revient a 0
+}
+static inline float DequantYaw(uint16_t q)
+{
+    return static_cast<float>(q) * (360.0f / 65536.0f);
+}
 
 // --- Détection « modset non compilé » (incident playtest 2026-07-20, cf. NetworkGameSystem.h) ---
 // Nombre d'échecs de spawn avant d'alerter le joueur. Le débit dépend du nombre de joueurs visibles
@@ -358,8 +389,15 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
         return;
     }
     flatbuffers::FlatBufferBuilder builder;
-    const cyberpunk_rp::protocol::Vec3 pos(x, y, z);
-    const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(builder, &pos, yaw);
+    // Gel palier 2 : position quantifiee QVec3 fixed-point + yaw ushort (cf. QuantPos/QuantYaw en
+    // tete de fichier — miroir de quant.rs). frame/slot poses EXPLICITEMENT a 0 (= monde, ADR
+    // 0013) : le repere d'un joueur est serveur-autoritaire (pose par EntityInteraction kind=6/7),
+    // ce client emet toujours une position monde tant que la conversion offset-local au montage
+    // (C4.2) n'est pas cablee.
+    const cyberpunk_rp::protocol::QVec3 pos(QuantPos(x), QuantPos(y), QuantPos(z));
+    const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
+        builder, &pos, QuantYaw(yaw), /*locomotion=*/0, /*move_dir=*/0, /*flags=*/0,
+        /*frame=*/0, /*slot=*/0);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_PositionUpdate, pu.Union());
     builder.Finish(env);
@@ -429,9 +467,12 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             const uint64_t id = ps->id();
             present.insert(id);
 
+            // Gel palier 2 : dequantization du QVec3 fixed-point + yaw ushort -> degres.
             const auto* pos = ps->position();
-            const RED4ext::Vector4 worldPosition = { pos->x(), pos->y(), pos->z(), 1.0f };
-            const float yaw = ps->yaw();
+            const RED4ext::Vector4 worldPosition = {
+                DequantPos(pos->x()), DequantPos(pos->y()), DequantPos(pos->z()), 1.0f
+            };
+            const float yaw = DequantYaw(ps->yaw());
 
             const auto existing = m_networkedEntitiesLookup.find(id);
             if (existing == m_networkedEntitiesLookup.end())
@@ -483,9 +524,12 @@ void NetworkGameSystem::HandlePositionCorrection(const cyberpunk_rp::protocol::P
         return;
     }
 
+    // Gel palier 2 : dequantization du QVec3 fixed-point + yaw ushort -> degres.
     const auto* pos = correction->position();
-    const RED4ext::Vector4 worldPosition = { pos->x(), pos->y(), pos->z(), 1.0f };
-    const float yaw = correction->yaw();
+    const RED4ext::Vector4 worldPosition = {
+        DequantPos(pos->x()), DequantPos(pos->y()), DequantPos(pos->z()), 1.0f
+    };
+    const float yaw = DequantYaw(correction->yaw());
     const uint8_t reason = correction->reason(); // 0=Spawn, 1=AntiCheat, 2=Resync (diagnostic uniquement)
 
     // Téléporte le JOUEUR LOCAL à la position autoritaire du serveur. Même facilité que pour les

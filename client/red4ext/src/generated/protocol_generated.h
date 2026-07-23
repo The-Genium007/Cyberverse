@@ -16,7 +16,11 @@ static_assert(FLATBUFFERS_VERSION_MAJOR == 25 &&
 namespace cyberpunk_rp {
 namespace protocol {
 
+struct QVec3;
+
 struct Vec3;
+
+struct Quat;
 
 struct Join;
 struct JoinBuilder;
@@ -27,8 +31,71 @@ struct PositionUpdateBuilder;
 struct PlayerState;
 struct PlayerStateBuilder;
 
+struct NpcState;
+struct NpcStateBuilder;
+
+struct VehicleState;
+struct VehicleStateBuilder;
+
+struct VehicleInput;
+struct VehicleInputBuilder;
+
+struct VehiclePlayerState;
+struct VehiclePlayerStateBuilder;
+
+struct EquippedItem;
+struct EquippedItemBuilder;
+
+struct AppearanceSpec;
+struct AppearanceSpecBuilder;
+
+struct AppearanceSync;
+struct AppearanceSyncBuilder;
+
+struct EquipmentReport;
+struct EquipmentReportBuilder;
+
 struct Snapshot;
 struct SnapshotBuilder;
+
+struct PlayerActionReport;
+struct PlayerActionReportBuilder;
+
+struct EmoteReport;
+struct EmoteReportBuilder;
+
+struct EntityInteraction;
+struct EntityInteractionBuilder;
+
+struct InteractionOpen;
+struct InteractionOpenBuilder;
+
+struct InteractionChoice;
+struct InteractionChoiceBuilder;
+
+struct InteractionResult;
+struct InteractionResultBuilder;
+
+struct PlayerEvent;
+struct PlayerEventBuilder;
+
+struct CharacterSummary;
+struct CharacterSummaryBuilder;
+
+struct CharacterList;
+struct CharacterListBuilder;
+
+struct CreateCharacter;
+struct CreateCharacterBuilder;
+
+struct SelectCharacter;
+struct SelectCharacterBuilder;
+
+struct DeleteCharacter;
+struct DeleteCharacterBuilder;
+
+struct CharacterResult;
+struct CharacterResultBuilder;
 
 struct Kicked;
 struct KickedBuilder;
@@ -48,6 +115,9 @@ struct CommandResultBuilder;
 struct PermissionSync;
 struct PermissionSyncBuilder;
 
+struct QueueStatus;
+struct QueueStatusBuilder;
+
 struct Leave;
 struct LeaveBuilder;
 
@@ -56,6 +126,12 @@ struct PositionCorrectionBuilder;
 
 struct ShardAssignment;
 struct ShardAssignmentBuilder;
+
+struct ElevatorCall;
+struct ElevatorCallBuilder;
+
+struct ElevatorStateMsg;
+struct ElevatorStateMsgBuilder;
 
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
@@ -70,37 +146,67 @@ enum ClientMsg : uint8_t {
   ClientMsg_ClientTimeReport = 3,
   ClientMsg_AdminCommand = 4,
   ClientMsg_Leave = 5,
+  ClientMsg_PlayerActionReport = 6,
+  ClientMsg_EmoteReport = 7,
+  ClientMsg_CreateCharacter = 8,
+  ClientMsg_SelectCharacter = 9,
+  ClientMsg_DeleteCharacter = 10,
+  ClientMsg_EntityInteraction = 11,
+  ClientMsg_InteractionChoice = 12,
+  ClientMsg_ElevatorCall = 13,
+  ClientMsg_VehicleInput = 14,
+  ClientMsg_EquipmentReport = 15,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_Leave
+  ClientMsg_MAX = ClientMsg_EquipmentReport
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[6] {
+inline const ClientMsg (&EnumValuesClientMsg())[16] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
     ClientMsg_PositionUpdate,
     ClientMsg_ClientTimeReport,
     ClientMsg_AdminCommand,
-    ClientMsg_Leave
+    ClientMsg_Leave,
+    ClientMsg_PlayerActionReport,
+    ClientMsg_EmoteReport,
+    ClientMsg_CreateCharacter,
+    ClientMsg_SelectCharacter,
+    ClientMsg_DeleteCharacter,
+    ClientMsg_EntityInteraction,
+    ClientMsg_InteractionChoice,
+    ClientMsg_ElevatorCall,
+    ClientMsg_VehicleInput,
+    ClientMsg_EquipmentReport
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[7] = {
+  static const char * const names[17] = {
     "NONE",
     "Join",
     "PositionUpdate",
     "ClientTimeReport",
     "AdminCommand",
     "Leave",
+    "PlayerActionReport",
+    "EmoteReport",
+    "CreateCharacter",
+    "SelectCharacter",
+    "DeleteCharacter",
+    "EntityInteraction",
+    "InteractionChoice",
+    "ElevatorCall",
+    "VehicleInput",
+    "EquipmentReport",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_Leave)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_EquipmentReport)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -129,6 +235,46 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::Leave> {
   static const ClientMsg enum_value = ClientMsg_Leave;
 };
 
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::PlayerActionReport> {
+  static const ClientMsg enum_value = ClientMsg_PlayerActionReport;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::EmoteReport> {
+  static const ClientMsg enum_value = ClientMsg_EmoteReport;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::CreateCharacter> {
+  static const ClientMsg enum_value = ClientMsg_CreateCharacter;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::SelectCharacter> {
+  static const ClientMsg enum_value = ClientMsg_SelectCharacter;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::DeleteCharacter> {
+  static const ClientMsg enum_value = ClientMsg_DeleteCharacter;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::EntityInteraction> {
+  static const ClientMsg enum_value = ClientMsg_EntityInteraction;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::InteractionChoice> {
+  static const ClientMsg enum_value = ClientMsg_InteractionChoice;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::ElevatorCall> {
+  static const ClientMsg enum_value = ClientMsg_ElevatorCall;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::VehicleInput> {
+  static const ClientMsg enum_value = ClientMsg_VehicleInput;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::EquipmentReport> {
+  static const ClientMsg enum_value = ClientMsg_EquipmentReport;
+};
+
 template <bool B = false>
 bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ClientMsg type);
 template <bool B = false>
@@ -143,11 +289,19 @@ enum ServerMsg : uint8_t {
   ServerMsg_PermissionSync = 5,
   ServerMsg_PositionCorrection = 6,
   ServerMsg_ShardAssignment = 7,
+  ServerMsg_PlayerEvent = 8,
+  ServerMsg_CharacterList = 9,
+  ServerMsg_CharacterResult = 10,
+  ServerMsg_QueueStatus = 11,
+  ServerMsg_InteractionOpen = 12,
+  ServerMsg_InteractionResult = 13,
+  ServerMsg_ElevatorStateMsg = 14,
+  ServerMsg_AppearanceSync = 15,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_ShardAssignment
+  ServerMsg_MAX = ServerMsg_AppearanceSync
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[8] {
+inline const ServerMsg (&EnumValuesServerMsg())[16] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -156,13 +310,21 @@ inline const ServerMsg (&EnumValuesServerMsg())[8] {
     ServerMsg_CommandResult,
     ServerMsg_PermissionSync,
     ServerMsg_PositionCorrection,
-    ServerMsg_ShardAssignment
+    ServerMsg_ShardAssignment,
+    ServerMsg_PlayerEvent,
+    ServerMsg_CharacterList,
+    ServerMsg_CharacterResult,
+    ServerMsg_QueueStatus,
+    ServerMsg_InteractionOpen,
+    ServerMsg_InteractionResult,
+    ServerMsg_ElevatorStateMsg,
+    ServerMsg_AppearanceSync
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[9] = {
+  static const char * const names[17] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -171,13 +333,21 @@ inline const char * const *EnumNamesServerMsg() {
     "PermissionSync",
     "PositionCorrection",
     "ShardAssignment",
+    "PlayerEvent",
+    "CharacterList",
+    "CharacterResult",
+    "QueueStatus",
+    "InteractionOpen",
+    "InteractionResult",
+    "ElevatorStateMsg",
+    "AppearanceSync",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_ShardAssignment)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_AppearanceSync)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -214,10 +384,71 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ShardAssignment> {
   static const ServerMsg enum_value = ServerMsg_ShardAssignment;
 };
 
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::PlayerEvent> {
+  static const ServerMsg enum_value = ServerMsg_PlayerEvent;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CharacterList> {
+  static const ServerMsg enum_value = ServerMsg_CharacterList;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CharacterResult> {
+  static const ServerMsg enum_value = ServerMsg_CharacterResult;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::QueueStatus> {
+  static const ServerMsg enum_value = ServerMsg_QueueStatus;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::InteractionOpen> {
+  static const ServerMsg enum_value = ServerMsg_InteractionOpen;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::InteractionResult> {
+  static const ServerMsg enum_value = ServerMsg_InteractionResult;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ElevatorStateMsg> {
+  static const ServerMsg enum_value = ServerMsg_ElevatorStateMsg;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::AppearanceSync> {
+  static const ServerMsg enum_value = ServerMsg_AppearanceSync;
+};
+
 template <bool B = false>
 bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ServerMsg type);
 template <bool B = false>
 bool VerifyServerMsgVector(::flatbuffers::VerifierTemplate<B> &verifier, const ::flatbuffers::Vector<::flatbuffers::Offset<void>> *values, const ::flatbuffers::Vector<uint8_t> *types);
+
+FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) QVec3 FLATBUFFERS_FINAL_CLASS {
+ private:
+  int32_t x_;
+  int32_t y_;
+  int32_t z_;
+
+ public:
+  QVec3()
+      : x_(0),
+        y_(0),
+        z_(0) {
+  }
+  QVec3(int32_t _x, int32_t _y, int32_t _z)
+      : x_(::flatbuffers::EndianScalar(_x)),
+        y_(::flatbuffers::EndianScalar(_y)),
+        z_(::flatbuffers::EndianScalar(_z)) {
+  }
+  int32_t x() const {
+    return ::flatbuffers::EndianScalar(x_);
+  }
+  int32_t y() const {
+    return ::flatbuffers::EndianScalar(y_);
+  }
+  int32_t z() const {
+    return ::flatbuffers::EndianScalar(z_);
+  }
+};
+FLATBUFFERS_STRUCT_END(QVec3, 12);
 
 FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) Vec3 FLATBUFFERS_FINAL_CLASS {
  private:
@@ -248,12 +479,49 @@ FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) Vec3 FLATBUFFERS_FINAL_CLASS {
 };
 FLATBUFFERS_STRUCT_END(Vec3, 12);
 
+FLATBUFFERS_MANUALLY_ALIGNED_STRUCT(4) Quat FLATBUFFERS_FINAL_CLASS {
+ private:
+  float x_;
+  float y_;
+  float z_;
+  float w_;
+
+ public:
+  Quat()
+      : x_(0),
+        y_(0),
+        z_(0),
+        w_(0) {
+  }
+  Quat(float _x, float _y, float _z, float _w)
+      : x_(::flatbuffers::EndianScalar(_x)),
+        y_(::flatbuffers::EndianScalar(_y)),
+        z_(::flatbuffers::EndianScalar(_z)),
+        w_(::flatbuffers::EndianScalar(_w)) {
+  }
+  float x() const {
+    return ::flatbuffers::EndianScalar(x_);
+  }
+  float y() const {
+    return ::flatbuffers::EndianScalar(y_);
+  }
+  float z() const {
+    return ::flatbuffers::EndianScalar(z_);
+  }
+  float w() const {
+    return ::flatbuffers::EndianScalar(w_);
+  }
+};
+FLATBUFFERS_STRUCT_END(Quat, 16);
+
 struct Join FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef JoinBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_DISPLAY_NAME = 4,
     VT_TOKEN = 6,
-    VT_PROTOCOL_VERSION = 8
+    VT_PROTOCOL_VERSION = 8,
+    VT_HWID_HASH = 10,
+    VT_SPACE_ID = 12
   };
   const ::flatbuffers::String *display_name() const {
     return GetPointer<const ::flatbuffers::String *>(VT_DISPLAY_NAME);
@@ -264,6 +532,12 @@ struct Join FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t protocol_version() const {
     return GetField<uint32_t>(VT_PROTOCOL_VERSION, 0);
   }
+  const ::flatbuffers::String *hwid_hash() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_HWID_HASH);
+  }
+  uint32_t space_id() const {
+    return GetField<uint32_t>(VT_SPACE_ID, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -272,6 +546,9 @@ struct Join FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_TOKEN) &&
            verifier.VerifyString(token()) &&
            VerifyField<uint32_t>(verifier, VT_PROTOCOL_VERSION, 4) &&
+           VerifyOffset(verifier, VT_HWID_HASH) &&
+           verifier.VerifyString(hwid_hash()) &&
+           VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
            verifier.EndTable();
   }
 };
@@ -289,6 +566,12 @@ struct JoinBuilder {
   void add_protocol_version(uint32_t protocol_version) {
     fbb_.AddElement<uint32_t>(Join::VT_PROTOCOL_VERSION, protocol_version, 0);
   }
+  void add_hwid_hash(::flatbuffers::Offset<::flatbuffers::String> hwid_hash) {
+    fbb_.AddOffset(Join::VT_HWID_HASH, hwid_hash);
+  }
+  void add_space_id(uint32_t space_id) {
+    fbb_.AddElement<uint32_t>(Join::VT_SPACE_ID, space_id, 0);
+  }
   explicit JoinBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -304,8 +587,12 @@ inline ::flatbuffers::Offset<Join> CreateJoin(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     ::flatbuffers::Offset<::flatbuffers::String> display_name = 0,
     ::flatbuffers::Offset<::flatbuffers::String> token = 0,
-    uint32_t protocol_version = 0) {
+    uint32_t protocol_version = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> hwid_hash = 0,
+    uint32_t space_id = 0) {
   JoinBuilder builder_(_fbb);
+  builder_.add_space_id(space_id);
+  builder_.add_hwid_hash(hwid_hash);
   builder_.add_protocol_version(protocol_version);
   builder_.add_token(token);
   builder_.add_display_name(display_name);
@@ -316,33 +603,63 @@ inline ::flatbuffers::Offset<Join> CreateJoinDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     const char *display_name = nullptr,
     const char *token = nullptr,
-    uint32_t protocol_version = 0) {
+    uint32_t protocol_version = 0,
+    const char *hwid_hash = nullptr,
+    uint32_t space_id = 0) {
   auto display_name__ = display_name ? _fbb.CreateString(display_name) : 0;
   auto token__ = token ? _fbb.CreateString(token) : 0;
+  auto hwid_hash__ = hwid_hash ? _fbb.CreateString(hwid_hash) : 0;
   return cyberpunk_rp::protocol::CreateJoin(
       _fbb,
       display_name__,
       token__,
-      protocol_version);
+      protocol_version,
+      hwid_hash__,
+      space_id);
 }
 
 struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef PositionUpdateBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_POSITION = 4,
-    VT_YAW = 6
+    VT_YAW = 6,
+    VT_LOCOMOTION = 8,
+    VT_MOVE_DIR = 10,
+    VT_FLAGS = 12,
+    VT_FRAME = 14,
+    VT_SLOT = 16
   };
-  const cyberpunk_rp::protocol::Vec3 *position() const {
-    return GetStruct<const cyberpunk_rp::protocol::Vec3 *>(VT_POSITION);
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
   }
-  float yaw() const {
-    return GetField<float>(VT_YAW, 0.0f);
+  uint16_t yaw() const {
+    return GetField<uint16_t>(VT_YAW, 0);
+  }
+  uint8_t locomotion() const {
+    return GetField<uint8_t>(VT_LOCOMOTION, 0);
+  }
+  uint8_t move_dir() const {
+    return GetField<uint8_t>(VT_MOVE_DIR, 0);
+  }
+  uint8_t flags() const {
+    return GetField<uint8_t>(VT_FLAGS, 0);
+  }
+  uint64_t frame() const {
+    return GetField<uint64_t>(VT_FRAME, 0);
+  }
+  uint64_t slot() const {
+    return GetField<uint64_t>(VT_SLOT, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyField<cyberpunk_rp::protocol::Vec3>(verifier, VT_POSITION, 4) &&
-           VerifyField<float>(verifier, VT_YAW, 4) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
+           VerifyField<uint8_t>(verifier, VT_LOCOMOTION, 1) &&
+           VerifyField<uint8_t>(verifier, VT_MOVE_DIR, 1) &&
+           VerifyField<uint8_t>(verifier, VT_FLAGS, 1) &&
+           VerifyField<uint64_t>(verifier, VT_FRAME, 8) &&
+           VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
            verifier.EndTable();
   }
 };
@@ -351,11 +668,26 @@ struct PositionUpdateBuilder {
   typedef PositionUpdate Table;
   ::flatbuffers::FlatBufferBuilder &fbb_;
   ::flatbuffers::uoffset_t start_;
-  void add_position(const cyberpunk_rp::protocol::Vec3 *position) {
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
     fbb_.AddStruct(PositionUpdate::VT_POSITION, position);
   }
-  void add_yaw(float yaw) {
-    fbb_.AddElement<float>(PositionUpdate::VT_YAW, yaw, 0.0f);
+  void add_yaw(uint16_t yaw) {
+    fbb_.AddElement<uint16_t>(PositionUpdate::VT_YAW, yaw, 0);
+  }
+  void add_locomotion(uint8_t locomotion) {
+    fbb_.AddElement<uint8_t>(PositionUpdate::VT_LOCOMOTION, locomotion, 0);
+  }
+  void add_move_dir(uint8_t move_dir) {
+    fbb_.AddElement<uint8_t>(PositionUpdate::VT_MOVE_DIR, move_dir, 0);
+  }
+  void add_flags(uint8_t flags) {
+    fbb_.AddElement<uint8_t>(PositionUpdate::VT_FLAGS, flags, 0);
+  }
+  void add_frame(uint64_t frame) {
+    fbb_.AddElement<uint64_t>(PositionUpdate::VT_FRAME, frame, 0);
+  }
+  void add_slot(uint64_t slot) {
+    fbb_.AddElement<uint64_t>(PositionUpdate::VT_SLOT, slot, 0);
   }
   explicit PositionUpdateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -370,11 +702,21 @@ struct PositionUpdateBuilder {
 
 inline ::flatbuffers::Offset<PositionUpdate> CreatePositionUpdate(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const cyberpunk_rp::protocol::Vec3 *position = nullptr,
-    float yaw = 0.0f) {
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0,
+    uint8_t locomotion = 0,
+    uint8_t move_dir = 0,
+    uint8_t flags = 0,
+    uint64_t frame = 0,
+    uint64_t slot = 0) {
   PositionUpdateBuilder builder_(_fbb);
-  builder_.add_yaw(yaw);
+  builder_.add_slot(slot);
+  builder_.add_frame(frame);
   builder_.add_position(position);
+  builder_.add_yaw(yaw);
+  builder_.add_flags(flags);
+  builder_.add_move_dir(move_dir);
+  builder_.add_locomotion(locomotion);
   return builder_.Finish();
 }
 
@@ -383,23 +725,58 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ID = 4,
     VT_POSITION = 6,
-    VT_YAW = 8
+    VT_YAW = 8,
+    VT_LOCOMOTION = 10,
+    VT_MOVE_DIR = 12,
+    VT_FLAGS = 14,
+    VT_SUSTAINED = 16,
+    VT_SPACE_ID = 18,
+    VT_FRAME = 20,
+    VT_SLOT = 22
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
   }
-  const cyberpunk_rp::protocol::Vec3 *position() const {
-    return GetStruct<const cyberpunk_rp::protocol::Vec3 *>(VT_POSITION);
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
   }
-  float yaw() const {
-    return GetField<float>(VT_YAW, 0.0f);
+  uint16_t yaw() const {
+    return GetField<uint16_t>(VT_YAW, 0);
+  }
+  uint8_t locomotion() const {
+    return GetField<uint8_t>(VT_LOCOMOTION, 0);
+  }
+  uint8_t move_dir() const {
+    return GetField<uint8_t>(VT_MOVE_DIR, 0);
+  }
+  uint8_t flags() const {
+    return GetField<uint8_t>(VT_FLAGS, 0);
+  }
+  uint32_t sustained() const {
+    return GetField<uint32_t>(VT_SUSTAINED, 0);
+  }
+  uint32_t space_id() const {
+    return GetField<uint32_t>(VT_SPACE_ID, 0);
+  }
+  uint64_t frame() const {
+    return GetField<uint64_t>(VT_FRAME, 0);
+  }
+  uint64_t slot() const {
+    return GetField<uint64_t>(VT_SLOT, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_ID, 8) &&
-           VerifyField<cyberpunk_rp::protocol::Vec3>(verifier, VT_POSITION, 4) &&
-           VerifyField<float>(verifier, VT_YAW, 4) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
+           VerifyField<uint8_t>(verifier, VT_LOCOMOTION, 1) &&
+           VerifyField<uint8_t>(verifier, VT_MOVE_DIR, 1) &&
+           VerifyField<uint8_t>(verifier, VT_FLAGS, 1) &&
+           VerifyField<uint32_t>(verifier, VT_SUSTAINED, 4) &&
+           VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
+           VerifyField<uint64_t>(verifier, VT_FRAME, 8) &&
+           VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
            verifier.EndTable();
   }
 };
@@ -411,11 +788,32 @@ struct PlayerStateBuilder {
   void add_id(uint64_t id) {
     fbb_.AddElement<uint64_t>(PlayerState::VT_ID, id, 0);
   }
-  void add_position(const cyberpunk_rp::protocol::Vec3 *position) {
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
     fbb_.AddStruct(PlayerState::VT_POSITION, position);
   }
-  void add_yaw(float yaw) {
-    fbb_.AddElement<float>(PlayerState::VT_YAW, yaw, 0.0f);
+  void add_yaw(uint16_t yaw) {
+    fbb_.AddElement<uint16_t>(PlayerState::VT_YAW, yaw, 0);
+  }
+  void add_locomotion(uint8_t locomotion) {
+    fbb_.AddElement<uint8_t>(PlayerState::VT_LOCOMOTION, locomotion, 0);
+  }
+  void add_move_dir(uint8_t move_dir) {
+    fbb_.AddElement<uint8_t>(PlayerState::VT_MOVE_DIR, move_dir, 0);
+  }
+  void add_flags(uint8_t flags) {
+    fbb_.AddElement<uint8_t>(PlayerState::VT_FLAGS, flags, 0);
+  }
+  void add_sustained(uint32_t sustained) {
+    fbb_.AddElement<uint32_t>(PlayerState::VT_SUSTAINED, sustained, 0);
+  }
+  void add_space_id(uint32_t space_id) {
+    fbb_.AddElement<uint32_t>(PlayerState::VT_SPACE_ID, space_id, 0);
+  }
+  void add_frame(uint64_t frame) {
+    fbb_.AddElement<uint64_t>(PlayerState::VT_FRAME, frame, 0);
+  }
+  void add_slot(uint64_t slot) {
+    fbb_.AddElement<uint64_t>(PlayerState::VT_SLOT, slot, 0);
   }
   explicit PlayerStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -431,12 +829,758 @@ struct PlayerStateBuilder {
 inline ::flatbuffers::Offset<PlayerState> CreatePlayerState(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t id = 0,
-    const cyberpunk_rp::protocol::Vec3 *position = nullptr,
-    float yaw = 0.0f) {
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0,
+    uint8_t locomotion = 0,
+    uint8_t move_dir = 0,
+    uint8_t flags = 0,
+    uint32_t sustained = 0,
+    uint32_t space_id = 0,
+    uint64_t frame = 0,
+    uint64_t slot = 0) {
   PlayerStateBuilder builder_(_fbb);
+  builder_.add_slot(slot);
+  builder_.add_frame(frame);
   builder_.add_id(id);
-  builder_.add_yaw(yaw);
+  builder_.add_space_id(space_id);
+  builder_.add_sustained(sustained);
   builder_.add_position(position);
+  builder_.add_yaw(yaw);
+  builder_.add_flags(flags);
+  builder_.add_move_dir(move_dir);
+  builder_.add_locomotion(locomotion);
+  return builder_.Finish();
+}
+
+struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef NpcStateBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_ARCHETYPE = 6,
+    VT_POSITION = 8,
+    VT_YAW = 10,
+    VT_LOCOMOTION = 12,
+    VT_MOVE_DIR = 14,
+    VT_FLAGS = 16,
+    VT_SUSTAINED = 18,
+    VT_BEHAVIOR = 20,
+    VT_SPACE_ID = 22,
+    VT_TARGET = 24
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  uint32_t archetype() const {
+    return GetField<uint32_t>(VT_ARCHETYPE, 0);
+  }
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
+  }
+  uint16_t yaw() const {
+    return GetField<uint16_t>(VT_YAW, 0);
+  }
+  uint8_t locomotion() const {
+    return GetField<uint8_t>(VT_LOCOMOTION, 0);
+  }
+  uint8_t move_dir() const {
+    return GetField<uint8_t>(VT_MOVE_DIR, 0);
+  }
+  uint8_t flags() const {
+    return GetField<uint8_t>(VT_FLAGS, 0);
+  }
+  uint32_t sustained() const {
+    return GetField<uint32_t>(VT_SUSTAINED, 0);
+  }
+  uint8_t behavior() const {
+    return GetField<uint8_t>(VT_BEHAVIOR, 0);
+  }
+  uint32_t space_id() const {
+    return GetField<uint32_t>(VT_SPACE_ID, 0);
+  }
+  uint64_t target() const {
+    return GetField<uint64_t>(VT_TARGET, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyField<uint32_t>(verifier, VT_ARCHETYPE, 4) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
+           VerifyField<uint8_t>(verifier, VT_LOCOMOTION, 1) &&
+           VerifyField<uint8_t>(verifier, VT_MOVE_DIR, 1) &&
+           VerifyField<uint8_t>(verifier, VT_FLAGS, 1) &&
+           VerifyField<uint32_t>(verifier, VT_SUSTAINED, 4) &&
+           VerifyField<uint8_t>(verifier, VT_BEHAVIOR, 1) &&
+           VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
+           VerifyField<uint64_t>(verifier, VT_TARGET, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct NpcStateBuilder {
+  typedef NpcState Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(NpcState::VT_ID, id, 0);
+  }
+  void add_archetype(uint32_t archetype) {
+    fbb_.AddElement<uint32_t>(NpcState::VT_ARCHETYPE, archetype, 0);
+  }
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
+    fbb_.AddStruct(NpcState::VT_POSITION, position);
+  }
+  void add_yaw(uint16_t yaw) {
+    fbb_.AddElement<uint16_t>(NpcState::VT_YAW, yaw, 0);
+  }
+  void add_locomotion(uint8_t locomotion) {
+    fbb_.AddElement<uint8_t>(NpcState::VT_LOCOMOTION, locomotion, 0);
+  }
+  void add_move_dir(uint8_t move_dir) {
+    fbb_.AddElement<uint8_t>(NpcState::VT_MOVE_DIR, move_dir, 0);
+  }
+  void add_flags(uint8_t flags) {
+    fbb_.AddElement<uint8_t>(NpcState::VT_FLAGS, flags, 0);
+  }
+  void add_sustained(uint32_t sustained) {
+    fbb_.AddElement<uint32_t>(NpcState::VT_SUSTAINED, sustained, 0);
+  }
+  void add_behavior(uint8_t behavior) {
+    fbb_.AddElement<uint8_t>(NpcState::VT_BEHAVIOR, behavior, 0);
+  }
+  void add_space_id(uint32_t space_id) {
+    fbb_.AddElement<uint32_t>(NpcState::VT_SPACE_ID, space_id, 0);
+  }
+  void add_target(uint64_t target) {
+    fbb_.AddElement<uint64_t>(NpcState::VT_TARGET, target, 0);
+  }
+  explicit NpcStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<NpcState> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<NpcState>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<NpcState> CreateNpcState(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    uint32_t archetype = 0,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0,
+    uint8_t locomotion = 0,
+    uint8_t move_dir = 0,
+    uint8_t flags = 0,
+    uint32_t sustained = 0,
+    uint8_t behavior = 0,
+    uint32_t space_id = 0,
+    uint64_t target = 0) {
+  NpcStateBuilder builder_(_fbb);
+  builder_.add_target(target);
+  builder_.add_id(id);
+  builder_.add_space_id(space_id);
+  builder_.add_sustained(sustained);
+  builder_.add_position(position);
+  builder_.add_archetype(archetype);
+  builder_.add_yaw(yaw);
+  builder_.add_behavior(behavior);
+  builder_.add_flags(flags);
+  builder_.add_move_dir(move_dir);
+  builder_.add_locomotion(locomotion);
+  return builder_.Finish();
+}
+
+struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef VehicleStateBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_ARCHETYPE = 6,
+    VT_POSITION = 8,
+    VT_YAW = 10,
+    VT_SPEED = 12,
+    VT_PASSENGER = 14,
+    VT_SPACE_ID = 16
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  uint32_t archetype() const {
+    return GetField<uint32_t>(VT_ARCHETYPE, 0);
+  }
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
+  }
+  uint16_t yaw() const {
+    return GetField<uint16_t>(VT_YAW, 0);
+  }
+  uint16_t speed() const {
+    return GetField<uint16_t>(VT_SPEED, 0);
+  }
+  uint64_t passenger() const {
+    return GetField<uint64_t>(VT_PASSENGER, 0);
+  }
+  uint32_t space_id() const {
+    return GetField<uint32_t>(VT_SPACE_ID, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyField<uint32_t>(verifier, VT_ARCHETYPE, 4) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
+           VerifyField<uint16_t>(verifier, VT_SPEED, 2) &&
+           VerifyField<uint64_t>(verifier, VT_PASSENGER, 8) &&
+           VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct VehicleStateBuilder {
+  typedef VehicleState Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(VehicleState::VT_ID, id, 0);
+  }
+  void add_archetype(uint32_t archetype) {
+    fbb_.AddElement<uint32_t>(VehicleState::VT_ARCHETYPE, archetype, 0);
+  }
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
+    fbb_.AddStruct(VehicleState::VT_POSITION, position);
+  }
+  void add_yaw(uint16_t yaw) {
+    fbb_.AddElement<uint16_t>(VehicleState::VT_YAW, yaw, 0);
+  }
+  void add_speed(uint16_t speed) {
+    fbb_.AddElement<uint16_t>(VehicleState::VT_SPEED, speed, 0);
+  }
+  void add_passenger(uint64_t passenger) {
+    fbb_.AddElement<uint64_t>(VehicleState::VT_PASSENGER, passenger, 0);
+  }
+  void add_space_id(uint32_t space_id) {
+    fbb_.AddElement<uint32_t>(VehicleState::VT_SPACE_ID, space_id, 0);
+  }
+  explicit VehicleStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<VehicleState> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<VehicleState>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<VehicleState> CreateVehicleState(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    uint32_t archetype = 0,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0,
+    uint16_t speed = 0,
+    uint64_t passenger = 0,
+    uint32_t space_id = 0) {
+  VehicleStateBuilder builder_(_fbb);
+  builder_.add_passenger(passenger);
+  builder_.add_id(id);
+  builder_.add_space_id(space_id);
+  builder_.add_position(position);
+  builder_.add_archetype(archetype);
+  builder_.add_speed(speed);
+  builder_.add_yaw(yaw);
+  return builder_.Finish();
+}
+
+struct VehicleInput FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef VehicleInputBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_VEHICLE = 4,
+    VT_TICK = 6,
+    VT_THROTTLE = 8,
+    VT_BRAKE = 10,
+    VT_STEER = 12,
+    VT_GEAR = 14,
+    VT_BUTTONS = 16
+  };
+  uint64_t vehicle() const {
+    return GetField<uint64_t>(VT_VEHICLE, 0);
+  }
+  uint64_t tick() const {
+    return GetField<uint64_t>(VT_TICK, 0);
+  }
+  uint8_t throttle() const {
+    return GetField<uint8_t>(VT_THROTTLE, 0);
+  }
+  uint8_t brake() const {
+    return GetField<uint8_t>(VT_BRAKE, 0);
+  }
+  int8_t steer() const {
+    return GetField<int8_t>(VT_STEER, 0);
+  }
+  int8_t gear() const {
+    return GetField<int8_t>(VT_GEAR, 0);
+  }
+  uint8_t buttons() const {
+    return GetField<uint8_t>(VT_BUTTONS, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_VEHICLE, 8) &&
+           VerifyField<uint64_t>(verifier, VT_TICK, 8) &&
+           VerifyField<uint8_t>(verifier, VT_THROTTLE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_BRAKE, 1) &&
+           VerifyField<int8_t>(verifier, VT_STEER, 1) &&
+           VerifyField<int8_t>(verifier, VT_GEAR, 1) &&
+           VerifyField<uint8_t>(verifier, VT_BUTTONS, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct VehicleInputBuilder {
+  typedef VehicleInput Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_vehicle(uint64_t vehicle) {
+    fbb_.AddElement<uint64_t>(VehicleInput::VT_VEHICLE, vehicle, 0);
+  }
+  void add_tick(uint64_t tick) {
+    fbb_.AddElement<uint64_t>(VehicleInput::VT_TICK, tick, 0);
+  }
+  void add_throttle(uint8_t throttle) {
+    fbb_.AddElement<uint8_t>(VehicleInput::VT_THROTTLE, throttle, 0);
+  }
+  void add_brake(uint8_t brake) {
+    fbb_.AddElement<uint8_t>(VehicleInput::VT_BRAKE, brake, 0);
+  }
+  void add_steer(int8_t steer) {
+    fbb_.AddElement<int8_t>(VehicleInput::VT_STEER, steer, 0);
+  }
+  void add_gear(int8_t gear) {
+    fbb_.AddElement<int8_t>(VehicleInput::VT_GEAR, gear, 0);
+  }
+  void add_buttons(uint8_t buttons) {
+    fbb_.AddElement<uint8_t>(VehicleInput::VT_BUTTONS, buttons, 0);
+  }
+  explicit VehicleInputBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<VehicleInput> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<VehicleInput>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<VehicleInput> CreateVehicleInput(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t vehicle = 0,
+    uint64_t tick = 0,
+    uint8_t throttle = 0,
+    uint8_t brake = 0,
+    int8_t steer = 0,
+    int8_t gear = 0,
+    uint8_t buttons = 0) {
+  VehicleInputBuilder builder_(_fbb);
+  builder_.add_tick(tick);
+  builder_.add_vehicle(vehicle);
+  builder_.add_buttons(buttons);
+  builder_.add_gear(gear);
+  builder_.add_steer(steer);
+  builder_.add_brake(brake);
+  builder_.add_throttle(throttle);
+  return builder_.Finish();
+}
+
+struct VehiclePlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef VehiclePlayerStateBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_RECORD = 6,
+    VT_POSITION = 8,
+    VT_ORIENTATION = 10,
+    VT_LINEAR_VELOCITY = 12,
+    VT_ANGULAR_VELOCITY = 14,
+    VT_DRIVER = 16,
+    VT_SEAT_OCCUPANCY = 18,
+    VT_FLAGS = 20
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  uint64_t record() const {
+    return GetField<uint64_t>(VT_RECORD, 0);
+  }
+  const cyberpunk_rp::protocol::Vec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::Vec3 *>(VT_POSITION);
+  }
+  const cyberpunk_rp::protocol::Quat *orientation() const {
+    return GetStruct<const cyberpunk_rp::protocol::Quat *>(VT_ORIENTATION);
+  }
+  const cyberpunk_rp::protocol::Vec3 *linear_velocity() const {
+    return GetStruct<const cyberpunk_rp::protocol::Vec3 *>(VT_LINEAR_VELOCITY);
+  }
+  const cyberpunk_rp::protocol::Vec3 *angular_velocity() const {
+    return GetStruct<const cyberpunk_rp::protocol::Vec3 *>(VT_ANGULAR_VELOCITY);
+  }
+  uint64_t driver() const {
+    return GetField<uint64_t>(VT_DRIVER, 0);
+  }
+  uint8_t seat_occupancy() const {
+    return GetField<uint8_t>(VT_SEAT_OCCUPANCY, 0);
+  }
+  uint8_t flags() const {
+    return GetField<uint8_t>(VT_FLAGS, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyField<uint64_t>(verifier, VT_RECORD, 8) &&
+           VerifyField<cyberpunk_rp::protocol::Vec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<cyberpunk_rp::protocol::Quat>(verifier, VT_ORIENTATION, 4) &&
+           VerifyField<cyberpunk_rp::protocol::Vec3>(verifier, VT_LINEAR_VELOCITY, 4) &&
+           VerifyField<cyberpunk_rp::protocol::Vec3>(verifier, VT_ANGULAR_VELOCITY, 4) &&
+           VerifyField<uint64_t>(verifier, VT_DRIVER, 8) &&
+           VerifyField<uint8_t>(verifier, VT_SEAT_OCCUPANCY, 1) &&
+           VerifyField<uint8_t>(verifier, VT_FLAGS, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct VehiclePlayerStateBuilder {
+  typedef VehiclePlayerState Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(VehiclePlayerState::VT_ID, id, 0);
+  }
+  void add_record(uint64_t record) {
+    fbb_.AddElement<uint64_t>(VehiclePlayerState::VT_RECORD, record, 0);
+  }
+  void add_position(const cyberpunk_rp::protocol::Vec3 *position) {
+    fbb_.AddStruct(VehiclePlayerState::VT_POSITION, position);
+  }
+  void add_orientation(const cyberpunk_rp::protocol::Quat *orientation) {
+    fbb_.AddStruct(VehiclePlayerState::VT_ORIENTATION, orientation);
+  }
+  void add_linear_velocity(const cyberpunk_rp::protocol::Vec3 *linear_velocity) {
+    fbb_.AddStruct(VehiclePlayerState::VT_LINEAR_VELOCITY, linear_velocity);
+  }
+  void add_angular_velocity(const cyberpunk_rp::protocol::Vec3 *angular_velocity) {
+    fbb_.AddStruct(VehiclePlayerState::VT_ANGULAR_VELOCITY, angular_velocity);
+  }
+  void add_driver(uint64_t driver) {
+    fbb_.AddElement<uint64_t>(VehiclePlayerState::VT_DRIVER, driver, 0);
+  }
+  void add_seat_occupancy(uint8_t seat_occupancy) {
+    fbb_.AddElement<uint8_t>(VehiclePlayerState::VT_SEAT_OCCUPANCY, seat_occupancy, 0);
+  }
+  void add_flags(uint8_t flags) {
+    fbb_.AddElement<uint8_t>(VehiclePlayerState::VT_FLAGS, flags, 0);
+  }
+  explicit VehiclePlayerStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<VehiclePlayerState> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<VehiclePlayerState>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<VehiclePlayerState> CreateVehiclePlayerState(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    uint64_t record = 0,
+    const cyberpunk_rp::protocol::Vec3 *position = nullptr,
+    const cyberpunk_rp::protocol::Quat *orientation = nullptr,
+    const cyberpunk_rp::protocol::Vec3 *linear_velocity = nullptr,
+    const cyberpunk_rp::protocol::Vec3 *angular_velocity = nullptr,
+    uint64_t driver = 0,
+    uint8_t seat_occupancy = 0,
+    uint8_t flags = 0) {
+  VehiclePlayerStateBuilder builder_(_fbb);
+  builder_.add_driver(driver);
+  builder_.add_record(record);
+  builder_.add_id(id);
+  builder_.add_angular_velocity(angular_velocity);
+  builder_.add_linear_velocity(linear_velocity);
+  builder_.add_orientation(orientation);
+  builder_.add_position(position);
+  builder_.add_flags(flags);
+  builder_.add_seat_occupancy(seat_occupancy);
+  return builder_.Finish();
+}
+
+struct EquippedItem FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef EquippedItemBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ITEM = 4,
+    VT_SLOT = 6,
+    VT_DRAWN = 8
+  };
+  uint64_t item() const {
+    return GetField<uint64_t>(VT_ITEM, 0);
+  }
+  uint64_t slot() const {
+    return GetField<uint64_t>(VT_SLOT, 0);
+  }
+  bool drawn() const {
+    return GetField<uint8_t>(VT_DRAWN, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ITEM, 8) &&
+           VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
+           VerifyField<uint8_t>(verifier, VT_DRAWN, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct EquippedItemBuilder {
+  typedef EquippedItem Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_item(uint64_t item) {
+    fbb_.AddElement<uint64_t>(EquippedItem::VT_ITEM, item, 0);
+  }
+  void add_slot(uint64_t slot) {
+    fbb_.AddElement<uint64_t>(EquippedItem::VT_SLOT, slot, 0);
+  }
+  void add_drawn(bool drawn) {
+    fbb_.AddElement<uint8_t>(EquippedItem::VT_DRAWN, static_cast<uint8_t>(drawn), 0);
+  }
+  explicit EquippedItemBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<EquippedItem> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<EquippedItem>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<EquippedItem> CreateEquippedItem(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t item = 0,
+    uint64_t slot = 0,
+    bool drawn = false) {
+  EquippedItemBuilder builder_(_fbb);
+  builder_.add_slot(slot);
+  builder_.add_item(item);
+  builder_.add_drawn(drawn);
+  return builder_.Finish();
+}
+
+struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef AppearanceSpecBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_BASE_RECORD = 4,
+    VT_APPEARANCE = 6,
+    VT_GARMENTS = 8
+  };
+  uint64_t base_record() const {
+    return GetField<uint64_t>(VT_BASE_RECORD, 0);
+  }
+  uint64_t appearance() const {
+    return GetField<uint64_t>(VT_APPEARANCE, 0);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *garments() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *>(VT_GARMENTS);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_BASE_RECORD, 8) &&
+           VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
+           VerifyOffset(verifier, VT_GARMENTS) &&
+           verifier.VerifyVector(garments()) &&
+           verifier.VerifyVectorOfTables(garments()) &&
+           verifier.EndTable();
+  }
+};
+
+struct AppearanceSpecBuilder {
+  typedef AppearanceSpec Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_base_record(uint64_t base_record) {
+    fbb_.AddElement<uint64_t>(AppearanceSpec::VT_BASE_RECORD, base_record, 0);
+  }
+  void add_appearance(uint64_t appearance) {
+    fbb_.AddElement<uint64_t>(AppearanceSpec::VT_APPEARANCE, appearance, 0);
+  }
+  void add_garments(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>> garments) {
+    fbb_.AddOffset(AppearanceSpec::VT_GARMENTS, garments);
+  }
+  explicit AppearanceSpecBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<AppearanceSpec> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<AppearanceSpec>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpec(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t base_record = 0,
+    uint64_t appearance = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>> garments = 0) {
+  AppearanceSpecBuilder builder_(_fbb);
+  builder_.add_appearance(appearance);
+  builder_.add_base_record(base_record);
+  builder_.add_garments(garments);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpecDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t base_record = 0,
+    uint64_t appearance = 0,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *garments = nullptr) {
+  auto garments__ = garments ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>(*garments) : 0;
+  return cyberpunk_rp::protocol::CreateAppearanceSpec(
+      _fbb,
+      base_record,
+      appearance,
+      garments__);
+}
+
+struct AppearanceSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef AppearanceSyncBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_SPEC = 6
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  const cyberpunk_rp::protocol::AppearanceSpec *spec() const {
+    return GetPointer<const cyberpunk_rp::protocol::AppearanceSpec *>(VT_SPEC);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyOffset(verifier, VT_SPEC) &&
+           verifier.VerifyTable(spec()) &&
+           verifier.EndTable();
+  }
+};
+
+struct AppearanceSyncBuilder {
+  typedef AppearanceSync Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(AppearanceSync::VT_ID, id, 0);
+  }
+  void add_spec(::flatbuffers::Offset<cyberpunk_rp::protocol::AppearanceSpec> spec) {
+    fbb_.AddOffset(AppearanceSync::VT_SPEC, spec);
+  }
+  explicit AppearanceSyncBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<AppearanceSync> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<AppearanceSync>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<AppearanceSync> CreateAppearanceSync(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    ::flatbuffers::Offset<cyberpunk_rp::protocol::AppearanceSpec> spec = 0) {
+  AppearanceSyncBuilder builder_(_fbb);
+  builder_.add_id(id);
+  builder_.add_spec(spec);
+  return builder_.Finish();
+}
+
+struct EquipmentReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef EquipmentReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ITEM = 4,
+    VT_SLOT = 6,
+    VT_DRAWN = 8,
+    VT_EQUIPPED = 10
+  };
+  uint64_t item() const {
+    return GetField<uint64_t>(VT_ITEM, 0);
+  }
+  uint64_t slot() const {
+    return GetField<uint64_t>(VT_SLOT, 0);
+  }
+  bool drawn() const {
+    return GetField<uint8_t>(VT_DRAWN, 0) != 0;
+  }
+  bool equipped() const {
+    return GetField<uint8_t>(VT_EQUIPPED, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ITEM, 8) &&
+           VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
+           VerifyField<uint8_t>(verifier, VT_DRAWN, 1) &&
+           VerifyField<uint8_t>(verifier, VT_EQUIPPED, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct EquipmentReportBuilder {
+  typedef EquipmentReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_item(uint64_t item) {
+    fbb_.AddElement<uint64_t>(EquipmentReport::VT_ITEM, item, 0);
+  }
+  void add_slot(uint64_t slot) {
+    fbb_.AddElement<uint64_t>(EquipmentReport::VT_SLOT, slot, 0);
+  }
+  void add_drawn(bool drawn) {
+    fbb_.AddElement<uint8_t>(EquipmentReport::VT_DRAWN, static_cast<uint8_t>(drawn), 0);
+  }
+  void add_equipped(bool equipped) {
+    fbb_.AddElement<uint8_t>(EquipmentReport::VT_EQUIPPED, static_cast<uint8_t>(equipped), 0);
+  }
+  explicit EquipmentReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<EquipmentReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<EquipmentReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<EquipmentReport> CreateEquipmentReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t item = 0,
+    uint64_t slot = 0,
+    bool drawn = false,
+    bool equipped = false) {
+  EquipmentReportBuilder builder_(_fbb);
+  builder_.add_slot(slot);
+  builder_.add_item(item);
+  builder_.add_equipped(equipped);
+  builder_.add_drawn(drawn);
   return builder_.Finish();
 }
 
@@ -444,13 +1588,25 @@ struct Snapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef SnapshotBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_TICK = 4,
-    VT_PLAYERS = 6
+    VT_PLAYERS = 6,
+    VT_NPCS = 8,
+    VT_VEHICLES = 10,
+    VT_VEHICLES_PLAYER = 12
   };
   uint64_t tick() const {
     return GetField<uint64_t>(VT_TICK, 0);
   }
   const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>> *players() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>> *>(VT_PLAYERS);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>> *npcs() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>> *>(VT_NPCS);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>> *vehicles() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>> *>(VT_VEHICLES);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>> *vehicles_player() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>> *>(VT_VEHICLES_PLAYER);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -459,6 +1615,15 @@ struct Snapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_PLAYERS) &&
            verifier.VerifyVector(players()) &&
            verifier.VerifyVectorOfTables(players()) &&
+           VerifyOffset(verifier, VT_NPCS) &&
+           verifier.VerifyVector(npcs()) &&
+           verifier.VerifyVectorOfTables(npcs()) &&
+           VerifyOffset(verifier, VT_VEHICLES) &&
+           verifier.VerifyVector(vehicles()) &&
+           verifier.VerifyVectorOfTables(vehicles()) &&
+           VerifyOffset(verifier, VT_VEHICLES_PLAYER) &&
+           verifier.VerifyVector(vehicles_player()) &&
+           verifier.VerifyVectorOfTables(vehicles_player()) &&
            verifier.EndTable();
   }
 };
@@ -472,6 +1637,15 @@ struct SnapshotBuilder {
   }
   void add_players(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>>> players) {
     fbb_.AddOffset(Snapshot::VT_PLAYERS, players);
+  }
+  void add_npcs(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>>> npcs) {
+    fbb_.AddOffset(Snapshot::VT_NPCS, npcs);
+  }
+  void add_vehicles(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>>> vehicles) {
+    fbb_.AddOffset(Snapshot::VT_VEHICLES, vehicles);
+  }
+  void add_vehicles_player(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>>> vehicles_player) {
+    fbb_.AddOffset(Snapshot::VT_VEHICLES_PLAYER, vehicles_player);
   }
   explicit SnapshotBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -487,9 +1661,15 @@ struct SnapshotBuilder {
 inline ::flatbuffers::Offset<Snapshot> CreateSnapshot(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t tick = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>>> players = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>>> players = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>>> npcs = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>>> vehicles = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>>> vehicles_player = 0) {
   SnapshotBuilder builder_(_fbb);
   builder_.add_tick(tick);
+  builder_.add_vehicles_player(vehicles_player);
+  builder_.add_vehicles(vehicles);
+  builder_.add_npcs(npcs);
   builder_.add_players(players);
   return builder_.Finish();
 }
@@ -497,12 +1677,802 @@ inline ::flatbuffers::Offset<Snapshot> CreateSnapshot(
 inline ::flatbuffers::Offset<Snapshot> CreateSnapshotDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t tick = 0,
-    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>> *players = nullptr) {
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>> *players = nullptr,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>> *npcs = nullptr,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>> *vehicles = nullptr,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>> *vehicles_player = nullptr) {
   auto players__ = players ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>>(*players) : 0;
+  auto npcs__ = npcs ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>>(*npcs) : 0;
+  auto vehicles__ = vehicles ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>>(*vehicles) : 0;
+  auto vehicles_player__ = vehicles_player ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>>(*vehicles_player) : 0;
   return cyberpunk_rp::protocol::CreateSnapshot(
       _fbb,
       tick,
-      players__);
+      players__,
+      npcs__,
+      vehicles__,
+      vehicles_player__);
+}
+
+struct PlayerActionReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef PlayerActionReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ACTION = 4,
+    VT_PARAM = 6
+  };
+  uint8_t action() const {
+    return GetField<uint8_t>(VT_ACTION, 0);
+  }
+  uint32_t param() const {
+    return GetField<uint32_t>(VT_PARAM, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_ACTION, 1) &&
+           VerifyField<uint32_t>(verifier, VT_PARAM, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct PlayerActionReportBuilder {
+  typedef PlayerActionReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_action(uint8_t action) {
+    fbb_.AddElement<uint8_t>(PlayerActionReport::VT_ACTION, action, 0);
+  }
+  void add_param(uint32_t param) {
+    fbb_.AddElement<uint32_t>(PlayerActionReport::VT_PARAM, param, 0);
+  }
+  explicit PlayerActionReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<PlayerActionReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<PlayerActionReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<PlayerActionReport> CreatePlayerActionReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t action = 0,
+    uint32_t param = 0) {
+  PlayerActionReportBuilder builder_(_fbb);
+  builder_.add_param(param);
+  builder_.add_action(action);
+  return builder_.Finish();
+}
+
+struct EmoteReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef EmoteReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_EMOTE = 4,
+    VT_START = 6
+  };
+  uint32_t emote() const {
+    return GetField<uint32_t>(VT_EMOTE, 0);
+  }
+  bool start() const {
+    return GetField<uint8_t>(VT_START, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint32_t>(verifier, VT_EMOTE, 4) &&
+           VerifyField<uint8_t>(verifier, VT_START, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct EmoteReportBuilder {
+  typedef EmoteReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_emote(uint32_t emote) {
+    fbb_.AddElement<uint32_t>(EmoteReport::VT_EMOTE, emote, 0);
+  }
+  void add_start(bool start) {
+    fbb_.AddElement<uint8_t>(EmoteReport::VT_START, static_cast<uint8_t>(start), 0);
+  }
+  explicit EmoteReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<EmoteReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<EmoteReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<EmoteReport> CreateEmoteReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint32_t emote = 0,
+    bool start = false) {
+  EmoteReportBuilder builder_(_fbb);
+  builder_.add_emote(emote);
+  builder_.add_start(start);
+  return builder_.Finish();
+}
+
+struct EntityInteraction FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef EntityInteractionBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_TARGET = 4,
+    VT_KIND = 6,
+    VT_PARAM = 8
+  };
+  uint64_t target() const {
+    return GetField<uint64_t>(VT_TARGET, 0);
+  }
+  uint8_t kind() const {
+    return GetField<uint8_t>(VT_KIND, 0);
+  }
+  uint32_t param() const {
+    return GetField<uint32_t>(VT_PARAM, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_TARGET, 8) &&
+           VerifyField<uint8_t>(verifier, VT_KIND, 1) &&
+           VerifyField<uint32_t>(verifier, VT_PARAM, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct EntityInteractionBuilder {
+  typedef EntityInteraction Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_target(uint64_t target) {
+    fbb_.AddElement<uint64_t>(EntityInteraction::VT_TARGET, target, 0);
+  }
+  void add_kind(uint8_t kind) {
+    fbb_.AddElement<uint8_t>(EntityInteraction::VT_KIND, kind, 0);
+  }
+  void add_param(uint32_t param) {
+    fbb_.AddElement<uint32_t>(EntityInteraction::VT_PARAM, param, 0);
+  }
+  explicit EntityInteractionBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<EntityInteraction> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<EntityInteraction>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<EntityInteraction> CreateEntityInteraction(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t target = 0,
+    uint8_t kind = 0,
+    uint32_t param = 0) {
+  EntityInteractionBuilder builder_(_fbb);
+  builder_.add_target(target);
+  builder_.add_param(param);
+  builder_.add_kind(kind);
+  return builder_.Finish();
+}
+
+struct InteractionOpen FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef InteractionOpenBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SESSION_ID = 4,
+    VT_TARGET = 6,
+    VT_UI_KIND = 8,
+    VT_PAYLOAD = 10
+  };
+  uint64_t session_id() const {
+    return GetField<uint64_t>(VT_SESSION_ID, 0);
+  }
+  uint64_t target() const {
+    return GetField<uint64_t>(VT_TARGET, 0);
+  }
+  uint8_t ui_kind() const {
+    return GetField<uint8_t>(VT_UI_KIND, 0);
+  }
+  const ::flatbuffers::Vector<uint8_t> *payload() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_PAYLOAD);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_SESSION_ID, 8) &&
+           VerifyField<uint64_t>(verifier, VT_TARGET, 8) &&
+           VerifyField<uint8_t>(verifier, VT_UI_KIND, 1) &&
+           VerifyOffset(verifier, VT_PAYLOAD) &&
+           verifier.VerifyVector(payload()) &&
+           verifier.EndTable();
+  }
+};
+
+struct InteractionOpenBuilder {
+  typedef InteractionOpen Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_session_id(uint64_t session_id) {
+    fbb_.AddElement<uint64_t>(InteractionOpen::VT_SESSION_ID, session_id, 0);
+  }
+  void add_target(uint64_t target) {
+    fbb_.AddElement<uint64_t>(InteractionOpen::VT_TARGET, target, 0);
+  }
+  void add_ui_kind(uint8_t ui_kind) {
+    fbb_.AddElement<uint8_t>(InteractionOpen::VT_UI_KIND, ui_kind, 0);
+  }
+  void add_payload(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload) {
+    fbb_.AddOffset(InteractionOpen::VT_PAYLOAD, payload);
+  }
+  explicit InteractionOpenBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<InteractionOpen> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<InteractionOpen>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<InteractionOpen> CreateInteractionOpen(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t session_id = 0,
+    uint64_t target = 0,
+    uint8_t ui_kind = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload = 0) {
+  InteractionOpenBuilder builder_(_fbb);
+  builder_.add_target(target);
+  builder_.add_session_id(session_id);
+  builder_.add_payload(payload);
+  builder_.add_ui_kind(ui_kind);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<InteractionOpen> CreateInteractionOpenDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t session_id = 0,
+    uint64_t target = 0,
+    uint8_t ui_kind = 0,
+    const std::vector<uint8_t> *payload = nullptr) {
+  auto payload__ = payload ? _fbb.CreateVector<uint8_t>(*payload) : 0;
+  return cyberpunk_rp::protocol::CreateInteractionOpen(
+      _fbb,
+      session_id,
+      target,
+      ui_kind,
+      payload__);
+}
+
+struct InteractionChoice FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef InteractionChoiceBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SESSION_ID = 4,
+    VT_CHOICE = 6,
+    VT_PARAM = 8
+  };
+  uint64_t session_id() const {
+    return GetField<uint64_t>(VT_SESSION_ID, 0);
+  }
+  uint32_t choice() const {
+    return GetField<uint32_t>(VT_CHOICE, 0);
+  }
+  uint32_t param() const {
+    return GetField<uint32_t>(VT_PARAM, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_SESSION_ID, 8) &&
+           VerifyField<uint32_t>(verifier, VT_CHOICE, 4) &&
+           VerifyField<uint32_t>(verifier, VT_PARAM, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct InteractionChoiceBuilder {
+  typedef InteractionChoice Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_session_id(uint64_t session_id) {
+    fbb_.AddElement<uint64_t>(InteractionChoice::VT_SESSION_ID, session_id, 0);
+  }
+  void add_choice(uint32_t choice) {
+    fbb_.AddElement<uint32_t>(InteractionChoice::VT_CHOICE, choice, 0);
+  }
+  void add_param(uint32_t param) {
+    fbb_.AddElement<uint32_t>(InteractionChoice::VT_PARAM, param, 0);
+  }
+  explicit InteractionChoiceBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<InteractionChoice> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<InteractionChoice>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<InteractionChoice> CreateInteractionChoice(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t session_id = 0,
+    uint32_t choice = 0,
+    uint32_t param = 0) {
+  InteractionChoiceBuilder builder_(_fbb);
+  builder_.add_session_id(session_id);
+  builder_.add_param(param);
+  builder_.add_choice(choice);
+  return builder_.Finish();
+}
+
+struct InteractionResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef InteractionResultBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SESSION_ID = 4,
+    VT_OK = 6,
+    VT_PAYLOAD = 8
+  };
+  uint64_t session_id() const {
+    return GetField<uint64_t>(VT_SESSION_ID, 0);
+  }
+  bool ok() const {
+    return GetField<uint8_t>(VT_OK, 0) != 0;
+  }
+  const ::flatbuffers::Vector<uint8_t> *payload() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_PAYLOAD);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_SESSION_ID, 8) &&
+           VerifyField<uint8_t>(verifier, VT_OK, 1) &&
+           VerifyOffset(verifier, VT_PAYLOAD) &&
+           verifier.VerifyVector(payload()) &&
+           verifier.EndTable();
+  }
+};
+
+struct InteractionResultBuilder {
+  typedef InteractionResult Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_session_id(uint64_t session_id) {
+    fbb_.AddElement<uint64_t>(InteractionResult::VT_SESSION_ID, session_id, 0);
+  }
+  void add_ok(bool ok) {
+    fbb_.AddElement<uint8_t>(InteractionResult::VT_OK, static_cast<uint8_t>(ok), 0);
+  }
+  void add_payload(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload) {
+    fbb_.AddOffset(InteractionResult::VT_PAYLOAD, payload);
+  }
+  explicit InteractionResultBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<InteractionResult> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<InteractionResult>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<InteractionResult> CreateInteractionResult(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t session_id = 0,
+    bool ok = false,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload = 0) {
+  InteractionResultBuilder builder_(_fbb);
+  builder_.add_session_id(session_id);
+  builder_.add_payload(payload);
+  builder_.add_ok(ok);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<InteractionResult> CreateInteractionResultDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t session_id = 0,
+    bool ok = false,
+    const std::vector<uint8_t> *payload = nullptr) {
+  auto payload__ = payload ? _fbb.CreateVector<uint8_t>(*payload) : 0;
+  return cyberpunk_rp::protocol::CreateInteractionResult(
+      _fbb,
+      session_id,
+      ok,
+      payload__);
+}
+
+struct PlayerEvent FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef PlayerEventBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ACTOR = 4,
+    VT_KIND = 6,
+    VT_ACTION = 8,
+    VT_PARAM = 10
+  };
+  uint64_t actor() const {
+    return GetField<uint64_t>(VT_ACTOR, 0);
+  }
+  uint8_t kind() const {
+    return GetField<uint8_t>(VT_KIND, 0);
+  }
+  uint8_t action() const {
+    return GetField<uint8_t>(VT_ACTION, 0);
+  }
+  uint32_t param() const {
+    return GetField<uint32_t>(VT_PARAM, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ACTOR, 8) &&
+           VerifyField<uint8_t>(verifier, VT_KIND, 1) &&
+           VerifyField<uint8_t>(verifier, VT_ACTION, 1) &&
+           VerifyField<uint32_t>(verifier, VT_PARAM, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct PlayerEventBuilder {
+  typedef PlayerEvent Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_actor(uint64_t actor) {
+    fbb_.AddElement<uint64_t>(PlayerEvent::VT_ACTOR, actor, 0);
+  }
+  void add_kind(uint8_t kind) {
+    fbb_.AddElement<uint8_t>(PlayerEvent::VT_KIND, kind, 0);
+  }
+  void add_action(uint8_t action) {
+    fbb_.AddElement<uint8_t>(PlayerEvent::VT_ACTION, action, 0);
+  }
+  void add_param(uint32_t param) {
+    fbb_.AddElement<uint32_t>(PlayerEvent::VT_PARAM, param, 0);
+  }
+  explicit PlayerEventBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<PlayerEvent> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<PlayerEvent>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<PlayerEvent> CreatePlayerEvent(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t actor = 0,
+    uint8_t kind = 0,
+    uint8_t action = 0,
+    uint32_t param = 0) {
+  PlayerEventBuilder builder_(_fbb);
+  builder_.add_actor(actor);
+  builder_.add_param(param);
+  builder_.add_action(action);
+  builder_.add_kind(kind);
+  return builder_.Finish();
+}
+
+struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CharacterSummaryBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_PSEUDONYM = 6
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  const ::flatbuffers::String *pseudonym() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_PSEUDONYM);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyOffset(verifier, VT_PSEUDONYM) &&
+           verifier.VerifyString(pseudonym()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CharacterSummaryBuilder {
+  typedef CharacterSummary Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(CharacterSummary::VT_ID, id, 0);
+  }
+  void add_pseudonym(::flatbuffers::Offset<::flatbuffers::String> pseudonym) {
+    fbb_.AddOffset(CharacterSummary::VT_PSEUDONYM, pseudonym);
+  }
+  explicit CharacterSummaryBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CharacterSummary> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CharacterSummary>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummary(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0) {
+  CharacterSummaryBuilder builder_(_fbb);
+  builder_.add_id(id);
+  builder_.add_pseudonym(pseudonym);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummaryDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    const char *pseudonym = nullptr) {
+  auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
+  return cyberpunk_rp::protocol::CreateCharacterSummary(
+      _fbb,
+      id,
+      pseudonym__);
+}
+
+struct CharacterList FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CharacterListBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_CHARACTERS = 4
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CharacterSummary>> *characters() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CharacterSummary>> *>(VT_CHARACTERS);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_CHARACTERS) &&
+           verifier.VerifyVector(characters()) &&
+           verifier.VerifyVectorOfTables(characters()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CharacterListBuilder {
+  typedef CharacterList Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_characters(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CharacterSummary>>> characters) {
+    fbb_.AddOffset(CharacterList::VT_CHARACTERS, characters);
+  }
+  explicit CharacterListBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CharacterList> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CharacterList>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CharacterList> CreateCharacterList(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CharacterSummary>>> characters = 0) {
+  CharacterListBuilder builder_(_fbb);
+  builder_.add_characters(characters);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CharacterList> CreateCharacterListDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CharacterSummary>> *characters = nullptr) {
+  auto characters__ = characters ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::CharacterSummary>>(*characters) : 0;
+  return cyberpunk_rp::protocol::CreateCharacterList(
+      _fbb,
+      characters__);
+}
+
+struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CreateCharacterBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_PSEUDONYM = 4
+  };
+  const ::flatbuffers::String *pseudonym() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_PSEUDONYM);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_PSEUDONYM) &&
+           verifier.VerifyString(pseudonym()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CreateCharacterBuilder {
+  typedef CreateCharacter Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_pseudonym(::flatbuffers::Offset<::flatbuffers::String> pseudonym) {
+    fbb_.AddOffset(CreateCharacter::VT_PSEUDONYM, pseudonym);
+  }
+  explicit CreateCharacterBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CreateCharacter> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CreateCharacter>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacter(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0) {
+  CreateCharacterBuilder builder_(_fbb);
+  builder_.add_pseudonym(pseudonym);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacterDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *pseudonym = nullptr) {
+  auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
+  return cyberpunk_rp::protocol::CreateCreateCharacter(
+      _fbb,
+      pseudonym__);
+}
+
+struct SelectCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef SelectCharacterBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct SelectCharacterBuilder {
+  typedef SelectCharacter Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(SelectCharacter::VT_ID, id, 0);
+  }
+  explicit SelectCharacterBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<SelectCharacter> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<SelectCharacter>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<SelectCharacter> CreateSelectCharacter(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0) {
+  SelectCharacterBuilder builder_(_fbb);
+  builder_.add_id(id);
+  return builder_.Finish();
+}
+
+struct DeleteCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef DeleteCharacterBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct DeleteCharacterBuilder {
+  typedef DeleteCharacter Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(DeleteCharacter::VT_ID, id, 0);
+  }
+  explicit DeleteCharacterBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<DeleteCharacter> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<DeleteCharacter>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<DeleteCharacter> CreateDeleteCharacter(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0) {
+  DeleteCharacterBuilder builder_(_fbb);
+  builder_.add_id(id);
+  return builder_.Finish();
+}
+
+struct CharacterResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CharacterResultBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SUCCESS = 4,
+    VT_REASON = 6
+  };
+  bool success() const {
+    return GetField<uint8_t>(VT_SUCCESS, 0) != 0;
+  }
+  const ::flatbuffers::String *reason() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_REASON);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_SUCCESS, 1) &&
+           VerifyOffset(verifier, VT_REASON) &&
+           verifier.VerifyString(reason()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CharacterResultBuilder {
+  typedef CharacterResult Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_success(bool success) {
+    fbb_.AddElement<uint8_t>(CharacterResult::VT_SUCCESS, static_cast<uint8_t>(success), 0);
+  }
+  void add_reason(::flatbuffers::Offset<::flatbuffers::String> reason) {
+    fbb_.AddOffset(CharacterResult::VT_REASON, reason);
+  }
+  explicit CharacterResultBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CharacterResult> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CharacterResult>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CharacterResult> CreateCharacterResult(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool success = false,
+    ::flatbuffers::Offset<::flatbuffers::String> reason = 0) {
+  CharacterResultBuilder builder_(_fbb);
+  builder_.add_reason(reason);
+  builder_.add_success(success);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CharacterResult> CreateCharacterResultDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool success = false,
+    const char *reason = nullptr) {
+  auto reason__ = reason ? _fbb.CreateString(reason) : 0;
+  return cyberpunk_rp::protocol::CreateCharacterResult(
+      _fbb,
+      success,
+      reason__);
 }
 
 struct Kicked FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -864,6 +2834,58 @@ inline ::flatbuffers::Offset<PermissionSync> CreatePermissionSyncDirect(
       nodes__);
 }
 
+struct QueueStatus FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef QueueStatusBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_POSITION = 4,
+    VT_ETA_SECONDS = 6
+  };
+  uint32_t position() const {
+    return GetField<uint32_t>(VT_POSITION, 0);
+  }
+  uint32_t eta_seconds() const {
+    return GetField<uint32_t>(VT_ETA_SECONDS, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint32_t>(verifier, VT_POSITION, 4) &&
+           VerifyField<uint32_t>(verifier, VT_ETA_SECONDS, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct QueueStatusBuilder {
+  typedef QueueStatus Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_position(uint32_t position) {
+    fbb_.AddElement<uint32_t>(QueueStatus::VT_POSITION, position, 0);
+  }
+  void add_eta_seconds(uint32_t eta_seconds) {
+    fbb_.AddElement<uint32_t>(QueueStatus::VT_ETA_SECONDS, eta_seconds, 0);
+  }
+  explicit QueueStatusBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<QueueStatus> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<QueueStatus>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<QueueStatus> CreateQueueStatus(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint32_t position = 0,
+    uint32_t eta_seconds = 0) {
+  QueueStatusBuilder builder_(_fbb);
+  builder_.add_eta_seconds(eta_seconds);
+  builder_.add_position(position);
+  return builder_.Finish();
+}
+
 struct Leave FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef LeaveBuilder Builder;
   template <bool B = false>
@@ -901,11 +2923,11 @@ struct PositionCorrection FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table
     VT_YAW = 6,
     VT_REASON = 8
   };
-  const cyberpunk_rp::protocol::Vec3 *position() const {
-    return GetStruct<const cyberpunk_rp::protocol::Vec3 *>(VT_POSITION);
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
   }
-  float yaw() const {
-    return GetField<float>(VT_YAW, 0.0f);
+  uint16_t yaw() const {
+    return GetField<uint16_t>(VT_YAW, 0);
   }
   uint8_t reason() const {
     return GetField<uint8_t>(VT_REASON, 0);
@@ -913,8 +2935,8 @@ struct PositionCorrection FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyField<cyberpunk_rp::protocol::Vec3>(verifier, VT_POSITION, 4) &&
-           VerifyField<float>(verifier, VT_YAW, 4) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
            VerifyField<uint8_t>(verifier, VT_REASON, 1) &&
            verifier.EndTable();
   }
@@ -924,11 +2946,11 @@ struct PositionCorrectionBuilder {
   typedef PositionCorrection Table;
   ::flatbuffers::FlatBufferBuilder &fbb_;
   ::flatbuffers::uoffset_t start_;
-  void add_position(const cyberpunk_rp::protocol::Vec3 *position) {
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
     fbb_.AddStruct(PositionCorrection::VT_POSITION, position);
   }
-  void add_yaw(float yaw) {
-    fbb_.AddElement<float>(PositionCorrection::VT_YAW, yaw, 0.0f);
+  void add_yaw(uint16_t yaw) {
+    fbb_.AddElement<uint16_t>(PositionCorrection::VT_YAW, yaw, 0);
   }
   void add_reason(uint8_t reason) {
     fbb_.AddElement<uint8_t>(PositionCorrection::VT_REASON, reason, 0);
@@ -946,12 +2968,12 @@ struct PositionCorrectionBuilder {
 
 inline ::flatbuffers::Offset<PositionCorrection> CreatePositionCorrection(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const cyberpunk_rp::protocol::Vec3 *position = nullptr,
-    float yaw = 0.0f,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0,
     uint8_t reason = 0) {
   PositionCorrectionBuilder builder_(_fbb);
-  builder_.add_yaw(yaw);
   builder_.add_position(position);
+  builder_.add_yaw(yaw);
   builder_.add_reason(reason);
   return builder_.Finish();
 }
@@ -1023,6 +3045,194 @@ inline ::flatbuffers::Offset<ShardAssignment> CreateShardAssignmentDirect(
       overlaps__);
 }
 
+struct ElevatorCall FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ElevatorCallBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ELEVATOR_ID = 4,
+    VT_FLOOR = 6
+  };
+  uint64_t elevator_id() const {
+    return GetField<uint64_t>(VT_ELEVATOR_ID, 0);
+  }
+  int32_t floor() const {
+    return GetField<int32_t>(VT_FLOOR, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ELEVATOR_ID, 8) &&
+           VerifyField<int32_t>(verifier, VT_FLOOR, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct ElevatorCallBuilder {
+  typedef ElevatorCall Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_elevator_id(uint64_t elevator_id) {
+    fbb_.AddElement<uint64_t>(ElevatorCall::VT_ELEVATOR_ID, elevator_id, 0);
+  }
+  void add_floor(int32_t floor) {
+    fbb_.AddElement<int32_t>(ElevatorCall::VT_FLOOR, floor, 0);
+  }
+  explicit ElevatorCallBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ElevatorCall> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ElevatorCall>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ElevatorCall> CreateElevatorCall(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t elevator_id = 0,
+    int32_t floor = 0) {
+  ElevatorCallBuilder builder_(_fbb);
+  builder_.add_elevator_id(elevator_id);
+  builder_.add_floor(floor);
+  return builder_.Finish();
+}
+
+struct ElevatorStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ElevatorStateMsgBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ELEVATOR_ID = 4,
+    VT_ACTIVE_FLOOR = 6,
+    VT_TARGET_FLOOR = 8,
+    VT_MOVEMENT_STATE = 10,
+    VT_REQUESTED_FLOORS = 12,
+    VT_DEPART_TICK = 14,
+    VT_START_DELAY_MS = 16,
+    VT_TRAVEL_TIME_MS = 18
+  };
+  uint64_t elevator_id() const {
+    return GetField<uint64_t>(VT_ELEVATOR_ID, 0);
+  }
+  int32_t active_floor() const {
+    return GetField<int32_t>(VT_ACTIVE_FLOOR, 0);
+  }
+  int32_t target_floor() const {
+    return GetField<int32_t>(VT_TARGET_FLOOR, 0);
+  }
+  uint8_t movement_state() const {
+    return GetField<uint8_t>(VT_MOVEMENT_STATE, 0);
+  }
+  const ::flatbuffers::Vector<int32_t> *requested_floors() const {
+    return GetPointer<const ::flatbuffers::Vector<int32_t> *>(VT_REQUESTED_FLOORS);
+  }
+  uint64_t depart_tick() const {
+    return GetField<uint64_t>(VT_DEPART_TICK, 0);
+  }
+  uint32_t start_delay_ms() const {
+    return GetField<uint32_t>(VT_START_DELAY_MS, 0);
+  }
+  uint32_t travel_time_ms() const {
+    return GetField<uint32_t>(VT_TRAVEL_TIME_MS, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ELEVATOR_ID, 8) &&
+           VerifyField<int32_t>(verifier, VT_ACTIVE_FLOOR, 4) &&
+           VerifyField<int32_t>(verifier, VT_TARGET_FLOOR, 4) &&
+           VerifyField<uint8_t>(verifier, VT_MOVEMENT_STATE, 1) &&
+           VerifyOffset(verifier, VT_REQUESTED_FLOORS) &&
+           verifier.VerifyVector(requested_floors()) &&
+           VerifyField<uint64_t>(verifier, VT_DEPART_TICK, 8) &&
+           VerifyField<uint32_t>(verifier, VT_START_DELAY_MS, 4) &&
+           VerifyField<uint32_t>(verifier, VT_TRAVEL_TIME_MS, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct ElevatorStateMsgBuilder {
+  typedef ElevatorStateMsg Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_elevator_id(uint64_t elevator_id) {
+    fbb_.AddElement<uint64_t>(ElevatorStateMsg::VT_ELEVATOR_ID, elevator_id, 0);
+  }
+  void add_active_floor(int32_t active_floor) {
+    fbb_.AddElement<int32_t>(ElevatorStateMsg::VT_ACTIVE_FLOOR, active_floor, 0);
+  }
+  void add_target_floor(int32_t target_floor) {
+    fbb_.AddElement<int32_t>(ElevatorStateMsg::VT_TARGET_FLOOR, target_floor, 0);
+  }
+  void add_movement_state(uint8_t movement_state) {
+    fbb_.AddElement<uint8_t>(ElevatorStateMsg::VT_MOVEMENT_STATE, movement_state, 0);
+  }
+  void add_requested_floors(::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> requested_floors) {
+    fbb_.AddOffset(ElevatorStateMsg::VT_REQUESTED_FLOORS, requested_floors);
+  }
+  void add_depart_tick(uint64_t depart_tick) {
+    fbb_.AddElement<uint64_t>(ElevatorStateMsg::VT_DEPART_TICK, depart_tick, 0);
+  }
+  void add_start_delay_ms(uint32_t start_delay_ms) {
+    fbb_.AddElement<uint32_t>(ElevatorStateMsg::VT_START_DELAY_MS, start_delay_ms, 0);
+  }
+  void add_travel_time_ms(uint32_t travel_time_ms) {
+    fbb_.AddElement<uint32_t>(ElevatorStateMsg::VT_TRAVEL_TIME_MS, travel_time_ms, 0);
+  }
+  explicit ElevatorStateMsgBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ElevatorStateMsg> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ElevatorStateMsg>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ElevatorStateMsg> CreateElevatorStateMsg(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t elevator_id = 0,
+    int32_t active_floor = 0,
+    int32_t target_floor = 0,
+    uint8_t movement_state = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> requested_floors = 0,
+    uint64_t depart_tick = 0,
+    uint32_t start_delay_ms = 0,
+    uint32_t travel_time_ms = 0) {
+  ElevatorStateMsgBuilder builder_(_fbb);
+  builder_.add_depart_tick(depart_tick);
+  builder_.add_elevator_id(elevator_id);
+  builder_.add_travel_time_ms(travel_time_ms);
+  builder_.add_start_delay_ms(start_delay_ms);
+  builder_.add_requested_floors(requested_floors);
+  builder_.add_target_floor(target_floor);
+  builder_.add_active_floor(active_floor);
+  builder_.add_movement_state(movement_state);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ElevatorStateMsg> CreateElevatorStateMsgDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t elevator_id = 0,
+    int32_t active_floor = 0,
+    int32_t target_floor = 0,
+    uint8_t movement_state = 0,
+    const std::vector<int32_t> *requested_floors = nullptr,
+    uint64_t depart_tick = 0,
+    uint32_t start_delay_ms = 0,
+    uint32_t travel_time_ms = 0) {
+  auto requested_floors__ = requested_floors ? _fbb.CreateVector<int32_t>(*requested_floors) : 0;
+  return cyberpunk_rp::protocol::CreateElevatorStateMsg(
+      _fbb,
+      elevator_id,
+      active_floor,
+      target_floor,
+      movement_state,
+      requested_floors__,
+      depart_tick,
+      start_delay_ms,
+      travel_time_ms);
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1050,6 +3260,36 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const cyberpunk_rp::protocol::Leave *msg_as_Leave() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_Leave ? static_cast<const cyberpunk_rp::protocol::Leave *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::PlayerActionReport *msg_as_PlayerActionReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_PlayerActionReport ? static_cast<const cyberpunk_rp::protocol::PlayerActionReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::EmoteReport *msg_as_EmoteReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_EmoteReport ? static_cast<const cyberpunk_rp::protocol::EmoteReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::CreateCharacter *msg_as_CreateCharacter() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_CreateCharacter ? static_cast<const cyberpunk_rp::protocol::CreateCharacter *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::SelectCharacter *msg_as_SelectCharacter() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_SelectCharacter ? static_cast<const cyberpunk_rp::protocol::SelectCharacter *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::DeleteCharacter *msg_as_DeleteCharacter() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_DeleteCharacter ? static_cast<const cyberpunk_rp::protocol::DeleteCharacter *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::EntityInteraction *msg_as_EntityInteraction() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_EntityInteraction ? static_cast<const cyberpunk_rp::protocol::EntityInteraction *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::InteractionChoice *msg_as_InteractionChoice() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_InteractionChoice ? static_cast<const cyberpunk_rp::protocol::InteractionChoice *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::ElevatorCall *msg_as_ElevatorCall() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_ElevatorCall ? static_cast<const cyberpunk_rp::protocol::ElevatorCall *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::VehicleInput *msg_as_VehicleInput() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_VehicleInput ? static_cast<const cyberpunk_rp::protocol::VehicleInput *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::EquipmentReport *msg_as_EquipmentReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_EquipmentReport ? static_cast<const cyberpunk_rp::protocol::EquipmentReport *>(msg()) : nullptr;
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -1079,6 +3319,46 @@ template<> inline const cyberpunk_rp::protocol::AdminCommand *ClientEnvelope::ms
 
 template<> inline const cyberpunk_rp::protocol::Leave *ClientEnvelope::msg_as<cyberpunk_rp::protocol::Leave>() const {
   return msg_as_Leave();
+}
+
+template<> inline const cyberpunk_rp::protocol::PlayerActionReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::PlayerActionReport>() const {
+  return msg_as_PlayerActionReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::EmoteReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::EmoteReport>() const {
+  return msg_as_EmoteReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::CreateCharacter *ClientEnvelope::msg_as<cyberpunk_rp::protocol::CreateCharacter>() const {
+  return msg_as_CreateCharacter();
+}
+
+template<> inline const cyberpunk_rp::protocol::SelectCharacter *ClientEnvelope::msg_as<cyberpunk_rp::protocol::SelectCharacter>() const {
+  return msg_as_SelectCharacter();
+}
+
+template<> inline const cyberpunk_rp::protocol::DeleteCharacter *ClientEnvelope::msg_as<cyberpunk_rp::protocol::DeleteCharacter>() const {
+  return msg_as_DeleteCharacter();
+}
+
+template<> inline const cyberpunk_rp::protocol::EntityInteraction *ClientEnvelope::msg_as<cyberpunk_rp::protocol::EntityInteraction>() const {
+  return msg_as_EntityInteraction();
+}
+
+template<> inline const cyberpunk_rp::protocol::InteractionChoice *ClientEnvelope::msg_as<cyberpunk_rp::protocol::InteractionChoice>() const {
+  return msg_as_InteractionChoice();
+}
+
+template<> inline const cyberpunk_rp::protocol::ElevatorCall *ClientEnvelope::msg_as<cyberpunk_rp::protocol::ElevatorCall>() const {
+  return msg_as_ElevatorCall();
+}
+
+template<> inline const cyberpunk_rp::protocol::VehicleInput *ClientEnvelope::msg_as<cyberpunk_rp::protocol::VehicleInput>() const {
+  return msg_as_VehicleInput();
+}
+
+template<> inline const cyberpunk_rp::protocol::EquipmentReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::EquipmentReport>() const {
+  return msg_as_EquipmentReport();
 }
 
 struct ClientEnvelopeBuilder {
@@ -1146,6 +3426,30 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::ShardAssignment *msg_as_ShardAssignment() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_ShardAssignment ? static_cast<const cyberpunk_rp::protocol::ShardAssignment *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::PlayerEvent *msg_as_PlayerEvent() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_PlayerEvent ? static_cast<const cyberpunk_rp::protocol::PlayerEvent *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::CharacterList *msg_as_CharacterList() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_CharacterList ? static_cast<const cyberpunk_rp::protocol::CharacterList *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::CharacterResult *msg_as_CharacterResult() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_CharacterResult ? static_cast<const cyberpunk_rp::protocol::CharacterResult *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::QueueStatus *msg_as_QueueStatus() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_QueueStatus ? static_cast<const cyberpunk_rp::protocol::QueueStatus *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::InteractionOpen *msg_as_InteractionOpen() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_InteractionOpen ? static_cast<const cyberpunk_rp::protocol::InteractionOpen *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::InteractionResult *msg_as_InteractionResult() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_InteractionResult ? static_cast<const cyberpunk_rp::protocol::InteractionResult *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::ElevatorStateMsg *msg_as_ElevatorStateMsg() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_ElevatorStateMsg ? static_cast<const cyberpunk_rp::protocol::ElevatorStateMsg *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::AppearanceSync *msg_as_AppearanceSync() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_AppearanceSync ? static_cast<const cyberpunk_rp::protocol::AppearanceSync *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1182,6 +3486,38 @@ template<> inline const cyberpunk_rp::protocol::PositionCorrection *ServerEnvelo
 
 template<> inline const cyberpunk_rp::protocol::ShardAssignment *ServerEnvelope::msg_as<cyberpunk_rp::protocol::ShardAssignment>() const {
   return msg_as_ShardAssignment();
+}
+
+template<> inline const cyberpunk_rp::protocol::PlayerEvent *ServerEnvelope::msg_as<cyberpunk_rp::protocol::PlayerEvent>() const {
+  return msg_as_PlayerEvent();
+}
+
+template<> inline const cyberpunk_rp::protocol::CharacterList *ServerEnvelope::msg_as<cyberpunk_rp::protocol::CharacterList>() const {
+  return msg_as_CharacterList();
+}
+
+template<> inline const cyberpunk_rp::protocol::CharacterResult *ServerEnvelope::msg_as<cyberpunk_rp::protocol::CharacterResult>() const {
+  return msg_as_CharacterResult();
+}
+
+template<> inline const cyberpunk_rp::protocol::QueueStatus *ServerEnvelope::msg_as<cyberpunk_rp::protocol::QueueStatus>() const {
+  return msg_as_QueueStatus();
+}
+
+template<> inline const cyberpunk_rp::protocol::InteractionOpen *ServerEnvelope::msg_as<cyberpunk_rp::protocol::InteractionOpen>() const {
+  return msg_as_InteractionOpen();
+}
+
+template<> inline const cyberpunk_rp::protocol::InteractionResult *ServerEnvelope::msg_as<cyberpunk_rp::protocol::InteractionResult>() const {
+  return msg_as_InteractionResult();
+}
+
+template<> inline const cyberpunk_rp::protocol::ElevatorStateMsg *ServerEnvelope::msg_as<cyberpunk_rp::protocol::ElevatorStateMsg>() const {
+  return msg_as_ElevatorStateMsg();
+}
+
+template<> inline const cyberpunk_rp::protocol::AppearanceSync *ServerEnvelope::msg_as<cyberpunk_rp::protocol::AppearanceSync>() const {
+  return msg_as_AppearanceSync();
 }
 
 struct ServerEnvelopeBuilder {
@@ -1241,6 +3577,46 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::Leave *>(obj);
       return verifier.VerifyTable(ptr);
     }
+    case ClientMsg_PlayerActionReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PlayerActionReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_EmoteReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::EmoteReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_CreateCharacter: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::CreateCharacter *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_SelectCharacter: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::SelectCharacter *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_DeleteCharacter: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::DeleteCharacter *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_EntityInteraction: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::EntityInteraction *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_InteractionChoice: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::InteractionChoice *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_ElevatorCall: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ElevatorCall *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_VehicleInput: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::VehicleInput *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_EquipmentReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::EquipmentReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
     default: return true;
   }
 }
@@ -1290,6 +3666,38 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_ShardAssignment: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ShardAssignment *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_PlayerEvent: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PlayerEvent *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_CharacterList: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::CharacterList *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_CharacterResult: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::CharacterResult *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_QueueStatus: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::QueueStatus *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_InteractionOpen: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::InteractionOpen *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_InteractionResult: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::InteractionResult *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_ElevatorStateMsg: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ElevatorStateMsg *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_AppearanceSync: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::AppearanceSync *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
