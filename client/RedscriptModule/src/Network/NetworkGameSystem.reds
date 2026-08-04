@@ -187,6 +187,25 @@ public native class NetworkGameSystem extends IGameSystem {
         return ws.SetWeather(StringToName(preset), 3.00, 0u);
     }
 
+    // Applique l'heure décidée par le SERVEUR (`WorldState.hour`/`minute`).
+    //
+    // Pourquoi ici et pas en C++ : la première version appelait
+    // `Red::CallStatic("ScriptGameInstance", "GetTimeSystem", …)` depuis le plugin, et le natif
+    // n'était JAMAIS résolu — « TimeSystem introuvable » à chaque message, mesuré en jeu le
+    // 2026-08-04. La météo, elle, marchait du premier coup… parce qu'elle passait par redscript.
+    // Deux voies pour le même besoin, une seule qui résout : on garde celle qui est prouvée.
+    //
+    // `SetGameTimeByHMS(Int32, Int32, Int32, opt CName)` — signature lue dans les scripts
+    // décompilés CDPR (scripts/core/systems/timeSystem.script:15).
+    public func ApplyServerTime(hours: Int32, minutes: Int32) -> Bool {
+        let ts = GameInstance.GetTimeSystem(GetGameInstance());
+        if !IsDefined(ts) {
+            return false;
+        }
+        ts.SetGameTimeByHMS(hours, minutes, 0);
+        return true;
+    }
+
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }

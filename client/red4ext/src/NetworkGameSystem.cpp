@@ -733,24 +733,18 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
         }
     }
 
-    // TimeSystem.SetGameTimeByHMS(Int32, Int32, Int32, opt CName) — signature LUE dans les scripts
-    // decompiles CDPR (scripts/core/systems/timeSystem.script:15), pas devinee. L'accesseur
-    // GameInstance.GetTimeSystem existe au dump RTTI (tools/nativedb, search.py systems).
-    Red::Handle<Red::IScriptable> timeSystem;
-    if (!Red::CallStatic("ScriptGameInstance", "GetTimeSystem", timeSystem) || timeSystem == nullptr)
-    {
-        SDK->logger->Warn(PLUGIN, "WorldState : TimeSystem introuvable, heure serveur non appliquee");
-        return;
-    }
-
     const int32_t h = static_cast<int32_t>(state->hour());
     const int32_t m = static_cast<int32_t>(state->minute());
-    // Secondes typees explicitement : la signature est (Int32, Int32, Int32) et un litteral `0`
-    // laisserait la deduction choisir `int`, que RedLib ne relie pas forcement a Int32.
-    const int32_t s = 0;
-    if (!Red::CallVirtual(timeSystem, "SetGameTimeByHMS", h, m, s))
+
+    // Passe par REDSCRIPT, pas par `Red::CallStatic("ScriptGameInstance", "GetTimeSystem", …)`.
+    // Cette dernière forme ne résolvait JAMAIS le natif — « TimeSystem introuvable » à chaque
+    // message, mesuré en jeu le 2026-08-04, pendant que la météo (elle, passée par redscript)
+    // marchait du premier coup. Même besoin, deux voies, une seule qui résout : on garde celle
+    // dont l'effet est prouvé.
+    bool applied = false;
+    if (!Red::CallVirtual(this, "ApplyServerTime", applied, h, m) || !applied)
     {
-        SDK->logger->Warn(PLUGIN, "WorldState : SetGameTimeByHMS refuse");
+        SDK->logger->Warn(PLUGIN, "WorldState : heure serveur non appliquee (TimeSystem absent ?)");
         return;
     }
 
