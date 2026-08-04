@@ -206,6 +206,38 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // Écrit une valeur de TweakDB décidée par le SERVEUR, en cours de partie.
+    //
+    // C'est la sonde S-E5, écrite comme du code de production plutôt que comme un jetable : la
+    // question « un opérateur peut-il changer un prix sans redémarrer la session ? » se tranche par
+    // le même appel que celui qui servira ensuite.
+    //
+    // ⚠️ COUCHE. Une première tentative depuis le Lua CET a échoué (`expected userdata`,
+    // F-SCR-023, `impasse`) — mais c'est une couche de DÉVELOPPEMENT, jamais livrée. La voie de
+    // production est ici : `TweakDBManager` de TweakXL, dépendance de FONDATION présente chez tout
+    // joueur (ADR 0020). Ne pas relire F-SCR-023 comme « l'écriture à chaud est impossible ».
+    //
+    // `UpdateRecord` est ce qui distingue « la base a changé » de « le jeu a vu le changement » :
+    // les systèmes qui ont mis TweakDB en cache au boot ne relisent pas d'eux-mêmes. Sans lui, un
+    // SetFlat réussi peut rester parfaitement invisible en jeu — exactement le genre de succès
+    // trompeur que la doctrine D1 interdit de compter comme un effet.
+    public func ApplyServerConfig(flat: String, value: Float) -> Bool {
+        if StrLen(flat) == 0 {
+            return false;
+        }
+        if !TweakDBManager.SetFlat(TDBID.Create(flat), ToVariant(value)) {
+            return false;
+        }
+        // Le record est le chemin privé de son dernier segment : `Price.GoodQualityDrink.value`
+        // → `Price.GoodQualityDrink`. Un flat sans point n'a pas de record parent : on a écrit,
+        // mais rien à rafraîchir.
+        let cut = StrFindLast(flat, ".");
+        if cut > 0 {
+            TweakDBManager.UpdateRecord(TDBID.Create(StrLeft(flat, cut)));
+        }
+        return true;
+    }
+
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }

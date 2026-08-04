@@ -704,6 +704,11 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
         return;
     }
 
+    // Note : `ApplyServerConfig` (redscript) est prêt et MESURÉ — TweakXL réécrit TweakDB à
+    // chaud, en cours de partie, et le contrôle positif tient (F-PLF-018, 2026-08-04). Il n'est
+    // appelé par personne pour l'instant : il attend son canal `ConfigSync` dans le protocole.
+    // La sonde qui a produit cette mesure a été retirée d'ici — elle écrivait une valeur en dur.
+
     // Meteo AVANT le seuil de resynchronisation de l'heure ci-dessous : ce seuil provoque un
     // `return` anticipe quand l'heure n'a pas assez derive, et la meteo serait alors ignoree
     // pendant des minutes alors qu'elle vient de changer. Les deux vivent dans le meme message
