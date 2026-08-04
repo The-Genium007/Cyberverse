@@ -433,9 +433,28 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
     // 0013) : le repere d'un joueur est serveur-autoritaire (pose par EntityInteraction kind=6/7),
     // ce client emet toujours une position monde tant que la conversion offset-local au montage
     // (C4.2) n'est pas cablee.
+    // Locomotion et direction de déplacement : LUES sur le joueur, plus posées à 0 en dur.
+    // Tant qu'elles valaient 0, tout avatar distant glissait en posture « Idle » quoi que fasse
+    // le joueur d'en face — alors que le protocole porte ces champs depuis le gel du palier 2 et
+    // que le serveur les relaie déjà tels quels dans PlayerState.
+    //
+    // Le calcul vit en redscript (`ReadLocomotionPacked`) parce qu'il lit le blackboard
+    // PlayerStateMachine, et que la recette exacte y a été MESURÉE en jeu (sonde `loco_read`,
+    // 2026-07-23) — la transcrire en C++ serait la ré-inventer.
+    //
+    // Empaquetage : bits 0-7 = locomotion, bits 8-15 = move_dir (voir la fonction redscript).
+    // Un appel qui échoue laisse 0/0 — même valeur qu'avant ce changement, jamais pire.
+    int32_t packedLocomotion = 0;
+    if (!Red::CallVirtual(this, "ReadLocomotionPacked", packedLocomotion))
+    {
+        packedLocomotion = 0;
+    }
+    const auto locomotion = static_cast<uint8_t>(packedLocomotion & 0xFF);
+    const auto moveDir = static_cast<uint8_t>((packedLocomotion >> 8) & 0xFF);
+
     const cyberpunk_rp::protocol::QVec3 pos(QuantPos(x), QuantPos(y), QuantPos(z));
     const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
-        builder, &pos, QuantYaw(yaw), /*locomotion=*/0, /*move_dir=*/0, /*flags=*/0,
+        builder, &pos, QuantYaw(yaw), locomotion, moveDir, /*flags=*/0,
         /*frame=*/0, /*slot=*/0);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_PositionUpdate, pu.Union());

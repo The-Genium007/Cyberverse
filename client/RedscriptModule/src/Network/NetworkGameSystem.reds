@@ -79,6 +79,91 @@ public native class NetworkGameSystem extends IGameSystem {
         return GameInstance.GetDynamicEntitySystem().CreateEntity(spec);
     }
 
+    // État de locomotion du joueur LOCAL, empaqueté pour le protocole :
+    //   bits 0-7   locomotion — 0 Idle · 1 Walk · 2 Run · 3 Sprint · 4 CrouchIdle · 5 CrouchMove · 6 InAir
+    //   bits 8-15  move_dir   — direction du déplacement RELATIVE au regard, 0-255 = 0-360° ; 0 si immobile
+    //
+    // Le client envoyait ces deux champs à 0 EN DUR : les avatars distants glissaient sans jamais
+    // s'animer, alors que le protocole les porte depuis le gel du palier 2 et que le serveur les
+    // relaie déjà dans PlayerState.
+    //
+    // ⚠️ La logique ci-dessous n'est PAS déduite du RE — elle est MESURÉE en jeu (2026-07-23,
+    // sonde `loco_read` du harnais, table complète des 8 états). Deux corrections que seule la
+    // mesure a données, et qu'il ne faut pas « re-simplifier » :
+    //   · `LocomotionDetailed` est AMBIGU (3 = marche ET accroupi-immobile ; 1 = debout ET course).
+    //     Ne jamais piloter dessus seul.
+    //   · le saut donne Locomotion = 5, pas 4 — le RE annonçait 4=Jump/5=Vault, faux en 2.31.
+    // L'ordre des tests compte : `IsOnGround` d'abord, c'est le signal le plus fiable.
+    public func ReadLocomotionPacked() -> Int32 {
+        let player = GameInstance.GetPlayerSystem(GetGameInstance()).GetLocalPlayerControlledGameObject();
+        if !IsDefined(player) {
+            return 0;
+        }
+        let bb = GameInstance.GetBlackboardSystem(GetGameInstance())
+            .GetLocalInstanced(player.GetEntityID(), GetAllBlackboardDefs().PlayerStateMachine);
+        if !IsDefined(bb) {
+            return 0;
+        }
+
+        let loco = bb.GetInt(GetAllBlackboardDefs().PlayerStateMachine.Locomotion);
+        let detailed = bb.GetInt(GetAllBlackboardDefs().PlayerStateMachine.LocomotionDetailed);
+        let onGround = bb.GetBool(GetAllBlackboardDefs().PlayerStateMachine.IsOnGround);
+        let movingH = bb.GetBool(GetAllBlackboardDefs().PlayerStateMachine.IsMovingHorizontally);
+
+        // `GetVelocity` n'est PAS sur GameObject (vérifié : [UNRESOLVED_METHOD] à la compilation) —
+        // elle vit sur `gamePuppet`, que les scripts CDPR atteignent toujours par un cast explicite
+        // (`((gamePuppet)(target)).GetVelocity()`). Le joueur local est un PlayerPuppet, qui en
+        // hérite. Un cast raté rend `null` : on retombe alors sur l'état sans vitesse plutôt que de
+        // planter tout r6/scripts.
+        let puppet = player as PlayerPuppet;
+        if !IsDefined(puppet) {
+            return 0;
+        }
+        let velocity = puppet.GetVelocity();
+        let speed = Vector4.Length(velocity);
+
+        let state: Int32;
+        if !onGround {
+            state = 6;                                  // InAir/Jump — signal prioritaire
+        } else if loco == 2 {
+            state = 3;                                  // Sprint
+        } else if loco == 1 {
+            state = movingH ? 5 : 4;                    // CrouchMove / CrouchIdle
+        } else if detailed == 3 {
+            state = 1;                                  // Walk (seul signal fiable de la marche)
+        } else if speed > 0.5 {
+            state = 2;                                  // Run (repli par la vitesse)
+        } else {
+            state = 0;                                  // Idle
+        }
+
+        // move_dir : angle SIGNÉ entre le regard et la vélocité horizontale.
+        //
+        // La sonde mesurait `Vector4.GetAngleBetween`, qui rend un angle NON SIGNÉ (0-180°) : il ne
+        // distingue pas la gauche de la droite, donc un strafe gauche et un strafe droit sortiraient
+        // identiques et l'AnimGraph choisirait la mauvaise animation une fois sur deux. D'où atan2
+        // sur les projections avant/droite, qui couvre les 360°.
+        //
+        // Sous 0.1 m/s la vélocité est du bruit et l'angle ne veut rien dire — mesuré : à l'arrêt,
+        // l'angle valait 90° sur une vélocité nulle.
+        let moveDir: Int32 = 0;
+        if speed > 0.1 {
+            let forward = player.GetWorldForward();
+            let right = player.GetWorldRight();
+            // Dot2D (X,Y) et non Dot : on veut la direction dans le PLAN horizontal. Avec Dot, une
+            // vitesse verticale (chute, saut) contaminerait la direction de déplacement.
+            let degrees = Rad2Deg(AtanF(Vector4.Dot2D(velocity, right), Vector4.Dot2D(velocity, forward)));
+            if degrees < 0.0 {
+                degrees += 360.0;
+            }
+            moveDir = Cast<Int32>(degrees * 256.0 / 360.0) % 256;
+        }
+
+        // Empaquetage ARITHMÉTIQUE et non binaire : redscript n'a ni `<<` ni `|` (erreur de syntaxe
+        // à la compilation, vérifié). Équivalent ici, `state` valant au plus 6 donc bien < 256.
+        return moveDir * 256 + state;
+    }
+
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }
