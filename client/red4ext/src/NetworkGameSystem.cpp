@@ -704,6 +704,12 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
         return;
     }
 
+    // Meteo AVANT le seuil de resynchronisation de l'heure ci-dessous : ce seuil provoque un
+    // `return` anticipe quand l'heure n'a pas assez derive, et la meteo serait alors ignoree
+    // pendant des minutes alors qu'elle vient de changer. Les deux vivent dans le meme message
+    // mais n'ont pas la meme cadence utile.
+    ApplyServerWeather(state);
+
     // L'heure du monde est une ressource GLOBALE, pas par-shard (world_clock.rs) : tous les
     // joueurs voient la meme heure ou qu'ils soient. C'est le serveur qui la decide.
     const int32_t serverMinutes =
@@ -751,12 +757,42 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
     m_lastAppliedWorldMinutes = serverMinutes;
     SDK->logger->InfoF(PLUGIN, "Heure serveur appliquee : %02d:%02d", h, m);
 
-    // METEO : volontairement NON appliquee. `WorldState.weather` porte bien une chaine
-    // (ex. "Weather.Sunny01") et world_clock.rs affirme qu'un `SetWeather` existe et « renvoie
-    // false » sur une valeur invalide — mais AUCUN setter meteo n'apparait dans le dump RTTI :
-    // worldWeatherScriptInterface n'expose que des getters (GetRainIntensity, ...), et la classe
-    // WeatherSystem des scripts decompiles non plus. Appliquer la meteo ici serait donc du code
-    // ecrit sur une capacite NON MESUREE. Sonde S-W1 avant d'aller plus loin.
+}
+
+void NetworkGameSystem::ApplyServerWeather(const cyberpunk_rp::protocol::WorldState* state)
+{
+    const auto* weather = state != nullptr ? state->weather() : nullptr;
+    if (weather == nullptr || weather->size() == 0)
+    {
+        return;
+    }
+    const std::string preset = weather->str();
+
+    // Ne re-demander que sur CHANGEMENT reel. Le serveur diffuse WorldState periodiquement et la
+    // meteo bouge rarement : reappeler a chaque message declencherait une transition de 3 s en
+    // boucle, donc un ciel qui ne se stabilise jamais.
+    if (preset == m_lastAppliedWeather)
+    {
+        return;
+    }
+
+    // ✅ MESURE le 2026-08-04 (F-MND-043, sonde `weather_probe`) : `SetWeather` existe et agit
+    // dans les deux sens (intensite de pluie 0 -> 1, puis 1 -> 0). Ce code n'existait pas avant
+    // cette mesure : le setter est absent du dump RTTI ET de la classe WeatherSystem des scripts
+    // decompiles, donc rien d'autre qu'un test en jeu ne pouvait dire qu'il existait.
+    Red::CString redPreset(preset.c_str());
+    bool accepted = false;
+    if (!Red::CallVirtual(this, "ApplyServerWeather", accepted, redPreset))
+    {
+        SDK->logger->Warn(PLUGIN, "ApplyServerWeather introuvable — module redscript non compile ?");
+        return;
+    }
+
+    // `false` = preset DEJA applique (comportement observe, pas suppose). Ce n'est pas une erreur :
+    // on memorise quand meme, sinon on redemanderait indefiniment la meteo deja en place.
+    m_lastAppliedWeather = preset;
+    SDK->logger->InfoF(PLUGIN, "Meteo serveur appliquee : %s (accepte=%s)",
+        preset.c_str(), accepted ? "true" : "false");
 }
 
 void NetworkGameSystem::HandleKicked(const cyberpunk_rp::protocol::Kicked* kicked)

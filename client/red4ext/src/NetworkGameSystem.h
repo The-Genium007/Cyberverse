@@ -98,6 +98,10 @@ private:
     // l'horloge locale en permanence (le moteur fait avancer le temps entre deux messages). On
     // n'écrit donc que si l'écart dépasse un seuil — le serveur reste la référence, sans saccade.
     int32_t m_lastAppliedWorldMinutes = -1;
+    /// Dernier preset météo réellement demandé au moteur. Vide = aucun. Sert à ne re-demander que
+    /// sur changement : le serveur diffuse `WorldState` périodiquement, et redemander le même
+    /// preset relancerait une transition de 3 s en boucle — un ciel qui ne se stabilise jamais.
+    std::string m_lastAppliedWeather;
 
 private:
     // Appelé à chaque échec de `SpawnTransientEntity`. Agrège les logs et déclenche UNE fois
@@ -139,6 +143,9 @@ protected:
     // aucun setter météo n'existe dans le dump RTTI (seuls des getters sur
     // worldWeatherScriptInterface) — voir la sonde S-W1 avant d'affirmer que c'est faisable.
     void HandleWorldState(const cyberpunk_rp::protocol::WorldState* state);
+    // Météo décidée par le serveur, portée par le même message que l'heure. Séparée parce qu'elle
+    // n'a pas la même cadence utile : l'heure se resynchronise sur seuil, la météo sur changement.
+    void ApplyServerWeather(const cyberpunk_rp::protocol::WorldState* state);
     // Refus/expulsion serveur. Sans ce câblage, un client rejeté (serveur plein, token invalide,
     // ban, version de protocole) reste coupé SANS AUCUNE explication — le motif était envoyé
     // depuis le début et jeté par le `default:` de PollIncomingMessages.

@@ -164,6 +164,29 @@ public native class NetworkGameSystem extends IGameSystem {
         return moveDir * 256 + state;
     }
 
+    // Applique la météo décidée par le SERVEUR (`WorldState.weather`).
+    //
+    // ✅ MESURÉ le 2026-08-04 (F-MND-043, sonde `weather_probe`) : `SetWeather` existe et agit
+    // dans les deux sens — intensité de pluie 0 → 1 puis 1 → 0, chaque appel suivi de son effet.
+    // Ce code n'a PAS été écrit avant cette mesure, précisément parce que le setter est absent du
+    // dump RTTI et de la classe `WeatherSystem` des scripts décompilés : seul un test en jeu
+    // pouvait dire s'il existait (F-SCR-018 — le dump ne couvre pas 100 % du natif).
+    //
+    // Renvoie false quand le preset est DÉJÀ appliqué — comportement observé, pas supposé. Ce
+    // n'est donc pas une erreur, et il ne faut ni la journaliser en boucle ni réessayer.
+    public func ApplyServerWeather(preset: String) -> Bool {
+        if StrLen(preset) == 0 {
+            return false;
+        }
+        let ws = GameInstance.GetWeatherSystem(GetGameInstance());
+        if !IsDefined(ws) {
+            return false;
+        }
+        // 3 s de transition : assez pour que le ciel ne saute pas, assez court pour qu'un joueur
+        // qui vient d'arriver voie la météo du serveur presque tout de suite.
+        return ws.SetWeather(StringToName(preset), 3.00, 0u);
+    }
+
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }
