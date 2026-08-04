@@ -2278,16 +2278,26 @@ inline ::flatbuffers::Offset<CharacterList> CreateCharacterListDirect(
 struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef CreateCharacterBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_PSEUDONYM = 4
+    VT_PSEUDONYM = 4,
+    VT_BASE_RECORD = 6,
+    VT_APPEARANCE = 8
   };
   const ::flatbuffers::String *pseudonym() const {
     return GetPointer<const ::flatbuffers::String *>(VT_PSEUDONYM);
+  }
+  uint64_t base_record() const {
+    return GetField<uint64_t>(VT_BASE_RECORD, 0);
+  }
+  uint64_t appearance() const {
+    return GetField<uint64_t>(VT_APPEARANCE, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_PSEUDONYM) &&
            verifier.VerifyString(pseudonym()) &&
+           VerifyField<uint64_t>(verifier, VT_BASE_RECORD, 8) &&
+           VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
            verifier.EndTable();
   }
 };
@@ -2298,6 +2308,12 @@ struct CreateCharacterBuilder {
   ::flatbuffers::uoffset_t start_;
   void add_pseudonym(::flatbuffers::Offset<::flatbuffers::String> pseudonym) {
     fbb_.AddOffset(CreateCharacter::VT_PSEUDONYM, pseudonym);
+  }
+  void add_base_record(uint64_t base_record) {
+    fbb_.AddElement<uint64_t>(CreateCharacter::VT_BASE_RECORD, base_record, 0);
+  }
+  void add_appearance(uint64_t appearance) {
+    fbb_.AddElement<uint64_t>(CreateCharacter::VT_APPEARANCE, appearance, 0);
   }
   explicit CreateCharacterBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -2312,19 +2328,27 @@ struct CreateCharacterBuilder {
 
 inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacter(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0,
+    uint64_t base_record = 0,
+    uint64_t appearance = 0) {
   CreateCharacterBuilder builder_(_fbb);
+  builder_.add_appearance(appearance);
+  builder_.add_base_record(base_record);
   builder_.add_pseudonym(pseudonym);
   return builder_.Finish();
 }
 
 inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacterDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const char *pseudonym = nullptr) {
+    const char *pseudonym = nullptr,
+    uint64_t base_record = 0,
+    uint64_t appearance = 0) {
   auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
   return cyberpunk_rp::protocol::CreateCreateCharacter(
       _fbb,
-      pseudonym__);
+      pseudonym__,
+      base_record,
+      appearance);
 }
 
 struct SelectCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

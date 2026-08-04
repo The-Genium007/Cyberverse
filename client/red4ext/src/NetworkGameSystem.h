@@ -23,7 +23,20 @@
 #include <serverbound/WorldPacketsServerBound.h>
 
 // Protocole TesseraSynth (FlatBuffers) — forward decl pour ne pas tirer l'en-tête généré ici.
-namespace cyberpunk_rp::protocol { struct Snapshot; struct PositionCorrection; struct ShardAssignment; }
+namespace cyberpunk_rp::protocol {
+    struct Snapshot; struct PositionCorrection; struct ShardAssignment;
+    struct WorldState; struct Kicked; struct AppearanceSync;
+}
+
+// Identité visuelle d'une entité réseau, telle que le SERVEUR la décide (`AppearanceSync`).
+// Deux hashes suffisent (modèle PRESET, ADR/design apparence §6.2) : le record TweakDB à faire
+// apparaître et le nom d'apparence `.ent` à appliquer. C'est ce qui remplace le `Character.Panam`
+// codé en dur — l'apparence n'est plus une constante du client, c'est une donnée serveur.
+struct NetworkAppearance
+{
+    uint64_t baseRecord = 0;
+    uint64_t appearance = 0;
+};
 
 class NetworkGameSystem : public Red::IGameSystem
 {
@@ -67,6 +80,25 @@ private:
     float m_timeSinceSpawnFailureLog = 0.0f;
     bool m_spawnFailureNotified = false;
 
+    // --- Autorité serveur sur l'apparence (`AppearanceSync`) ---
+    // Identité visuelle décidée par le serveur, par id d'entité réseau (joueur OU PNJ : le fil est
+    // générique en `id` et les plages d'ids sont disjointes par construction, cf. protocol.fbs
+    // NpcState). Alimentée AVANT le premier Snapshot qui porte l'entité (le serveur pousse
+    // l'apparence à l'entrée en AoI), donc consultable au moment du spawn.
+    std::map<uint64_t, NetworkAppearance> m_appearances;
+    // Apparences reçues pour des ids pas encore spawnés, et inversement : un id déjà spawné dont
+    // l'apparence change ARRIVE APRÈS le spawn. On mémorise ce qui a été réellement appliqué pour
+    // ne re-appliquer que sur changement réel (`ScheduleAppearanceChange` a un effet différé et
+    // relire immédiatement renvoie l'ancienne valeur — F-PNJ-050).
+    std::map<uint64_t, uint64_t> m_appliedAppearance;
+
+    // --- Horloge monde serveur (`WorldState`) ---
+    // Dernière heure appliquée au moteur, en minutes depuis minuit ; -1 = jamais appliquée.
+    // Le serveur diffuse WorldState périodiquement : ré-appliquer à chaque message ferait sauter
+    // l'horloge locale en permanence (le moteur fait avancer le temps entre deux messages). On
+    // n'écrit donc que si l'écart dépasse un seuil — le serveur reste la référence, sans saccade.
+    int32_t m_lastAppliedWorldMinutes = -1;
+
 private:
     // Appelé à chaque échec de `SpawnTransientEntity`. Agrège les logs et déclenche UNE fois
     // l'alerte native quand le seuil est franchi.
@@ -101,6 +133,25 @@ protected:
     void HandlePositionCorrection(const cyberpunk_rp::protocol::PositionCorrection* correction);
     // Placement autoritaire : mémorise shard + overlaps pour les getters natifs exposés au HUD.
     void HandleShardAssignment(const cyberpunk_rp::protocol::ShardAssignment* assignment);
+    // Horloge monde partagée : le SERVEUR décide l'heure qu'il est, le client l'applique
+    // (`TimeSystem.SetGameTimeByHMS` — signature vérifiée dans les scripts décompilés CDPR,
+    // scripts/core/systems/timeSystem.script:15). La météo du même message n'est PAS appliquée :
+    // aucun setter météo n'existe dans le dump RTTI (seuls des getters sur
+    // worldWeatherScriptInterface) — voir la sonde S-W1 avant d'affirmer que c'est faisable.
+    void HandleWorldState(const cyberpunk_rp::protocol::WorldState* state);
+    // Refus/expulsion serveur. Sans ce câblage, un client rejeté (serveur plein, token invalide,
+    // ban, version de protocole) reste coupé SANS AUCUNE explication — le motif était envoyé
+    // depuis le début et jeté par le `default:` de PollIncomingMessages.
+    void HandleKicked(const cyberpunk_rp::protocol::Kicked* kicked);
+    // Identité visuelle décidée par le serveur. Mémorise, et applique tout de suite si l'entité
+    // est déjà là (l'apparence peut changer en cours de session : tenue, dégainage).
+    void HandleAppearanceSync(const cyberpunk_rp::protocol::AppearanceSync* sync);
+
+    // Fait apparaître une entité réseau à l'apparence décidée par le serveur, ou au repli si
+    // aucune n'est connue pour cet id. Renvoie false si le spawn a échoué (modset non compilé).
+    bool SpawnNetworkEntity(uint64_t networkId, const RED4ext::Vector4& worldPosition);
+    // Applique une apparence serveur sur une entité déjà spawnée (changement en cours de session).
+    void ApplyAppearance(uint64_t networkId, RED4ext::ent::EntityID entityId);
 
 public:
     bool FullyConnected = false;

@@ -23,6 +23,7 @@
 
 #include <cmath>   // std::lround/std::fmod (quantization du fil, gel palier 2 — cf. QuantPos/QuantYaw)
 #include <cstdlib> // std::getenv (token ZITADEL transmis par le launcher, cf. SendJoin)
+#include <set>     // set des ids presents dans un Snapshot + garde anti-spam de LogUnhandledServerMsg
 #include <thread>  // alerte « modset non compile » affichee hors boucle de jeu (NotifyModsetNotCompiled)
 
 // Protocole TesseraSynth (FlatBuffers) + en-tetes generes.
@@ -43,6 +44,30 @@
 //    flatc --cpp -o client/red4ext/src/generated <chemin>/protocol.fbs   (flatc 25.12.19)
 // v2 : gel palier 2 (2026-07-23) — positions Vec3->QVec3 fixed-point, yaw float->ushort.
 static constexpr uint32_t kTesseraProtocolVersion = 2;
+
+// Record de repli quand le serveur n'a poussé AUCUNE apparence pour une entité réseau. Ce n'est
+// PAS la valeur normale : c'est le filet qui rend visible un trou d'autorité au lieu de laisser un
+// joueur invisible. Toute entité rendue avec ce record signale que son `AppearanceSync` n'est pas
+// arrivé — et le log qui l'accompagne le dit.
+//
+// Historiquement, `Character.Panam` était codé en dur comme apparence NORMALE de tout joueur
+// distant : tous les joueurs se ressemblaient, et le serveur — qui tient pourtant l'apparence
+// choisie de chacun (`appearance_relay.rs`) — n'avait aucun moyen de le dire.
+static constexpr const char* kFallbackAvatarRecord = "Character.Panam";
+
+// Journalise UNE SEULE FOIS par type de message serveur non câblé. Sans ce garde, un message
+// diffusé à 20 Hz remplirait le log à lui seul (précédent vécu : des centaines de lignes par
+// seconde sur l'échec de spawn), et le log cesserait d'être lisible — donc de servir.
+static void LogUnhandledServerMsg(int msgType)
+{
+    static std::set<int> seen;
+    if (seen.insert(msgType).second)
+    {
+        SDK->logger->InfoF(PLUGIN,
+            "ServerMsg type=%d recu mais pas encore cable cote client (premiere occurrence "
+            "seulement). Le serveur l'emet deja.", msgType);
+    }
+}
 
 // --- Quantization du fil (gel palier 2) — miroir EXACT de tessera-core/server/src/quant.rs ---
 // Position : fixed-point WORLD-ABSOLU, metres = bits / 131072 (2^17) — la representation native
@@ -337,9 +362,23 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_ShardAssignment:
                     HandleShardAssignment(env->msg_as_ShardAssignment());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_WorldState:
+                    HandleWorldState(env->msg_as_WorldState());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_Kicked:
+                    HandleKicked(env->msg_as_Kicked());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_AppearanceSync:
+                    HandleAppearanceSync(env->msg_as_AppearanceSync());
+                    break;
                 default:
-                    // Autres ServerMsg (Kicked/WorldState/CommandResult/PermissionSync) : pas encore
-                    // câblés côté client, ignorés silencieusement pour l'instant.
+                    // Reste non câblé : CommandResult, PermissionSync, PlayerEvent, CharacterList,
+                    // CharacterResult, QueueStatus, InteractionOpen, InteractionResult,
+                    // ElevatorStateMsg. Le serveur les émet déjà — les brancher est le chantier
+                    // « autorité totale », étapes 2 et 6. Journalisé au lieu d'être jeté en
+                    // silence : un message serveur ignoré sans trace est exactement ce qui a fait
+                    // croire pendant des semaines que le protocole n'était pas implémenté.
+                    LogUnhandledServerMsg(static_cast<int>(env->msg_type()));
                     break;
                 }
             }
@@ -453,48 +492,84 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         return;
     }
 
-    // Le serveur exclut deja le joueur local : `players` = uniquement les autres.
+    // Le serveur remplit TROIS tableaux dans un Snapshot (server_loop.rs::encode_snapshot_for) :
+    // `players`, `npcs` et `vehicles`. Ce client ne lisait que le premier — les PNJ et vehicules
+    // pilotes par le serveur etaient donc encodes, transmis, puis jetes a l'arrivee. Les ids des
+    // trois familles sont DISJOINTS par construction (protocol.fbs, NpcState : « id dans une plage
+    // reservee disjointe des connexions reelles »), donc une seule table de suivi suffit et le
+    // despawn par absence reste correct.
     std::set<uint64_t> present;
+
+    // Applique une entree de snapshot, quelle que soit sa famille : spawn si l'id est inconnu,
+    // repositionnement sinon. Factorise pour que les trois tableaux ne divergent pas dans leur
+    // traitement — c'est exactement ce genre de duplication qui laisse un tableau en arriere.
+    const auto applyPose = [this, &present](uint64_t id, const cyberpunk_rp::protocol::QVec3* pos,
+                                            uint16_t quantizedYaw)
+    {
+        if (pos == nullptr)
+        {
+            return;
+        }
+        present.insert(id);
+
+        // Gel palier 2 : dequantization du QVec3 fixed-point + yaw ushort -> degres.
+        const RED4ext::Vector4 worldPosition = {
+            DequantPos(pos->x()), DequantPos(pos->y()), DequantPos(pos->z()), 1.0f
+        };
+        const float yaw = DequantYaw(quantizedYaw);
+
+        const auto existing = m_networkedEntitiesLookup.find(id);
+        if (existing == m_networkedEntitiesLookup.end())
+        {
+            SpawnNetworkEntity(id, worldPosition);
+        }
+        else
+        {
+            // Id connu -> teleporte a la nouvelle pose (interpolation a ajouter plus tard).
+            SetEntityPosition(existing->second, worldPosition, yaw);
+        }
+    };
+
+    // Le serveur exclut deja le joueur local : `players` = uniquement les autres.
     const auto* players = snapshot->players();
     if (players != nullptr)
     {
         for (const auto* ps : *players)
         {
-            if (ps == nullptr || ps->position() == nullptr)
+            if (ps != nullptr)
             {
-                continue;
+                applyPose(ps->id(), ps->position(), ps->yaw());
             }
-            const uint64_t id = ps->id();
-            present.insert(id);
+        }
+    }
 
-            // Gel palier 2 : dequantization du QVec3 fixed-point + yaw ushort -> degres.
-            const auto* pos = ps->position();
-            const RED4ext::Vector4 worldPosition = {
-                DequantPos(pos->x()), DequantPos(pos->y()), DequantPos(pos->z()), 1.0f
-            };
-            const float yaw = DequantYaw(ps->yaw());
-
-            const auto existing = m_networkedEntitiesLookup.find(id);
-            if (existing == m_networkedEntitiesLookup.end())
+    // PNJ orchestres par le serveur (foule, vendeurs, hostiles — crowd_producer.rs / stub.rs).
+    // `archetype` est un id de COMPORTEMENT (npc-catalog.toml), pas une identite visuelle : c'est
+    // `AppearanceSync` qui dit quoi faire apparaitre, exactement comme pour un joueur. Tant que le
+    // serveur n'en emet pas pour les PNJ, ils sortent au record de repli et le log le signale.
+    const auto* npcs = snapshot->npcs();
+    if (npcs != nullptr)
+    {
+        for (const auto* ns : *npcs)
+        {
+            if (ns != nullptr)
             {
-                // Id inconnu -> spawn d'un avatar distant.
-                RED4ext::TweakDBID record("Character.Panam");
-                RED4ext::Quaternion worldOrientation = { 0.0f, 0.0f, 0.0f, 1.0f };
-                RED4ext::ent::EntityID entityId;
-                if (Red::CallVirtual(this, "SpawnTransientEntity", entityId, record, worldPosition, worldOrientation))
-                {
-                    m_networkedEntitiesLookup.insert(std::make_pair(id, entityId));
-                    SDK->logger->InfoF(PLUGIN, "Spawn avatar reseau %llu -> entity %llu", id, entityId.hash);
-                }
-                else
-                {
-                    OnSpawnFailure();
-                }
+                applyPose(ns->id(), ns->position(), ns->yaw());
             }
-            else
+        }
+    }
+
+    // Vehicules AUTONOMES (trafic). Distincts des vehicules PILOTES (`vehicles_player`), qui
+    // relevent du niveau 2 et d'un filet de correction, pas d'un placement direct — les traiter
+    // ici les ferait « glisser » (fantome observe en jeu, cf. protocol.fbs VehiclePlayerState).
+    const auto* vehicles = snapshot->vehicles();
+    if (vehicles != nullptr)
+    {
+        for (const auto* vs : *vehicles)
+        {
+            if (vs != nullptr)
             {
-                // Id connu -> teleporte a la nouvelle pose (interpolation a ajouter plus tard).
-                SetEntityPosition(existing->second, worldPosition, yaw);
+                applyPose(vs->id(), vs->position(), vs->yaw());
             }
         }
     }
@@ -508,6 +583,13 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             {
                 SDK->logger->Warn(PLUGIN, "Echec despawn avatar reseau");
             }
+            // Oublier ce qui a ete APPLIQUE, pas ce que le serveur a DIT. `m_appearances` garde
+            // l'apparence connue : une entite qui sort puis rerentre dans l'AoI doit pouvoir
+            // respawner correctement meme si le serveur ne renvoie pas d'AppearanceSync (il ne le
+            // fait que sur changement reel, cf. appearance_relay.rs). En revanche
+            // `m_appliedAppearance` decrit une entite de jeu qui vient d'etre detruite : le
+            // conserver ferait sauter l'application sur la NOUVELLE entite au respawn.
+            m_appliedAppearance.erase(it->first);
             it = m_networkedEntitiesLookup.erase(it);
         }
         else
@@ -594,6 +676,187 @@ void NetworkGameSystem::HandleShardAssignment(const cyberpunk_rp::protocol::Shar
 
     SDK->logger->InfoF(PLUGIN, "ShardAssignment recu: autoritatif=%s overlaps=[%s]",
         m_serverShard.c_str(), m_serverOverlapsCsv.c_str());
+}
+
+void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldState* state)
+{
+    if (state == nullptr)
+    {
+        return;
+    }
+
+    // L'heure du monde est une ressource GLOBALE, pas par-shard (world_clock.rs) : tous les
+    // joueurs voient la meme heure ou qu'ils soient. C'est le serveur qui la decide.
+    const int32_t serverMinutes =
+        static_cast<int32_t>(state->hour()) * 60 + static_cast<int32_t>(state->minute());
+
+    // Le moteur fait avancer le temps localement entre deux WorldState. Reecrire l'heure a chaque
+    // message la ferait donc sauter en arriere en permanence (visible : le cycle jour/nuit
+    // saccade). On ne corrige que sur ecart reel — le serveur reste la reference, le moteur
+    // interpole entre deux corrections. Seuil en minutes de JEU.
+    static constexpr int32_t kResyncThresholdMinutes = 2;
+    if (m_lastAppliedWorldMinutes >= 0)
+    {
+        int32_t delta = serverMinutes - m_lastAppliedWorldMinutes;
+        // Distance circulaire sur 24 h : 23h59 -> 00h01 vaut 2 minutes, pas 1438.
+        if (delta > 720) { delta -= 1440; }
+        if (delta < -720) { delta += 1440; }
+        if (delta < 0) { delta = -delta; }
+        if (delta < kResyncThresholdMinutes)
+        {
+            return;
+        }
+    }
+
+    // TimeSystem.SetGameTimeByHMS(Int32, Int32, Int32, opt CName) — signature LUE dans les scripts
+    // decompiles CDPR (scripts/core/systems/timeSystem.script:15), pas devinee. L'accesseur
+    // GameInstance.GetTimeSystem existe au dump RTTI (tools/nativedb, search.py systems).
+    Red::Handle<Red::IScriptable> timeSystem;
+    if (!Red::CallStatic("ScriptGameInstance", "GetTimeSystem", timeSystem) || timeSystem == nullptr)
+    {
+        SDK->logger->Warn(PLUGIN, "WorldState : TimeSystem introuvable, heure serveur non appliquee");
+        return;
+    }
+
+    const int32_t h = static_cast<int32_t>(state->hour());
+    const int32_t m = static_cast<int32_t>(state->minute());
+    // Secondes typees explicitement : la signature est (Int32, Int32, Int32) et un litteral `0`
+    // laisserait la deduction choisir `int`, que RedLib ne relie pas forcement a Int32.
+    const int32_t s = 0;
+    if (!Red::CallVirtual(timeSystem, "SetGameTimeByHMS", h, m, s))
+    {
+        SDK->logger->Warn(PLUGIN, "WorldState : SetGameTimeByHMS refuse");
+        return;
+    }
+
+    m_lastAppliedWorldMinutes = serverMinutes;
+    SDK->logger->InfoF(PLUGIN, "Heure serveur appliquee : %02d:%02d", h, m);
+
+    // METEO : volontairement NON appliquee. `WorldState.weather` porte bien une chaine
+    // (ex. "Weather.Sunny01") et world_clock.rs affirme qu'un `SetWeather` existe et « renvoie
+    // false » sur une valeur invalide — mais AUCUN setter meteo n'apparait dans le dump RTTI :
+    // worldWeatherScriptInterface n'expose que des getters (GetRainIntensity, ...), et la classe
+    // WeatherSystem des scripts decompiles non plus. Appliquer la meteo ici serait donc du code
+    // ecrit sur une capacite NON MESUREE. Sonde S-W1 avant d'aller plus loin.
+}
+
+void NetworkGameSystem::HandleKicked(const cyberpunk_rp::protocol::Kicked* kicked)
+{
+    const auto* reason = kicked != nullptr ? kicked->reason() : nullptr;
+    const std::string text = reason != nullptr ? reason->str() : std::string("(aucun motif fourni)");
+
+    // Ce message existait cote serveur depuis le debut et etait jete par le `default:` du
+    // dispatch : un joueur refuse (serveur plein, token invalide, ban, version de protocole
+    // incompatible) restait coupe SANS AUCUNE explication, ni a l'ecran ni au log.
+    SDK->logger->WarnF(PLUGIN, "Refuse par le serveur : %s", text.c_str());
+
+    // Alerte native (Win32) et pas une UI de jeu, pour la meme raison que NotifyModsetNotCompiled :
+    // au moment d'un kick, on ne peut rien supposer de l'etat du redscript ni de l'UI kit.
+    std::thread([text]()
+    {
+        const std::string body = "Le serveur a refuse la connexion.\n\nMotif : " + text;
+        MessageBoxA(nullptr, body.c_str(), "Tessera - connexion refusee",
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    }).detach();
+}
+
+void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::AppearanceSync* sync)
+{
+    if (sync == nullptr || sync->spec() == nullptr)
+    {
+        return;
+    }
+
+    const uint64_t id = sync->id();
+    NetworkAppearance appearance;
+    appearance.baseRecord = sync->spec()->base_record();
+    appearance.appearance = sync->spec()->appearance();
+    m_appearances[id] = appearance;
+
+    SDK->logger->InfoF(PLUGIN, "AppearanceSync %llu : record=%llu apparence=%llu",
+        id, appearance.baseRecord, appearance.appearance);
+
+    // L'apparence arrive AVANT le premier Snapshot qui porte l'entite (le serveur la pousse a
+    // l'entree en AoI) — dans ce cas il n'y a rien a appliquer, le spawn s'en servira. Mais elle
+    // peut aussi CHANGER en cours de session (tenue, degainage) : l'entite est alors deja la.
+    const auto existing = m_networkedEntitiesLookup.find(id);
+    if (existing != m_networkedEntitiesLookup.end())
+    {
+        ApplyAppearance(id, existing->second);
+    }
+}
+
+void NetworkGameSystem::ApplyAppearance(uint64_t networkId, RED4ext::ent::EntityID entityId)
+{
+    const auto it = m_appearances.find(networkId);
+    if (it == m_appearances.end() || it->second.appearance == 0)
+    {
+        return;
+    }
+
+    // Ne re-appliquer que sur changement REEL. `ScheduleAppearanceChange` a un effet DIFFERE et
+    // relire l'apparence immediatement apres renvoie encore l'ancienne (F-PNJ-050) : sans ce
+    // garde, on la reprogrammerait a chaque message sans jamais pouvoir constater qu'elle a pris.
+    const auto applied = m_appliedAppearance.find(networkId);
+    if (applied != m_appliedAppearance.end() && applied->second == it->second.appearance)
+    {
+        return;
+    }
+
+    const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
+    if (!entity.has_value())
+    {
+        return;
+    }
+
+    const RED4ext::CName appearanceName(it->second.appearance);
+    if (!Red::CallVirtual(entity.value(), "ScheduleAppearanceChange", appearanceName))
+    {
+        SDK->logger->WarnF(PLUGIN, "ScheduleAppearanceChange refuse pour %llu", networkId);
+        return;
+    }
+    m_appliedAppearance[networkId] = it->second.appearance;
+}
+
+bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Vector4& worldPosition)
+{
+    // Le record vient du SERVEUR (AppearanceSync). Le repli n'est utilise que si aucune apparence
+    // n'est encore connue pour cet id — et il se signale, parce qu'un avatar de repli silencieux
+    // est indistinguable d'un avatar correct.
+    RED4ext::TweakDBID record;
+    RED4ext::CName appearanceName(static_cast<uint64_t>(0));
+    const auto it = m_appearances.find(networkId);
+    if (it != m_appearances.end() && it->second.baseRecord != 0)
+    {
+        record = RED4ext::TweakDBID(it->second.baseRecord);
+        appearanceName = RED4ext::CName(it->second.appearance);
+    }
+    else
+    {
+        record = RED4ext::TweakDBID(kFallbackAvatarRecord);
+        SDK->logger->WarnF(PLUGIN,
+            "Spawn %llu SANS apparence serveur — repli %s. Le serveur n'a pas (encore) envoye "
+            "d'AppearanceSync pour cette entite.", networkId, kFallbackAvatarRecord);
+    }
+
+    const RED4ext::Quaternion worldOrientation = { 0.0f, 0.0f, 0.0f, 1.0f };
+    RED4ext::ent::EntityID entityId;
+    if (!Red::CallVirtual(this, "SpawnNetworkAvatar", entityId, record, appearanceName,
+                          worldPosition, worldOrientation))
+    {
+        OnSpawnFailure();
+        return false;
+    }
+
+    m_networkedEntitiesLookup.insert(std::make_pair(networkId, entityId));
+    if (appearanceName.hash != 0)
+    {
+        // Posee au spawn par le spec : on l'enregistre comme appliquee pour ne pas la
+        // reprogrammer inutilement au premier AppearanceSync suivant.
+        m_appliedAppearance[networkId] = appearanceName.hash;
+    }
+    SDK->logger->InfoF(PLUGIN, "Spawn entite reseau %llu -> entity %llu", networkId, entityId.hash);
+    return true;
 }
 
 bool NetworkGameSystem::OnGameRestored()
