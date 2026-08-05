@@ -120,6 +120,11 @@ private:
     void OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext::JobQueue& job_queue);
     void InterpolatePuppets(float deltaTime);
     void SetEntityPosition(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
+    // Placement HYBRIDE : marche animée quand l'entité bouge et que la dérive est faible,
+    // téléportation de correction sinon. Le mécanisme vient de F-PNJ-082/F-PLY-007, qui posent
+    // aussi la règle : la commande de marche est de l'animation, l'autorité reste au Snapshot.
+    void SetEntityPose(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw,
+                       uint8_t locomotion);
 
 protected:
     void PollIncomingMessages();

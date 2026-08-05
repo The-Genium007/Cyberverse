@@ -293,6 +293,56 @@ bool NetworkGameSystem::EnqueueMessage(uint8_t channel_id, T content)
     return false;
 }
 
+
+void NetworkGameSystem::SetEntityPose(RED4ext::ent::EntityID entityId,
+                                      RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion)
+{
+    // Modele HYBRIDE, prescrit par la mesure et non choisi au jugé.
+    //
+    // `AIMoveToCommand` fait reellement MARCHER et naviguer une entite commandee par le serveur
+    // (F-PNJ-082, en jeu le 2026-07-22 ; F-PLY-007 pour l'usage avatar distant). Mais ce meme fait
+    // precise que c'est de l'ANIMATION LOCALE, PAS de l'autorite : « la position qui fait foi
+    // reste celle du Snapshot serveur, corrigee a chaque tick ».
+    //
+    // D'ou les deux regimes :
+    //  · entite IMMOBILE (locomotion 0) -> placement direct. Rien a animer, et une commande de
+    //    marche vers un point ou l'on est deja produirait un piétinement.
+    //  · entite EN MOUVEMENT -> on demande au moteur de MARCHER vers la position serveur. Le
+    //    trajet est joué, pas saute. C'est ce qui remplace le glissement.
+    //  · derive TROP GRANDE -> teleportation de CORRECTION. Sans ce garde, une entite qui a rate
+    //    des snapshots (perte de paquets, sortie/rentree d'AoI) marcherait indefiniment vers une
+    //    cible qu'elle ne rattraperait jamais, en accumulant du retard.
+    static constexpr float kCorrectionDistanceMeters = 8.0f;
+
+    if (locomotion != 0)
+    {
+        const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
+        if (entity.has_value())
+        {
+            const auto current = Cyberverse::Utils::Entity_GetWorldPosition(entity.value());
+            const float dx = worldPosition.X - current.X;
+            const float dy = worldPosition.Y - current.Y;
+            const float dz = worldPosition.Z - current.Z;
+            const float drift = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+            if (drift < kCorrectionDistanceMeters)
+            {
+                bool moving = false;
+                if (Red::CallVirtual(this, "MoveNetworkEntityTo", moving, entityId, worldPosition,
+                                     static_cast<int32_t>(locomotion))
+                    && moving)
+                {
+                    return; // le moteur joue le trajet
+                }
+                // Echec de la commande (entite pas encore prete, pas un ScriptedPuppet…) : on
+                // retombe sur le placement direct plutot que de laisser l'entite sur place.
+            }
+        }
+    }
+
+    SetEntityPosition(entityId, worldPosition, yaw);
+}
+
 void NetworkGameSystem::SetEntityPosition(const RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw)
 {
     const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
@@ -526,7 +576,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     // repositionnement sinon. Factorise pour que les trois tableaux ne divergent pas dans leur
     // traitement — c'est exactement ce genre de duplication qui laisse un tableau en arriere.
     const auto applyPose = [this, &present](uint64_t id, const cyberpunk_rp::protocol::QVec3* pos,
-                                            uint16_t quantizedYaw)
+                                            uint16_t quantizedYaw, uint8_t locomotion)
     {
         if (pos == nullptr)
         {
@@ -547,8 +597,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         }
         else
         {
-            // Id connu -> teleporte a la nouvelle pose (interpolation a ajouter plus tard).
-            SetEntityPosition(existing->second, worldPosition, yaw);
+            SetEntityPose(existing->second, worldPosition, yaw, locomotion);
         }
     };
 
@@ -560,7 +609,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         {
             if (ps != nullptr)
             {
-                applyPose(ps->id(), ps->position(), ps->yaw());
+                applyPose(ps->id(), ps->position(), ps->yaw(), ps->locomotion());
             }
         }
     }
@@ -576,7 +625,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         {
             if (ns != nullptr)
             {
-                applyPose(ns->id(), ns->position(), ns->yaw());
+                applyPose(ns->id(), ns->position(), ns->yaw(), ns->locomotion());
             }
         }
     }
@@ -591,7 +640,9 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         {
             if (vs != nullptr)
             {
-                applyPose(vs->id(), vs->position(), vs->yaw());
+                // Les vehicules n'ont PAS le triplet biped (ils portent une `speed`
+                // scalaire) : locomotion 0, donc placement direct sans commande de marche.
+                applyPose(vs->id(), vs->position(), vs->yaw(), 0);
             }
         }
     }

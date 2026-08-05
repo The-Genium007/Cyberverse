@@ -306,6 +306,58 @@ public native class NetworkGameSystem extends IGameSystem {
         return teleportCommand;
     }
 
+    // Fait MARCHER une entité réseau vers la position décidée par le serveur, au lieu de l'y
+    // téléporter. C'est ce qui remplace le glissement par une vraie locomotion animée.
+    //
+    // ✅ MÉCANISME MESURÉ, pas choisi au jugé : `AIMoveToCommand` fait réellement marcher et
+    // naviguer un PNJ commandé par le serveur (F-PNJ-082, en jeu le 2026-07-22), et le même
+    // mécanisme rend/anime/suit correctement un avatar de joueur distant (F-PLY-007, 2026-07-25).
+    //
+    // ⚠️ C'est de l'ANIMATION LOCALE, PAS de l'autorité — F-PNJ-082 le dit explicitement. La
+    // position qui fait foi reste celle du Snapshot serveur ; cette commande ne sert qu'à ce que
+    // le trajet soit joué par le moteur au lieu d'être sauté. Le C++ garde donc la téléportation
+    // comme CORRECTION quand la dérive devient trop grande.
+    //
+    // `ignoreNavigation = true` : le serveur a déjà planifié le chemin (A* côté shard). Laisser le
+    // moteur re-naviguer ferait diverger les deux, et le PNJ contournerait un obstacle que le
+    // serveur ignore — deux autorités sur le même trajet.
+    public func MoveNetworkEntityTo(entityId: EntityID, position: Vector4, locomotion: Int32) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let controller = puppet.GetAIControllerComponent();
+        if !IsDefined(controller) {
+            return false;
+        }
+
+        let cmd = new AIMoveToCommand();
+        let cible: AIPositionSpec;
+        let wp: WorldPosition;
+        WorldPosition.SetVector4(wp, position);
+        AIPositionSpec.SetWorldPosition(cible, wp);
+        cmd.movementTarget = cible;
+
+        // Locomotion protocole → allure moteur. Les valeurs accroupies (4, 5) et l'air (6) n'ont
+        // pas d'équivalent dans `moveMovementType` : elles retombent sur la marche, qui est le
+        // moins faux des choix — mieux vaut un PNJ qui marche qu'un PNJ qui glisse.
+        if locomotion == 3 {
+            cmd.movementType = moveMovementType.Sprint;
+        } else if locomotion == 2 {
+            cmd.movementType = moveMovementType.Run;
+        } else {
+            cmd.movementType = moveMovementType.Walk;
+        }
+
+        cmd.ignoreNavigation = true;
+        cmd.finishWhenDestinationReached = true;
+        cmd.desiredDistanceFromTarget = 0.50;
+
+        controller.SendCommand(cmd);
+        return true;
+    }
+
     public func StopAICommand(puppet: ref<ScriptedPuppet>, command: ref<AICommand>) {
         let component = puppet.GetAIControllerComponent();
         if (EnumInt(component.GetCommandState(command)) != EnumInt(AICommandState.Success)) {
