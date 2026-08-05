@@ -133,6 +133,12 @@ struct ElevatorCallBuilder;
 struct ElevatorStateMsg;
 struct ElevatorStateMsgBuilder;
 
+struct ConfigEntry;
+struct ConfigEntryBuilder;
+
+struct ConfigSync;
+struct ConfigSyncBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -297,11 +303,12 @@ enum ServerMsg : uint8_t {
   ServerMsg_InteractionResult = 13,
   ServerMsg_ElevatorStateMsg = 14,
   ServerMsg_AppearanceSync = 15,
+  ServerMsg_ConfigSync = 16,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_AppearanceSync
+  ServerMsg_MAX = ServerMsg_ConfigSync
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[16] {
+inline const ServerMsg (&EnumValuesServerMsg())[17] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -318,13 +325,14 @@ inline const ServerMsg (&EnumValuesServerMsg())[16] {
     ServerMsg_InteractionOpen,
     ServerMsg_InteractionResult,
     ServerMsg_ElevatorStateMsg,
-    ServerMsg_AppearanceSync
+    ServerMsg_AppearanceSync,
+    ServerMsg_ConfigSync
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[17] = {
+  static const char * const names[18] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -341,13 +349,14 @@ inline const char * const *EnumNamesServerMsg() {
     "InteractionResult",
     "ElevatorStateMsg",
     "AppearanceSync",
+    "ConfigSync",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_AppearanceSync)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_ConfigSync)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -414,6 +423,10 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ElevatorStateMsg> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::AppearanceSync> {
   static const ServerMsg enum_value = ServerMsg_AppearanceSync;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ConfigSync> {
+  static const ServerMsg enum_value = ServerMsg_ConfigSync;
 };
 
 template <bool B = false>
@@ -3257,6 +3270,123 @@ inline ::flatbuffers::Offset<ElevatorStateMsg> CreateElevatorStateMsgDirect(
       travel_time_ms);
 }
 
+struct ConfigEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ConfigEntryBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_FLAT = 4,
+    VT_VALUE = 6
+  };
+  const ::flatbuffers::String *flat() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_FLAT);
+  }
+  float value() const {
+    return GetField<float>(VT_VALUE, 0.0f);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_FLAT) &&
+           verifier.VerifyString(flat()) &&
+           VerifyField<float>(verifier, VT_VALUE, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct ConfigEntryBuilder {
+  typedef ConfigEntry Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_flat(::flatbuffers::Offset<::flatbuffers::String> flat) {
+    fbb_.AddOffset(ConfigEntry::VT_FLAT, flat);
+  }
+  void add_value(float value) {
+    fbb_.AddElement<float>(ConfigEntry::VT_VALUE, value, 0.0f);
+  }
+  explicit ConfigEntryBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ConfigEntry> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ConfigEntry>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ConfigEntry> CreateConfigEntry(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> flat = 0,
+    float value = 0.0f) {
+  ConfigEntryBuilder builder_(_fbb);
+  builder_.add_value(value);
+  builder_.add_flat(flat);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ConfigEntry> CreateConfigEntryDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *flat = nullptr,
+    float value = 0.0f) {
+  auto flat__ = flat ? _fbb.CreateString(flat) : 0;
+  return cyberpunk_rp::protocol::CreateConfigEntry(
+      _fbb,
+      flat__,
+      value);
+}
+
+struct ConfigSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ConfigSyncBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ENTRIES = 4
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ConfigEntry>> *entries() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ConfigEntry>> *>(VT_ENTRIES);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_ENTRIES) &&
+           verifier.VerifyVector(entries()) &&
+           verifier.VerifyVectorOfTables(entries()) &&
+           verifier.EndTable();
+  }
+};
+
+struct ConfigSyncBuilder {
+  typedef ConfigSync Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_entries(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ConfigEntry>>> entries) {
+    fbb_.AddOffset(ConfigSync::VT_ENTRIES, entries);
+  }
+  explicit ConfigSyncBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ConfigSync> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ConfigSync>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ConfigSync> CreateConfigSync(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ConfigEntry>>> entries = 0) {
+  ConfigSyncBuilder builder_(_fbb);
+  builder_.add_entries(entries);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ConfigSync> CreateConfigSyncDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ConfigEntry>> *entries = nullptr) {
+  auto entries__ = entries ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::ConfigEntry>>(*entries) : 0;
+  return cyberpunk_rp::protocol::CreateConfigSync(
+      _fbb,
+      entries__);
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3474,6 +3604,9 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::AppearanceSync *msg_as_AppearanceSync() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_AppearanceSync ? static_cast<const cyberpunk_rp::protocol::AppearanceSync *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::ConfigSync *msg_as_ConfigSync() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_ConfigSync ? static_cast<const cyberpunk_rp::protocol::ConfigSync *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -3542,6 +3675,10 @@ template<> inline const cyberpunk_rp::protocol::ElevatorStateMsg *ServerEnvelope
 
 template<> inline const cyberpunk_rp::protocol::AppearanceSync *ServerEnvelope::msg_as<cyberpunk_rp::protocol::AppearanceSync>() const {
   return msg_as_AppearanceSync();
+}
+
+template<> inline const cyberpunk_rp::protocol::ConfigSync *ServerEnvelope::msg_as<cyberpunk_rp::protocol::ConfigSync>() const {
+  return msg_as_ConfigSync();
 }
 
 struct ServerEnvelopeBuilder {
@@ -3722,6 +3859,10 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_AppearanceSync: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::AppearanceSync *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_ConfigSync: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ConfigSync *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

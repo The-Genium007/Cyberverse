@@ -25,7 +25,7 @@
 // Protocole TesseraSynth (FlatBuffers) — forward decl pour ne pas tirer l'en-tête généré ici.
 namespace cyberpunk_rp::protocol {
     struct Snapshot; struct PositionCorrection; struct ShardAssignment;
-    struct WorldState; struct Kicked; struct AppearanceSync;
+    struct WorldState; struct Kicked; struct AppearanceSync; struct ConfigSync;
 }
 
 // Identité visuelle d'une entité réseau, telle que le SERVEUR la décide (`AppearanceSync`).
@@ -146,6 +146,9 @@ protected:
     // Météo décidée par le serveur, portée par le même message que l'heure. Séparée parce qu'elle
     // n'a pas la même cadence utile : l'heure se resynchronise sur seuil, la météo sur changement.
     void ApplyServerWeather(const cyberpunk_rp::protocol::WorldState* state);
+    // Valeurs de jeu imposées par le serveur (prix, dégâts, portées…). Écrites dans TweakDB en
+    // cours de partie — mesuré (F-PLF-018), pas supposé.
+    void HandleConfigSync(const cyberpunk_rp::protocol::ConfigSync* sync);
     // Refus/expulsion serveur. Sans ce câblage, un client rejeté (serveur plein, token invalide,
     // ban, version de protocole) reste coupé SANS AUCUNE explication — le motif était envoyé
     // depuis le début et jeté par le `default:` de PollIncomingMessages.

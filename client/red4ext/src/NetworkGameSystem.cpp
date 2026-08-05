@@ -371,6 +371,9 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_AppearanceSync:
                     HandleAppearanceSync(env->msg_as_AppearanceSync());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_ConfigSync:
+                    HandleConfigSync(env->msg_as_ConfigSync());
+                    break;
                 default:
                     // Reste non câblé : CommandResult, PermissionSync, PlayerEvent, CharacterList,
                     // CharacterResult, QueueStatus, InteractionOpen, InteractionResult,
@@ -812,6 +815,47 @@ void NetworkGameSystem::HandleKicked(const cyberpunk_rp::protocol::Kicked* kicke
         MessageBoxA(nullptr, body.c_str(), "Tessera - connexion refusee",
             MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
     }).detach();
+}
+
+
+void NetworkGameSystem::HandleConfigSync(const cyberpunk_rp::protocol::ConfigSync* sync)
+{
+    if (sync == nullptr || sync->entries() == nullptr)
+    {
+        return;
+    }
+
+    // L'autorite de configuration : le serveur decide ce que valent les choses (prix, degats,
+    // portees), et le jeu l'applique EN COURS DE PARTIE — sans redemarrage ni republication de
+    // modset. Mesure a l'appui : F-PLF-018, `Price.GoodQualityDrink.value` 4 -> 1337 sur une
+    // session deja chargee, avec controle positif.
+    uint32_t applied = 0;
+    uint32_t refused = 0;
+    for (const auto* e : *sync->entries())
+    {
+        if (e == nullptr || e->flat() == nullptr || e->flat()->size() == 0)
+        {
+            continue;
+        }
+        Red::CString flat(e->flat()->c_str());
+        bool ok = false;
+        if (Red::CallVirtual(this, "ApplyServerConfig", ok, flat, e->value()) && ok)
+        {
+            ++applied;
+        }
+        else
+        {
+            // Un chemin refuse se VOIT. Le serveur ne peut pas verifier qu'un chemin designe un
+            // champ et non un record (les deux portent des points, la profondeur TweakDB n'est
+            // pas fixe) : c'est ici, avec la base sous la main, que ca se tranche. Sans ce log,
+            // une faute de frappe de l'operateur serait parfaitement muette.
+            ++refused;
+            SDK->logger->WarnF(PLUGIN, "ConfigSync : « %s » refuse par TweakDB",
+                e->flat()->c_str());
+        }
+    }
+    SDK->logger->InfoF(PLUGIN, "ConfigSync : %u valeur(s) appliquee(s), %u refusee(s)",
+        applied, refused);
 }
 
 void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::AppearanceSync* sync)
