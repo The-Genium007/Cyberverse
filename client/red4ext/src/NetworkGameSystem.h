@@ -93,11 +93,10 @@ private:
     std::map<uint64_t, uint64_t> m_appliedAppearance;
 
     // --- Horloge monde serveur (`WorldState`) ---
-    // Dernière heure appliquée au moteur, en minutes depuis minuit ; -1 = jamais appliquée.
-    // Le serveur diffuse WorldState périodiquement : ré-appliquer à chaque message ferait sauter
-    // l'horloge locale en permanence (le moteur fait avancer le temps entre deux messages). On
-    // n'écrit donc que si l'écart dépasse un seuil — le serveur reste la référence, sans saccade.
-    int32_t m_lastAppliedWorldMinutes = -1;
+    // Aucun état ici : le seuil de resynchronisation vit côté redscript, seul endroit d'où l'on
+    // peut lire l'horloge du MOTEUR — le seul référent qui ait du sens. Une version antérieure
+    // gardait ici la dernière heure SERVEUR appliquée et comparait à elle : elle ne gardait donc
+    // rien (le serveur avance de 2 min entre deux diffusions, le seuil valait 2 min).
     /// Dernier preset météo réellement demandé au moteur. Vide = aucun. Sert à ne re-demander que
     /// sur changement : le serveur diffuse `WorldState` périodiquement, et redemander le même
     /// preset relancerait une transition de 3 s en boucle — un ciel qui ne se stabilise jamais.

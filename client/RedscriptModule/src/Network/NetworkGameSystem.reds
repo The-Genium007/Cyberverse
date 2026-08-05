@@ -197,11 +197,44 @@ public native class NetworkGameSystem extends IGameSystem {
     //
     // `SetGameTimeByHMS(Int32, Int32, Int32, opt CName)` — signature lue dans les scripts
     // décompilés CDPR (scripts/core/systems/timeSystem.script:15).
-    public func ApplyServerTime(hours: Int32, minutes: Int32) -> Bool {
+    // `toleranceMinutes` : écart au-delà duquel on RÉÉCRIT l'heure du moteur. Comparé à l'heure
+    // LOCALE courante, pas au dernier ordre serveur.
+    //
+    // ⚠️ La première version comparait au dernier temps SERVEUR appliqué. Elle ne gardait donc
+    // rien : le serveur avance de 2 minutes de jeu entre deux diffusions et le seuil valait 2
+    // minutes — la condition n'était jamais vraie, et l'heure était réécrite à CHAQUE message.
+    // Sans effet visible, mais un garde qui ne garde rien est pire qu'aucun garde : il fait croire
+    // qu'un problème est traité.
+    //
+    // Le bon référent est l'horloge du moteur, parce que c'est elle qui dérive. Tant qu'elle suit
+    // le serveur d'assez près, on ne touche à rien et le cycle jour/nuit reste fluide ; dès
+    // qu'elle décroche, on corrige d'un coup.
+    public func ApplyServerTime(hours: Int32, minutes: Int32, toleranceMinutes: Int32) -> Bool {
         let ts = GameInstance.GetTimeSystem(GetGameInstance());
         if !IsDefined(ts) {
             return false;
         }
+
+        let now = ts.GetGameTime();
+        let localMinutes = GameTime.Hours(now) * 60 + GameTime.Minutes(now);
+        let serverMinutes = hours * 60 + minutes;
+
+        // Distance CIRCULAIRE sur 24 h : 23h59 → 00h01 vaut 2 minutes, pas 1438. Sans ça, chaque
+        // passage de minuit déclencherait une correction inutile.
+        let delta = serverMinutes - localMinutes;
+        if delta > 720 {
+            delta -= 1440;
+        }
+        if delta < -720 {
+            delta += 1440;
+        }
+        if delta < 0 {
+            delta = -delta;
+        }
+        if delta < toleranceMinutes {
+            return false;
+        }
+
         ts.SetGameTimeByHMS(hours, minutes, 0);
         return true;
     }

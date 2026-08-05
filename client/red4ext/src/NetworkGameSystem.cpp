@@ -720,45 +720,30 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
 
     // L'heure du monde est une ressource GLOBALE, pas par-shard (world_clock.rs) : tous les
     // joueurs voient la meme heure ou qu'ils soient. C'est le serveur qui la decide.
-    const int32_t serverMinutes =
-        static_cast<int32_t>(state->hour()) * 60 + static_cast<int32_t>(state->minute());
-
-    // Le moteur fait avancer le temps localement entre deux WorldState. Reecrire l'heure a chaque
-    // message la ferait donc sauter en arriere en permanence (visible : le cycle jour/nuit
-    // saccade). On ne corrige que sur ecart reel — le serveur reste la reference, le moteur
-    // interpole entre deux corrections. Seuil en minutes de JEU.
-    static constexpr int32_t kResyncThresholdMinutes = 2;
-    if (m_lastAppliedWorldMinutes >= 0)
-    {
-        int32_t delta = serverMinutes - m_lastAppliedWorldMinutes;
-        // Distance circulaire sur 24 h : 23h59 -> 00h01 vaut 2 minutes, pas 1438.
-        if (delta > 720) { delta -= 1440; }
-        if (delta < -720) { delta += 1440; }
-        if (delta < 0) { delta = -delta; }
-        if (delta < kResyncThresholdMinutes)
-        {
-            return;
-        }
-    }
-
+    //
+    // Le SEUIL de resynchronisation vit cote redscript, parce que c'est la qu'on peut lire
+    // l'horloge du moteur — le seul referent qui ait du sens. Une version anterieure comparait au
+    // dernier ordre SERVEUR appliqué et ne gardait donc rien : le serveur avance de 2 minutes
+    // entre deux diffusions et le seuil valait 2 minutes, la condition n'etait jamais vraie.
+    //
+    // 3 minutes de jeu : assez large pour que l'horloge du moteur suive sans etre corrigee en
+    // permanence, assez serre pour qu'aucun joueur ne voie un decalage credible avec les autres.
     const int32_t h = static_cast<int32_t>(state->hour());
     const int32_t m = static_cast<int32_t>(state->minute());
+    const int32_t tolerance = 3;
 
-    // Passe par REDSCRIPT, pas par `Red::CallStatic("ScriptGameInstance", "GetTimeSystem", …)`.
-    // Cette dernière forme ne résolvait JAMAIS le natif — « TimeSystem introuvable » à chaque
-    // message, mesuré en jeu le 2026-08-04, pendant que la météo (elle, passée par redscript)
-    // marchait du premier coup. Même besoin, deux voies, une seule qui résout : on garde celle
-    // dont l'effet est prouvé.
     bool applied = false;
-    if (!Red::CallVirtual(this, "ApplyServerTime", applied, h, m) || !applied)
+    if (!Red::CallVirtual(this, "ApplyServerTime", applied, h, m, tolerance))
     {
-        SDK->logger->Warn(PLUGIN, "WorldState : heure serveur non appliquee (TimeSystem absent ?)");
+        SDK->logger->Warn(PLUGIN, "WorldState : ApplyServerTime introuvable (module redscript ?)");
         return;
     }
-
-    m_lastAppliedWorldMinutes = serverMinutes;
-    SDK->logger->InfoF(PLUGIN, "Heure serveur appliquee : %02d:%02d", h, m);
-
+    // `false` = l'heure locale etait deja assez proche, rien a corriger. Ce n'est pas une erreur,
+    // et le journaliser a chaque message noierait le log.
+    if (applied)
+    {
+        SDK->logger->InfoF(PLUGIN, "Heure serveur appliquee : %02d:%02d", h, m);
+    }
 }
 
 void NetworkGameSystem::ApplyServerWeather(const cyberpunk_rp::protocol::WorldState* state)
