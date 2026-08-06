@@ -294,6 +294,28 @@ bool NetworkGameSystem::EnqueueMessage(uint8_t channel_id, T content)
 }
 
 
+namespace
+{
+/// Derniere destination REELLEMENT commandee a chaque entite reseau.
+///
+/// ⚠️ HORS DE LA CLASSE, et ce n'est pas un detail de style. `NetworkGameSystem` est alloue par le
+/// moteur (`RTTI_IMPL_ALLOCATOR`) : lui AJOUTER UN MEMBRE corrompt la memoire voisine. Mesure du
+/// 2026-08-06 — avec un membre de plus, `m_spawnFailureCount` (declare `= 0`, et dont le seul
+/// chemin d'incrementation n'avait jamais ete execute) affichait 2 190 697 836 704, et le jeu
+/// tombait juste apres la creation de la PREMIERE entite. L'ancienne DLL, elle, encaissait le
+/// meme serveur sans broncher : 39 PNJ, session stable.
+///
+/// Trois flottants nus, pas un `RED4ext::Vector4` : ce dernier est `__declspec(align(0x10))` et
+/// n'a rien a faire dans les noeuds d'une `std::map`.
+struct CibleCommandee
+{
+    float x;
+    float y;
+    float z;
+};
+std::map<uint64_t, CibleCommandee> g_dernieresCibles;
+} // namespace
+
 void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
                                       RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion,
                                       const RED4ext::Vector4* moveTarget)
@@ -364,12 +386,12 @@ void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID
                 // donc le pantin est a moins de 8 m de la verite serveur. La correction de derive
                 // reste assuree par la branche du dessous des que cet ecart se creuse.
                 static constexpr float kRetargetThresholdMeters = 1.0f;
-                const auto known = m_lastCommandedTarget.find(networkId);
-                if (known != m_lastCommandedTarget.end())
+                const auto known = g_dernieresCibles.find(networkId);
+                if (known != g_dernieresCibles.end())
                 {
-                    const float tx = destination.X - known->second.X;
-                    const float ty = destination.Y - known->second.Y;
-                    const float tz = destination.Z - known->second.Z;
+                    const float tx = destination.X - known->second.x;
+                    const float ty = destination.Y - known->second.y;
+                    const float tz = destination.Z - known->second.z;
                     if (std::sqrt(tx * tx + ty * ty + tz * tz) < kRetargetThresholdMeters)
                     {
                         return; // meme destination : le pantin y va deja, on le laisse marcher
@@ -381,7 +403,8 @@ void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID
                                      static_cast<int32_t>(locomotion))
                     && moving)
                 {
-                    m_lastCommandedTarget[networkId] = destination;
+                    g_dernieresCibles[networkId] =
+                        CibleCommandee{ destination.X, destination.Y, destination.Z };
                     return; // le moteur joue le trajet
                 }
                 // Echec de la commande (entite pas encore prete, pas un ScriptedPuppet…) : on
@@ -727,7 +750,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             m_appliedAppearance.erase(it->first);
             // Meme raison que ci-dessus : la destination commandee decrivait une entite de jeu qui
             // vient d'etre detruite. La garder ferait sauter le premier ordre de marche au respawn.
-            m_lastCommandedTarget.erase(it->first);
+            g_dernieresCibles.erase(it->first);
             it = m_networkedEntitiesLookup.erase(it);
         }
         else
