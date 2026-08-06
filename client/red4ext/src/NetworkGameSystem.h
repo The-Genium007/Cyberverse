@@ -48,6 +48,14 @@ private:
     Red::Handle<Red::ink::ISystemRequestsHandler> m_systemRequestsHandler;
     bool m_gameRestored = false;
     std::map<uint64_t, RED4ext::ent::EntityID> m_networkedEntitiesLookup;
+    /// Derniere destination REELLEMENT commandee a chaque entite reseau.
+    ///
+    /// Sert a ne PAS rejouer `AIMoveToCommand` a chaque tick. Sans ce garde, viser une destination
+    /// a plusieurs metres revient a lancer un vrai cheminement 20 fois par seconde et par PNJ :
+    /// a 156 PNJ, le moteur s'est effondre (jeu tombe le 2026-08-06, quelques minutes apres le
+    /// deploiement). Une commande de marche vers un point fixe n'a aucune raison d'etre reemise
+    /// tant que ce point n'a pas bouge.
+    std::map<uint64_t, RED4ext::Vector4> m_lastCommandedTarget;
     std::map<RED4ext::ent::EntityID, InterpolationData> m_interpolationData;
     std::map<RED4ext::ent::EntityID, RED4ext::Handle<RED4ext::AICommand>> m_LastTeleportCommand;
     float m_TimeSinceLastPlayerPositionSync;
@@ -125,8 +133,9 @@ private:
     // aussi la règle : la commande de marche est de l'animation, l'autorité reste au Snapshot.
     /// `moveTarget` : destination du PNJ (plusieurs metres), pas sa position du tick suivant.
     /// Nul = inconnue, on retombe sur `worldPosition`. Voir le commentaire dans le .cpp.
-    void SetEntityPose(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw,
-                       uint8_t locomotion, const RED4ext::Vector4* moveTarget = nullptr);
+    void SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
+                       RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion,
+                       const RED4ext::Vector4* moveTarget = nullptr);
 
 protected:
     void PollIncomingMessages();

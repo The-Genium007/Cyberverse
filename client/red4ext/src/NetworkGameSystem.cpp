@@ -294,7 +294,7 @@ bool NetworkGameSystem::EnqueueMessage(uint8_t channel_id, T content)
 }
 
 
-void NetworkGameSystem::SetEntityPose(RED4ext::ent::EntityID entityId,
+void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
                                       RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion,
                                       const RED4ext::Vector4* moveTarget)
 {
@@ -347,11 +347,41 @@ void NetworkGameSystem::SetEntityPose(RED4ext::ent::EntityID entityId,
                 // Absent = serveur plus ancien, ou PNJ sans chemin : on retombe sur la position,
                 // c'est-a-dire le comportement d'avant ce champ.
                 const RED4ext::Vector4 destination = moveTarget ? *moveTarget : worldPosition;
+
+                // ── NE PAS REJOUER UN ORDRE INCHANGE ────────────────────────────────────
+                //
+                // Viser une vraie destination transforme `AIMoveToCommand` en cheminement REEL.
+                // La reemettre a chaque tick revient donc a relancer 20 cheminements par seconde
+                // et par PNJ. A 156 PNJ, le moteur s'est effondre — le jeu est tombe quelques
+                // minutes apres le deploiement du 2026-08-06.
+                //
+                // Une commande de marche vers un point fixe n'a aucune raison d'etre reemise tant
+                // que ce point n'a pas bouge : le pantin est deja en route. On ne la rejoue donc
+                // que si la destination a change de plus d'un metre — soit une fois par point de
+                // cheminement au lieu de vingt fois par seconde.
+                //
+                // Sortir ici sans rien faire est SUR : `drift` a deja ete verifie juste au-dessus,
+                // donc le pantin est a moins de 8 m de la verite serveur. La correction de derive
+                // reste assuree par la branche du dessous des que cet ecart se creuse.
+                static constexpr float kRetargetThresholdMeters = 1.0f;
+                const auto known = m_lastCommandedTarget.find(networkId);
+                if (known != m_lastCommandedTarget.end())
+                {
+                    const float tx = destination.X - known->second.X;
+                    const float ty = destination.Y - known->second.Y;
+                    const float tz = destination.Z - known->second.Z;
+                    if (std::sqrt(tx * tx + ty * ty + tz * tz) < kRetargetThresholdMeters)
+                    {
+                        return; // meme destination : le pantin y va deja, on le laisse marcher
+                    }
+                }
+
                 bool moving = false;
                 if (Red::CallVirtual(this, "MoveNetworkEntityTo", moving, entityId, destination,
                                      static_cast<int32_t>(locomotion))
                     && moving)
                 {
+                    m_lastCommandedTarget[networkId] = destination;
                     return; // le moteur joue le trajet
                 }
                 // Echec de la commande (entite pas encore prete, pas un ScriptedPuppet…) : on
@@ -628,7 +658,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 target = { DequantPos(moveTarget->x()), DequantPos(moveTarget->y()),
                            DequantPos(moveTarget->z()), 1.0f };
             }
-            SetEntityPose(existing->second, worldPosition, yaw, locomotion,
+            SetEntityPose(id, existing->second, worldPosition, yaw, locomotion,
                           hasTarget ? &target : nullptr);
         }
     };
@@ -695,6 +725,9 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // `m_appliedAppearance` decrit une entite de jeu qui vient d'etre detruite : le
             // conserver ferait sauter l'application sur la NOUVELLE entite au respawn.
             m_appliedAppearance.erase(it->first);
+            // Meme raison que ci-dessus : la destination commandee decrivait une entite de jeu qui
+            // vient d'etre detruite. La garder ferait sauter le premier ordre de marche au respawn.
+            m_lastCommandedTarget.erase(it->first);
             it = m_networkedEntitiesLookup.erase(it);
         }
         else
