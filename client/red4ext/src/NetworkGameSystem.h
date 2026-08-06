@@ -123,8 +123,10 @@ private:
     // Placement HYBRIDE : marche animée quand l'entité bouge et que la dérive est faible,
     // téléportation de correction sinon. Le mécanisme vient de F-PNJ-082/F-PLY-007, qui posent
     // aussi la règle : la commande de marche est de l'animation, l'autorité reste au Snapshot.
+    /// `moveTarget` : destination du PNJ (plusieurs metres), pas sa position du tick suivant.
+    /// Nul = inconnue, on retombe sur `worldPosition`. Voir le commentaire dans le .cpp.
     void SetEntityPose(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw,
-                       uint8_t locomotion);
+                       uint8_t locomotion, const RED4ext::Vector4* moveTarget = nullptr);
 
 protected:
     void PollIncomingMessages();

@@ -295,7 +295,8 @@ bool NetworkGameSystem::EnqueueMessage(uint8_t channel_id, T content)
 
 
 void NetworkGameSystem::SetEntityPose(RED4ext::ent::EntityID entityId,
-                                      RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion)
+                                      RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion,
+                                      const RED4ext::Vector4* moveTarget)
 {
     // Modele HYBRIDE, prescrit par la mesure et non choisi au jugé.
     //
@@ -327,8 +328,27 @@ void NetworkGameSystem::SetEntityPose(RED4ext::ent::EntityID entityId,
 
             if (drift < kCorrectionDistanceMeters)
             {
+                // ── VISER LA DESTINATION, PAS LA POSITION ───────────────────────────────
+                //
+                // `AIMoveToCommand` porte `finishWhenDestinationReached`. A 20 Hz, la position
+                // serveur n'est en avant que de la distance parcourue en UN tick : 15 cm a 3 m/s,
+                // 5 cm a 1 m/s. Le pantin l'atteint instantanement, la commande se termine, et la
+                // suivante arrive avant qu'une marche ait pu s'amorcer — il fremit sur place.
+                //
+                // Mesure du 2026-08-06 : « ils trottinent » a 3 m/s, « ils marchent bien » a 1,4,
+                // « ils sont statiques » a 1,0. Ralentir RAPPROCHAIT la cible ; la vitesse n'etait
+                // pas la cause, elle etait le seul parametre qui la masquait.
+                //
+                // `move_target` (protocol.fbs) porte le point de cheminement courant, a plusieurs
+                // metres. Le pantin marche alors en continu a l'allure du MOTEUR, et
+                // `worldPosition` reprend son role unique : l'autorite et la correction de derive
+                // (le calcul de `drift` ci-dessus, inchange).
+                //
+                // Absent = serveur plus ancien, ou PNJ sans chemin : on retombe sur la position,
+                // c'est-a-dire le comportement d'avant ce champ.
+                const RED4ext::Vector4 destination = moveTarget ? *moveTarget : worldPosition;
                 bool moving = false;
-                if (Red::CallVirtual(this, "MoveNetworkEntityTo", moving, entityId, worldPosition,
+                if (Red::CallVirtual(this, "MoveNetworkEntityTo", moving, entityId, destination,
                                      static_cast<int32_t>(locomotion))
                     && moving)
                 {
@@ -576,7 +596,8 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     // repositionnement sinon. Factorise pour que les trois tableaux ne divergent pas dans leur
     // traitement — c'est exactement ce genre de duplication qui laisse un tableau en arriere.
     const auto applyPose = [this, &present](uint64_t id, const cyberpunk_rp::protocol::QVec3* pos,
-                                            uint16_t quantizedYaw, uint8_t locomotion)
+                                            uint16_t quantizedYaw, uint8_t locomotion,
+                                            const cyberpunk_rp::protocol::QVec3* moveTarget = nullptr)
     {
         if (pos == nullptr)
         {
@@ -597,7 +618,18 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         }
         else
         {
-            SetEntityPose(existing->second, worldPosition, yaw, locomotion);
+            // Destination reelle du PNJ (a plusieurs metres), quand le serveur la connait. Voir
+            // SetEntityPose : sans elle le pantin recoit l'ordre d'avancer de 5 cm cinquante fois
+            // par seconde et fremit sur place au lieu de marcher.
+            RED4ext::Vector4 target{};
+            const bool hasTarget = moveTarget != nullptr;
+            if (hasTarget)
+            {
+                target = { DequantPos(moveTarget->x()), DequantPos(moveTarget->y()),
+                           DequantPos(moveTarget->z()), 1.0f };
+            }
+            SetEntityPose(existing->second, worldPosition, yaw, locomotion,
+                          hasTarget ? &target : nullptr);
         }
     };
 
@@ -625,7 +657,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         {
             if (ns != nullptr)
             {
-                applyPose(ns->id(), ns->position(), ns->yaw(), ns->locomotion());
+                applyPose(ns->id(), ns->position(), ns->yaw(), ns->locomotion(), ns->move_target());
             }
         }
     }

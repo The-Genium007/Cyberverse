@@ -878,7 +878,8 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_SUSTAINED = 18,
     VT_BEHAVIOR = 20,
     VT_SPACE_ID = 22,
-    VT_TARGET = 24
+    VT_TARGET = 24,
+    VT_MOVE_TARGET = 26
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -913,6 +914,9 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t target() const {
     return GetField<uint64_t>(VT_TARGET, 0);
   }
+  const cyberpunk_rp::protocol::QVec3 *move_target() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_MOVE_TARGET);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -927,6 +931,7 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_BEHAVIOR, 1) &&
            VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
            VerifyField<uint64_t>(verifier, VT_TARGET, 8) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_MOVE_TARGET, 4) &&
            verifier.EndTable();
   }
 };
@@ -968,6 +973,9 @@ struct NpcStateBuilder {
   void add_target(uint64_t target) {
     fbb_.AddElement<uint64_t>(NpcState::VT_TARGET, target, 0);
   }
+  void add_move_target(const cyberpunk_rp::protocol::QVec3 *move_target) {
+    fbb_.AddStruct(NpcState::VT_MOVE_TARGET, move_target);
+  }
   explicit NpcStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -991,10 +999,12 @@ inline ::flatbuffers::Offset<NpcState> CreateNpcState(
     uint32_t sustained = 0,
     uint8_t behavior = 0,
     uint32_t space_id = 0,
-    uint64_t target = 0) {
+    uint64_t target = 0,
+    const cyberpunk_rp::protocol::QVec3 *move_target = nullptr) {
   NpcStateBuilder builder_(_fbb);
   builder_.add_target(target);
   builder_.add_id(id);
+  builder_.add_move_target(move_target);
   builder_.add_space_id(space_id);
   builder_.add_sustained(sustained);
   builder_.add_position(position);
