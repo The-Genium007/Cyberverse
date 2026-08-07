@@ -33,7 +33,8 @@ module Cyberverse.Network.Managers
 // fichier vit dans le module réseau par commodité de déploiement ; sa vraie place est le levier
 // `police` de `tessera-desossage`, qui porte déjà une configuration pour ça.
 //
-// PIN IN-GAME : l'effet se vérifie en frappant un PNJ et en regardant les étoiles.
+// ✅ MESURÉ EN JEU le 2026-08-07 (F-PNJ-114) : agression d'un PNJ, aucune étoile. Jugement de
+// Lucas : « c'est parfait, on garde ce comportement ». Ne pas rouvrir sans une raison de jeu.
 
 @wrapMethod(PlayerPuppet)
 protected cb func OnGameAttached() -> Bool {
