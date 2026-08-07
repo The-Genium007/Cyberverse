@@ -366,6 +366,13 @@ constexpr auto kIntervalleStimMin = std::chrono::milliseconds(250);
 /// ponytail: jamais purge — un set qui grossit avec le nombre de promotions de la session.
 /// A borner si une session longue le montre.
 std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
+
+/// Entites reseau deja mises a l'etat MORT chez nous.
+///
+/// Le comportement voyage dans CHAQUE snapshot : sans memoire, on rejouerait `Kill` vingt fois par
+/// seconde sur le meme cadavre. Le set retient ce qui est deja fait.
+std::set<uint64_t> g_cadavresAppliques;
+constexpr uint8_t kComportementATerre = 5;
 } // namespace
 
 void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
@@ -766,6 +773,20 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             if (ns != nullptr)
             {
                 applyPose(ns->id(), ns->position(), ns->yaw(), ns->locomotion(), ns->move_target());
+                // Etat de MORT, une seule fois par entite. Le serveur l'annonce dans `behavior`
+                // (`ATerre`), champ qui existait deja sur le fil et que le client ignorait.
+                if (ns->behavior() == kComportementATerre && !g_cadavresAppliques.contains(ns->id()))
+                {
+                    const auto entite = m_networkedEntitiesLookup.find(ns->id());
+                    if (entite != m_networkedEntitiesLookup.end())
+                    {
+                        bool ok = false;
+                        if (Red::CallVirtual(this, "TesseraRendreMort", ok, entite->second) && ok)
+                        {
+                            g_cadavresAppliques.insert(ns->id());
+                        }
+                    }
+                }
             }
         }
     }
@@ -1038,7 +1059,7 @@ void NetworkGameSystem::HandleConfigSync(const cyberpunk_rp::protocol::ConfigSyn
 }
 
 void NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y,
-                                             float z, float yaw)
+                                             float z, float yaw, bool mort)
 {
     if (m_pInterface == nullptr || record == 0)
     {
@@ -1056,13 +1077,13 @@ void NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence
         return;
     }
 
-    SDK->logger->InfoF(PLUGIN, "Promotion demandee : record %llu apparence %llu a (%.1f, %.1f, %.1f)",
-        record, apparence, x, y, z);
+    SDK->logger->InfoF(PLUGIN, "Promotion demandee : record %llu apparence %llu a (%.1f, %.1f, %.1f)%s",
+        record, apparence, x, y, z, mort ? " [MORT]" : "");
 
     flatbuffers::FlatBufferBuilder builder;
     const cyberpunk_rp::protocol::QVec3 position(QuantPos(x), QuantPos(y), QuantPos(z));
     const auto req = cyberpunk_rp::protocol::CreatePromotionRequest(
-        builder, record, apparence, &position, QuantYaw(yaw));
+        builder, record, apparence, &position, QuantYaw(yaw), mort);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_PromotionRequest, req.Union());
     builder.Finish(env);

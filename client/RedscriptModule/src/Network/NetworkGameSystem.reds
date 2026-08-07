@@ -24,7 +24,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // Demande au serveur de prendre un figurant sous son autorité. On envoie de quoi le
     // REFABRIQUER (record, apparence, position), pas un identifiant : le pantin n'existe que sur
     // cette machine — ADR 0022.
-    public native func Tessera_DemanderPromotion(record: Uint64, apparence: CName, x: Float, y: Float, z: Float, yaw: Float) -> Void;
+    public native func Tessera_DemanderPromotion(record: Uint64, apparence: CName, x: Float, y: Float, z: Float, yaw: Float, mort: Bool) -> Void;
 
     // Autorité serveur (TesseraSynth) — reflètent le dernier ShardAssignment reçu + le nombre de
     // puppets distants suivis. Consommés par le HUD moniteur de cohérence via des wrappers

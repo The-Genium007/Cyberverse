@@ -146,7 +146,7 @@ protected:
     // Demande de prise d'autorite sur un figurant local. Porte de quoi le REFABRIQUER, pas un
     // identifiant : voir `PromotionRequest` dans protocol.fbs.
     void SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y, float z,
-                              float yaw);
+                              float yaw, bool mort);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
@@ -281,9 +281,9 @@ public:
     // machine, les autres joueurs ont d'autres passants au meme endroit. Voir `PromotionRequest`
     // dans protocol.fbs.
     void Tessera_DemanderPromotion(uint64_t record, RED4ext::CName apparence, float x, float y,
-                                   float z, float yaw)
+                                   float z, float yaw, bool mort)
     {
-        SendPromotionRequest(record, apparence.hash, x, y, z, yaw);
+        SendPromotionRequest(record, apparence.hash, x, y, z, yaw, mort);
     }
 
     /// Called from the plugin load and unload events

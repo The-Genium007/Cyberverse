@@ -3541,7 +3541,8 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_RECORD = 4,
     VT_APPEARANCE = 6,
     VT_POSITION = 8,
-    VT_YAW = 10
+    VT_YAW = 10,
+    VT_MORT = 12
   };
   uint64_t record() const {
     return GetField<uint64_t>(VT_RECORD, 0);
@@ -3555,6 +3556,9 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint16_t yaw() const {
     return GetField<uint16_t>(VT_YAW, 0);
   }
+  bool mort() const {
+    return GetField<uint8_t>(VT_MORT, 0) != 0;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -3562,6 +3566,7 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
            VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
            VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
+           VerifyField<uint8_t>(verifier, VT_MORT, 1) &&
            verifier.EndTable();
   }
 };
@@ -3582,6 +3587,9 @@ struct PromotionRequestBuilder {
   void add_yaw(uint16_t yaw) {
     fbb_.AddElement<uint16_t>(PromotionRequest::VT_YAW, yaw, 0);
   }
+  void add_mort(bool mort) {
+    fbb_.AddElement<uint8_t>(PromotionRequest::VT_MORT, static_cast<uint8_t>(mort), 0);
+  }
   explicit PromotionRequestBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -3598,12 +3606,14 @@ inline ::flatbuffers::Offset<PromotionRequest> CreatePromotionRequest(
     uint64_t record = 0,
     uint64_t appearance = 0,
     const cyberpunk_rp::protocol::QVec3 *position = nullptr,
-    uint16_t yaw = 0) {
+    uint16_t yaw = 0,
+    bool mort = false) {
   PromotionRequestBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_record(record);
   builder_.add_position(position);
   builder_.add_yaw(yaw);
+  builder_.add_mort(mort);
   return builder_.Finish();
 }
 
