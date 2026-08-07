@@ -207,18 +207,43 @@ public:
     }
 
     // Remonte un stimulus au serveur depuis redscript. Point d'entree UNIQUE de l'observation :
-    // quel que soit l'entonnoir qui detecte l'evenement (tir, visee, dialogue — l'entonnoir du tir
-    // reste a localiser, cf. plan foule T2), il aboutit ici.
-    //
-    // Aucun appelant automatique aujourd'hui, DELIBEREMENT : les 67 types sont cables et testables,
-    // et chaque entonnoir se branchera dessus sans retoucher ni le fil ni le serveur (decision du
-    // 2026-08-07 — cabler large, activer etroit).
+    // l'entonnoir d'action est `StimBroadcasterComponent.TriggerSingleBroadcast` (F-PLY-029), ou
+    // aboutissent 83 sites d'appel du jeu.
     //
     // `nature` en Uint32 et non Uint8 : redscript n'a pas de type 8 bits, la conversion se fait au
     // franchissement du fil.
-    void Tessera_ReportStim(uint32_t nature, float radiusMetres, uint64_t target)
+    //
+    // `cible` est l'entite VISEE au moment de l'action, ou une EntityID nulle si le joueur ne vise
+    // rien.
+    //
+    // ⚠️ ELLE EST TRADUITE ICI, ET C'EST LE POINT ESSENTIEL. Un `EntityID` est attribue LOCALEMENT
+    // au spawn : le meme passant porte une valeur differente chez chaque joueur. L'envoyer tel quel
+    // ferait croire au serveur qu'il designe quelqu'un, alors qu'il ne designerait rien de partage —
+    // un mensonge silencieux sur le fil. On renvoie donc l'ID RESEAU, seule identite que le serveur
+    // et tous les clients partagent, et **0 quand la cible n'est pas une entite serveur**.
+    //
+    // Ce 0 n'est pas un echec a masquer : il dit exactement ou en est le modele de promotion. Un
+    // passant de la foule NATIVE n'a aucune identite partagee, et lui en donner une est la question
+    // ouverte de l'ADR 0022 (le hachage par place). Tant qu'elle n'est pas tranchee, seuls les
+    // avatars des joueurs et les PNJ spawnes par le serveur sont designables.
+    //
+    // Balayage lineaire de la table : elle compte les entites reseau EN VUE (quelques dizaines au
+    // plus), et l'appel est etrangle a 250 ms par (type, rayon).
+    void Tessera_ReportStim(uint32_t nature, float radiusMetres, RED4ext::ent::EntityID cible)
     {
-        SendStimReport(static_cast<uint8_t>(nature & 0xFF), radiusMetres, target);
+        uint64_t idReseau = 0;
+        if (cible.IsDefined())
+        {
+            for (const auto& paire : m_networkedEntitiesLookup)
+            {
+                if (paire.second == cible)
+                {
+                    idReseau = paire.first;
+                    break;
+                }
+            }
+        }
+        SendStimReport(static_cast<uint8_t>(nature & 0xFF), radiusMetres, idReseau);
     }
 
     /// Called from the plugin load and unload events

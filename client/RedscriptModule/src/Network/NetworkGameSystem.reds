@@ -11,7 +11,10 @@ public native class NetworkGameSystem extends IGameSystem {
     // `RTTI_METHOD(Tessera_ReportStim)` dans NetworkGameSystem.h — sans CETTE déclaration, l'appel
     // ne se résout pas et tout r6/scripts tombe, même si le C++ enregistre bien la méthode.
     // `nature` en Uint32 : redscript n'a pas de type 8 bits.
-    public native func Tessera_ReportStim(nature: Uint32, radius: Float, target: Uint64) -> Void;
+    // `target` est une EntityID LOCALE, pas un id réseau : le C++ fait la traduction, parce que lui
+    // seul tient la table `networkId → EntityID`. Il envoie 0 si la cible n'est pas une entité
+    // serveur — un passant de la foule native n'a aucune identité partagée (ADR 0022).
+    public native func Tessera_ReportStim(nature: Uint32, radius: Float, target: EntityID) -> Void;
 
     // Autorité serveur (TesseraSynth) — reflètent le dernier ShardAssignment reçu + le nombre de
     // puppets distants suivis. Consommés par le HUD moniteur de cohérence via des wrappers

@@ -53,10 +53,29 @@ public func TesseraRemonterStim(contextOwner: wref<GameObject>, gdStimType: game
     if !IsDefined(reseau) {
         return;
     }
-    // target = 0 : ce chemin ne désigne aucun pantin. La cible viendra de l'entonnoir de VISÉE
-    // (`TargetingSystem.GetLookAtObject`, F-PLY-028), qui reste à brancher — c'est elle qui
-    // alimentera la décision de promotion (ADR 0022).
-    reseau.Tessera_ReportStim(Cast<Uint32>(EnumInt(gdStimType)), radius, 0ul);
+    reseau.Tessera_ReportStim(Cast<Uint32>(EnumInt(gdStimType)), radius, TesseraCibleVisee(local));
+}
+
+// Sur QUOI le joueur agit, à l'instant où il agit.
+//
+// C'est une INTERROGATION, pas un hook : on demande au jeu ce que le joueur regarde. `TargetingSystem`
+// est natif (`importonly`) et répond directement à la question — rien à assembler, rien à deviner
+// (F-PLY-028).
+//
+// `withLOS = true` : sans le test de ligne de vue, on désignerait un pantin à travers un mur. Un
+// joueur qui tire en l'air ne doit désigner personne.
+//
+// ⚠️ Renvoie une `EntityID` LOCALE. Elle n'a de sens que sur cette machine — c'est le C++ qui la
+// traduit en identité réseau, et qui envoie 0 si la cible n'est pas une entité serveur. Ne jamais
+// la mettre telle quelle sur le fil.
+public func TesseraCibleVisee(local: ref<GameObject>) -> EntityID {
+    let visee = GameInstance.GetTargetingSystem(GetGameInstance()).GetLookAtObject(local, true, false);
+    // `EMPTY_ENTITY_ID()` et non `EntityID.None()` : cette dernière n'existe pas. L'API réelle est
+    // un `importonly struct` sans constructeur, plus une fonction globale (`entityID.script`).
+    if !IsDefined(visee) {
+        return EMPTY_ENTITY_ID();
+    }
+    return visee.GetEntityID();
 }
 
 // Le fil porte les 67 ; on en REMONTE une poignée. Ce n'est pas une contradiction, c'est la
