@@ -242,13 +242,28 @@ void NetworkGameSystem::ConnectionStatusChangedCallback(SteamNetConnectionStatus
 
     if (pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_Connected)
     {
+        // Nom affiche : `TESSERA_DISPLAY_NAME` s'il est pose, sinon le nom de session Windows.
+        //
+        // Pourquoi cette surcharge existe : sur un serveur PRIVE (`identity.public = false`), la
+        // cle de persistance du joueur EST son display_name (`resolve_join_key`, gateway.rs:494).
+        // Deux instances du jeu sur la MEME machine renvoient donc le meme nom, partagent le meme
+        // compte, et se disputent la meme position — ce qui rend tout test a deux clients
+        // impossible en local. Mesure du 2026-08-07 : deux instances tournent bien en parallele
+        // (aucun verrou d'instance unique), seul le nom bloquait.
+        //
+        // ⚠️ C'est un outil de TEST, pas une identite. Sur un serveur public la variable est sans
+        // effet : le `display_name` du client y est deja ignore au profit du `sub` du JWT verifie.
+        // Elle ne cree donc aucune voie d'usurpation nouvelle.
         char buf[255];
         DWORD buf_len = 255;
         GetUserNameA(buf, &buf_len);
+        const char* nomForce = std::getenv("TESSERA_DISPLAY_NAME");
+        const std::string nom = (nomForce != nullptr && nomForce[0] != '\0') ? nomForce : buf;
 
-        SDK->logger->Info(PLUGIN, "Socket connected, sending Join (TesseraSynth)");
+        SDK->logger->InfoF(PLUGIN, "Socket connected, sending Join (TesseraSynth) — nom « %s »%s",
+            nom.c_str(), nomForce != nullptr && nomForce[0] != '\0' ? " (force par TESSERA_DISPLAY_NAME)" : "");
         auto* system = Red::GetGameSystem<NetworkGameSystem>();
-        system->SendJoin(std::string(buf));
+        system->SendJoin(nom);
         // Notre serveur n'a pas d'ACK d'auth : connexion etablie = pret.
         system->FullyConnected = true;
     } else {
