@@ -325,7 +325,15 @@ std::map<uint64_t, CibleCommandee> g_dernieresCibles;
 ///
 /// 250 ms : une rafale devient ~4 messages/s au lieu de ~10, et deux coups de feu DISTINCTS restent
 /// distinguables. Valeur v1, jamais mesuree en charge reelle.
-std::map<uint8_t, std::chrono::steady_clock::time_point> g_derniersStims;
+///
+/// ⚠️ La cle est le couple (type, RAYON), pas le type seul — corrige apres mesure en jeu
+/// (F-PNJ-113). Un tir emet DEUX `Gunshot` dans la meme frame : la portee audio (30 m dehors) puis
+/// la portee visuelle (50 m). Keye sur le seul type, l'etranglement supprimait la seconde, et la
+/// scene vue par les autres joueurs aurait ete plus etroite que celle vue par le tireur — une
+/// perte d'information qu'aucune relecture n'avait revelee.
+///
+/// Une rafale d'arme automatique reste collapsee : ses tirs portent le meme rayon.
+std::map<std::pair<uint8_t, uint16_t>, std::chrono::steady_clock::time_point> g_derniersStims;
 constexpr auto kIntervalleStimMin = std::chrono::milliseconds(250);
 } // namespace
 
@@ -1056,21 +1064,26 @@ void NetworkGameSystem::SendStimReport(uint8_t nature, float radiusMetres, uint6
         return;
     }
 
-    // Etranglement PAR TYPE, pas global : un coup de feu ne doit pas faire taire un cri simultane.
+    // Decimetres : voir le commentaire de `StimReport` dans protocol.fbs. Borne basse a 0 pour ne
+    // pas replier un rayon negatif en un ushort enorme (un rayon negatif n'a pas de sens, mais un
+    // appelant redscript peut en produire un et le fil ne doit pas mentir).
+    //
+    // Calcule AVANT l'etranglement : c'est la valeur quantifiee, pas le flottant d'origine, qui
+    // sert de cle — sinon deux rayons qui se confondent sur le fil compteraient pour deux.
+    const float clamped = radiusMetres > 0.0f ? radiusMetres : 0.0f;
+    const auto decimetres = static_cast<uint16_t>(
+        clamped * 10.0f > 65535.0f ? 65535.0f : clamped * 10.0f);
+
+    // Etranglement par (TYPE, RAYON), pas global : un coup de feu ne doit faire taire ni un cri
+    // simultane, ni sa propre portee visuelle (F-PNJ-113).
+    const auto cle = std::make_pair(nature, decimetres);
     const auto maintenant = std::chrono::steady_clock::now();
-    const auto precedent = g_derniersStims.find(nature);
+    const auto precedent = g_derniersStims.find(cle);
     if (precedent != g_derniersStims.end() && maintenant - precedent->second < kIntervalleStimMin)
     {
         return;
     }
-    g_derniersStims[nature] = maintenant;
-
-    // Decimetres : voir le commentaire de `StimReport` dans protocol.fbs. Borne basse a 0 pour ne
-    // pas replier un rayon negatif en un ushort enorme (un rayon negatif n'a pas de sens, mais un
-    // appelant redscript peut en produire un et le fil ne doit pas mentir).
-    const float clamped = radiusMetres > 0.0f ? radiusMetres : 0.0f;
-    const auto decimetres = static_cast<uint16_t>(
-        clamped * 10.0f > 65535.0f ? 65535.0f : clamped * 10.0f);
+    g_derniersStims[cle] = maintenant;
 
     // Journalise CE QUI PART, pour que le silence du serveur soit interpretable : sans cette ligne,
     // « rien dans les logs serveur » ne distingue pas « le hook n'a pas tire » de « le message s'est
