@@ -16,6 +16,16 @@ public native class NetworkGameSystem extends IGameSystem {
     // serveur — un passant de la foule native n'a aucune identité partagée (ADR 0022).
     public native func Tessera_ReportStim(nature: Uint32, radius: Float, target: EntityID) -> Void;
 
+    // Cette entité est-elle déjà répliquée par le serveur ? Le redscript ne peut pas répondre :
+    // la table `networkId → EntityID` vit côté C++. C'est ce qui distingue un FIGURANT purement
+    // local d'une entité déjà sous autorité.
+    public native func Tessera_EstEntiteReseau(cible: EntityID) -> Bool;
+
+    // Demande au serveur de prendre un figurant sous son autorité. On envoie de quoi le
+    // REFABRIQUER (record, apparence, position), pas un identifiant : le pantin n'existe que sur
+    // cette machine — ADR 0022.
+    public native func Tessera_DemanderPromotion(record: Uint64, apparence: CName, x: Float, y: Float, z: Float, yaw: Float) -> Void;
+
     // Autorité serveur (TesseraSynth) — reflètent le dernier ShardAssignment reçu + le nombre de
     // puppets distants suivis. Consommés par le HUD moniteur de cohérence via des wrappers
     // @addMethod(PlayerPuppet) côté modset Tessera (Tessera_GetServerShard/Overlaps/VisiblePlayerCount).

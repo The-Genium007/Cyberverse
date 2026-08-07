@@ -22,6 +22,7 @@
 #include <zpp_bits.h>
 
 #include <chrono>  // etranglement des stimulus remontes au serveur (budget 40 msg/s du Gateway)
+#include <tuple>   // cle de deduplication des promotions (record + position arrondie)
 #include <cmath>   // std::lround/std::fmod (quantization du fil, gel palier 2 — cf. QuantPos/QuantYaw)
 #include <cstdlib> // std::getenv (token ZITADEL transmis par le launcher, cf. SendJoin)
 #include <set>     // set des ids presents dans un Snapshot + garde anti-spam de LogUnhandledServerMsg
@@ -350,6 +351,21 @@ std::map<uint64_t, CibleCommandee> g_dernieresCibles;
 /// Une rafale d'arme automatique reste collapsee : ses tirs portent le meme rayon.
 std::map<std::pair<uint8_t, uint16_t>, std::chrono::steady_clock::time_point> g_derniersStims;
 constexpr auto kIntervalleStimMin = std::chrono::milliseconds(250);
+
+/// Figurants deja soumis a promotion — (record, position arrondie au metre).
+///
+/// Sans ce garde, le MEME pantin serait promu a chaque stimulus qu'il declenche : un joueur qui
+/// vide un chargeur en creerait dix, et le serveur paierait dix entites la ou une suffit. Le
+/// serveur ne peut pas dedupliquer a notre place — il ne sait pas que ces requetes designent le
+/// meme passant, puisqu'il n'a justement AUCUNE identite pour lui (c'est tout le probleme que la
+/// promotion contourne).
+///
+/// La position entre dans la cle : deux passants du meme archetype a deux endroits restent deux
+/// promotions distinctes. Arrondie au metre, parce qu'un pantin bouge entre deux tirs.
+///
+/// ponytail: jamais purge — un set qui grossit avec le nombre de promotions de la session.
+/// A borner si une session longue le montre.
+std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 } // namespace
 
 void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
@@ -1019,6 +1035,39 @@ void NetworkGameSystem::HandleConfigSync(const cyberpunk_rp::protocol::ConfigSyn
     }
     SDK->logger->InfoF(PLUGIN, "ConfigSync : %u valeur(s) appliquee(s), %u refusee(s)",
         applied, refused);
+}
+
+void NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y,
+                                             float z, float yaw)
+{
+    if (m_pInterface == nullptr || record == 0)
+    {
+        return;
+    }
+
+    // Etranglement : une seule demande par pantin. Sans ca, le meme figurant serait promu a chaque
+    // stimulus qu'il declenche — un joueur qui vide un chargeur en creerait dix, et le serveur
+    // paierait dix entites la ou une suffit. La cle est le record ET la position arrondie au metre :
+    // deux passants du meme archetype a deux endroits restent deux promotions distinctes.
+    const auto cle = std::make_tuple(record, static_cast<int32_t>(x), static_cast<int32_t>(y),
+                                     static_cast<int32_t>(z));
+    if (!g_promotionsDemandees.insert(cle).second)
+    {
+        return;
+    }
+
+    SDK->logger->InfoF(PLUGIN, "Promotion demandee : record %llu apparence %llu a (%.1f, %.1f, %.1f)",
+        record, apparence, x, y, z);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const cyberpunk_rp::protocol::QVec3 position(QuantPos(x), QuantPos(y), QuantPos(z));
+    const auto req = cyberpunk_rp::protocol::CreatePromotionRequest(
+        builder, record, apparence, &position, QuantYaw(yaw));
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_PromotionRequest, req.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
 void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEvent* event)

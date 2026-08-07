@@ -142,6 +142,9 @@ struct ConfigSyncBuilder;
 struct StimReport;
 struct StimReportBuilder;
 
+struct PromotionRequest;
+struct PromotionRequestBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -166,11 +169,12 @@ enum ClientMsg : uint8_t {
   ClientMsg_VehicleInput = 14,
   ClientMsg_EquipmentReport = 15,
   ClientMsg_StimReport = 16,
+  ClientMsg_PromotionRequest = 17,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_StimReport
+  ClientMsg_MAX = ClientMsg_PromotionRequest
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[17] {
+inline const ClientMsg (&EnumValuesClientMsg())[18] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -188,13 +192,14 @@ inline const ClientMsg (&EnumValuesClientMsg())[17] {
     ClientMsg_ElevatorCall,
     ClientMsg_VehicleInput,
     ClientMsg_EquipmentReport,
-    ClientMsg_StimReport
+    ClientMsg_StimReport,
+    ClientMsg_PromotionRequest
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[18] = {
+  static const char * const names[19] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -212,13 +217,14 @@ inline const char * const *EnumNamesClientMsg() {
     "VehicleInput",
     "EquipmentReport",
     "StimReport",
+    "PromotionRequest",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_StimReport)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_PromotionRequest)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -289,6 +295,10 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::EquipmentReport> {
 
 template<> struct ClientMsgTraits<cyberpunk_rp::protocol::StimReport> {
   static const ClientMsg enum_value = ClientMsg_StimReport;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::PromotionRequest> {
+  static const ClientMsg enum_value = ClientMsg_PromotionRequest;
 };
 
 template <bool B = false>
@@ -3525,6 +3535,78 @@ inline ::flatbuffers::Offset<StimReport> CreateStimReport(
   return builder_.Finish();
 }
 
+struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef PromotionRequestBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_RECORD = 4,
+    VT_APPEARANCE = 6,
+    VT_POSITION = 8,
+    VT_YAW = 10
+  };
+  uint64_t record() const {
+    return GetField<uint64_t>(VT_RECORD, 0);
+  }
+  uint64_t appearance() const {
+    return GetField<uint64_t>(VT_APPEARANCE, 0);
+  }
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
+  }
+  uint16_t yaw() const {
+    return GetField<uint16_t>(VT_YAW, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_RECORD, 8) &&
+           VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
+           verifier.EndTable();
+  }
+};
+
+struct PromotionRequestBuilder {
+  typedef PromotionRequest Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_record(uint64_t record) {
+    fbb_.AddElement<uint64_t>(PromotionRequest::VT_RECORD, record, 0);
+  }
+  void add_appearance(uint64_t appearance) {
+    fbb_.AddElement<uint64_t>(PromotionRequest::VT_APPEARANCE, appearance, 0);
+  }
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
+    fbb_.AddStruct(PromotionRequest::VT_POSITION, position);
+  }
+  void add_yaw(uint16_t yaw) {
+    fbb_.AddElement<uint16_t>(PromotionRequest::VT_YAW, yaw, 0);
+  }
+  explicit PromotionRequestBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<PromotionRequest> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<PromotionRequest>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<PromotionRequest> CreatePromotionRequest(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t record = 0,
+    uint64_t appearance = 0,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0) {
+  PromotionRequestBuilder builder_(_fbb);
+  builder_.add_appearance(appearance);
+  builder_.add_record(record);
+  builder_.add_position(position);
+  builder_.add_yaw(yaw);
+  return builder_.Finish();
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3585,6 +3667,9 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const cyberpunk_rp::protocol::StimReport *msg_as_StimReport() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_StimReport ? static_cast<const cyberpunk_rp::protocol::StimReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::PromotionRequest *msg_as_PromotionRequest() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_PromotionRequest ? static_cast<const cyberpunk_rp::protocol::PromotionRequest *>(msg()) : nullptr;
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -3658,6 +3743,10 @@ template<> inline const cyberpunk_rp::protocol::EquipmentReport *ClientEnvelope:
 
 template<> inline const cyberpunk_rp::protocol::StimReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::StimReport>() const {
   return msg_as_StimReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::PromotionRequest *ClientEnvelope::msg_as<cyberpunk_rp::protocol::PromotionRequest>() const {
+  return msg_as_PromotionRequest();
 }
 
 struct ClientEnvelopeBuilder {
@@ -3925,6 +4014,10 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ClientMsg_StimReport: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StimReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_PromotionRequest: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PromotionRequest *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

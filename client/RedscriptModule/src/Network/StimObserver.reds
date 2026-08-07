@@ -53,7 +53,9 @@ public func TesseraRemonterStim(contextOwner: wref<GameObject>, gdStimType: game
     if !IsDefined(reseau) {
         return;
     }
-    reseau.Tessera_ReportStim(Cast<Uint32>(EnumInt(gdStimType)), radius, TesseraCibleVisee(local));
+    let cible = TesseraCibleVisee(local);
+    reseau.Tessera_ReportStim(Cast<Uint32>(EnumInt(gdStimType)), radius, cible);
+    TesseraPromouvoirSiFigurant(reseau, cible);
 }
 
 // Sur QUOI le joueur agit, à l'instant où il agit.
@@ -70,12 +72,57 @@ public func TesseraRemonterStim(contextOwner: wref<GameObject>, gdStimType: game
 // la mettre telle quelle sur le fil.
 public func TesseraCibleVisee(local: ref<GameObject>) -> EntityID {
     let visee = GameInstance.GetTargetingSystem(GetGameInstance()).GetLookAtObject(local, true, false);
-    // `EMPTY_ENTITY_ID()` et non `EntityID.None()` : cette dernière n'existe pas. L'API réelle est
-    // un `importonly struct` sans constructeur, plus une fonction globale (`entityID.script`).
+    // ── SONDE (F-PLY-030) — à retirer une fois la cause tranchée ─────────────────────────────
+    //
+    // Le jeu refuse de prendre l'avatar d'un joueur distant pour cible, et on ne sait pas où le
+    // blocage se trouve. Ce log distingue les deux mondes possibles, ce qu'un simple « cible 0 »
+    // côté serveur ne permettait pas :
+    //   · rien de journalisé  → `GetLookAtObject` ne renvoie RIEN, le blocage est dans le
+    //     composant de visée ou l'attitude de l'entité spawnée ;
+    //   · une classe nommée   → la visée FONCTIONNE, et le blocage est en aval (accrochage,
+    //     dégâts) — ce qui déplacerait complètement la recherche.
+    //
+    // On journalise la CLASSE de la cible : elle dira aussi si le jeu accroche autre chose à sa
+    // place (un véhicule, un device, le décor).
     if !IsDefined(visee) {
         return EMPTY_ENTITY_ID();
     }
+    FTLog(s"[Tessera/Stim] visée = \(visee.GetClassName()) id=\(EntityID.ToDebugString(visee.GetEntityID()))");
     return visee.GetEntityID();
+}
+
+// LA PROMOTION (ADR 0022) — un figurant devient un personnage parce que quelqu'un s'y intéresse.
+//
+// C'est le mécanisme central du modèle de foule, et sa condition de déclenchement tient en une
+// phrase : le joueur agit sur un pantin que le serveur ne connaît pas encore.
+//
+// ⚠️ On envoie de quoi le REFABRIQUER, jamais un identifiant. Le pantin n'existe que sur cette
+// machine — les autres joueurs ont d'autres passants au même endroit. Un `EntityID` local ne
+// désignerait rien pour eux.
+//
+// `IsCrowd()` restreint aux figurants d'ambiance : un PNJ de quête ou un vendeur ne doit pas être
+// happé par ce chemin, ils relèvent du registre nominatif.
+//
+// ⚠️ LIMITE ASSUMÉE DE CETTE VERSION : le pantin local n'est PAS masqué. On verra donc DEUX
+// personnages au même endroit — l'original natif et le promu serveur. C'est visible, c'est laid, et
+// c'est délibéré : masquer une entité de la foule native est un geste à part, et le faire à
+// l'aveugle en même temps que la promotion rendrait un échec ininterprétable. On mesure d'abord que
+// la promotion arrive, on supprime le doublon ensuite.
+public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: EntityID) -> Void {
+    if !EntityID.IsDefined(cible) || reseau.Tessera_EstEntiteReseau(cible) {
+        return;
+    }
+    let pantin = GameInstance.FindEntityByID(GetGameInstance(), cible) as ScriptedPuppet;
+    if !IsDefined(pantin) || !pantin.IsCrowd() {
+        return;
+    }
+    let pos = pantin.GetWorldPosition();
+    reseau.Tessera_DemanderPromotion(
+        TDBID.ToNumber(pantin.GetRecordID()),
+        pantin.GetCurrentAppearanceName(),
+        // `GetWorldYaw()` rend déjà des DEGRÉS (`entity.script:26`) — pas de conversion, et surtout
+        // pas de `Rad2Deg` : cette fonction n'existe pas dans les scripts du jeu.
+        pos.X, pos.Y, pos.Z, pantin.GetWorldYaw());
 }
 
 // Le fil porte les 67 ; on en REMONTE une poignée. Ce n'est pas une contradiction, c'est la

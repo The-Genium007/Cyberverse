@@ -143,6 +143,10 @@ protected:
     // de `gamedataStimType`, catalogue des 67 valeurs dans docs/connaissances/catalogue-stimulus.md.
     // `target` = pantin explicitement vise, 0 sinon (entree de la decision de promotion, serveur).
     void SendStimReport(uint8_t nature, float radiusMetres, uint64_t target);
+    // Demande de prise d'autorite sur un figurant local. Porte de quoi le REFABRIQUER, pas un
+    // identifiant : voir `PromotionRequest` dans protocol.fbs.
+    void SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y, float z,
+                              float yaw);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
@@ -242,8 +246,44 @@ public:
                     break;
                 }
             }
+            // SONDE (F-PLY-030), a retirer une fois la cause tranchee. Une cible EXISTE mais ne
+            // correspond a aucune entite reseau : le serveur recevra 0, et sans cette ligne on ne
+            // saurait pas distinguer « le joueur ne visait rien » de « le joueur visait quelque
+            // chose que nous ne savons pas nommer ». Deux causes opposees, meme valeur sur le fil.
+            if (idReseau == 0)
+            {
+                SDK->logger->InfoF(PLUGIN,
+                    "Stim : cible %llu visee mais INCONNUE du reseau (%zu entites suivies)",
+                    cible.hash, m_networkedEntitiesLookup.size());
+            }
         }
         SendStimReport(static_cast<uint8_t>(nature & 0xFF), radiusMetres, idReseau);
+    }
+
+    // Cette entite est-elle repliquee par le serveur ? Redscript ne peut pas repondre : la table
+    // `networkId → EntityID` vit ici. C'est ce qui distingue un FIGURANT (foule native, purement
+    // local) d'une entite deja sous autorite — donc ce qui decide s'il y a lieu de promouvoir.
+    bool Tessera_EstEntiteReseau(RED4ext::ent::EntityID cible) const
+    {
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Demande au serveur de prendre un figurant sous son autorite (ADR 0022).
+    //
+    // On envoie de quoi le REFABRIQUER, pas un identifiant : le pantin n'existe que sur cette
+    // machine, les autres joueurs ont d'autres passants au meme endroit. Voir `PromotionRequest`
+    // dans protocol.fbs.
+    void Tessera_DemanderPromotion(uint64_t record, RED4ext::CName apparence, float x, float y,
+                                   float z, float yaw)
+    {
+        SendPromotionRequest(record, apparence.hash, x, y, z, yaw);
     }
 
     /// Called from the plugin load and unload events
@@ -284,6 +324,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_GetServerOverlaps);
     RTTI_METHOD(Tessera_GetVisiblePlayerCount);
     RTTI_METHOD(Tessera_ReportStim);
+    RTTI_METHOD(Tessera_EstEntiteReseau);
+    RTTI_METHOD(Tessera_DemanderPromotion);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");
