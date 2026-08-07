@@ -497,8 +497,11 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_ConfigSync:
                     HandleConfigSync(env->msg_as_ConfigSync());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_PlayerEvent:
+                    HandlePlayerEvent(env->msg_as_PlayerEvent());
+                    break;
                 default:
-                    // Reste non câblé : CommandResult, PermissionSync, PlayerEvent, CharacterList,
+                    // Reste non câblé : CommandResult, PermissionSync, CharacterList,
                     // CharacterResult, QueueStatus, InteractionOpen, InteractionResult,
                     // ElevatorStateMsg. Le serveur les émet déjà — les brancher est le chantier
                     // « autorité totale », étapes 2 et 6. Journalisé au lieu d'être jeté en
@@ -980,6 +983,80 @@ void NetworkGameSystem::HandleConfigSync(const cyberpunk_rp::protocol::ConfigSyn
     }
     SDK->logger->InfoF(PLUGIN, "ConfigSync : %u valeur(s) appliquee(s), %u refusee(s)",
         applied, refused);
+}
+
+void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEvent* event)
+{
+    if (event == nullptr)
+    {
+        return;
+    }
+
+    // kind : 0=Action, 1=Stim. Un kind INCONNU se journalise et s'ignore — jamais d'interpretation
+    // par defaut. Le schema est append-only : un client plus ancien que le serveur DOIT pouvoir
+    // recevoir un kind qu'il ne connait pas sans mal se comporter.
+    constexpr uint8_t kKindStim = 1;
+    if (event->kind() != kKindStim)
+    {
+        SDK->logger->InfoF(PLUGIN, "PlayerEvent kind=%u ignore (acteur %llu)",
+            static_cast<unsigned>(event->kind()), event->actor());
+        return;
+    }
+
+    // Le coeur de l'ADR 0022 : on rejoue l'EVENEMENT sur la foule locale, on ne replique pas ses
+    // consequences. Un message au lieu de mille positions de fuyants — et chaque joueur voit SA
+    // foule fuir le meme point au meme instant.
+    //
+    // `BroadcastStim` a besoin d'un EMETTEUR (un GameObject), pas d'une position : c'est lui qui
+    // donne a la foule la direction de fuite. L'avatar du joueur distant est deja spawne chez nous
+    // — le serveur a filtre par AoI avant de relayer.
+    //
+    // S'il ne l'est pas, on n'a PAS de repli acceptable : prendre le joueur local comme emetteur
+    // ferait fuir la rue dans la mauvaise direction, ce qui est pire que ne rien faire.
+    const auto actorEntity = m_networkedEntitiesLookup.find(event->actor());
+    if (actorEntity == m_networkedEntitiesLookup.end())
+    {
+        SDK->logger->WarnF(PLUGIN, "Stim %u ignore : acteur %llu pas spawne localement",
+            static_cast<unsigned>(event->action()), event->actor());
+        return;
+    }
+
+    // Le rayon voyage en DECIMETRES (entier) et redevient un flottant ici : `BroadcastStim` prend
+    // un float, et les portees natives du jeu ne sont pas entieres.
+    const float radiusMetres = static_cast<float>(event->param()) / 10.0f;
+    bool ok = false;
+    if (!Red::CallVirtual(this, "ApplyServerStim", ok, actorEntity->second,
+            static_cast<uint32_t>(event->action()), radiusMetres)
+        || !ok)
+    {
+        // Un stimulus refuse se VOIT. Cause attendue : ordinal hors des 67 du catalogue, ou entite
+        // sans composant emetteur.
+        SDK->logger->WarnF(PLUGIN, "Stim %u refuse (acteur %llu, rayon %.1f m)",
+            static_cast<unsigned>(event->action()), event->actor(), radiusMetres);
+    }
+}
+
+void NetworkGameSystem::SendStimReport(uint8_t nature, float radiusMetres, uint64_t target)
+{
+    if (m_pInterface == nullptr)
+    {
+        return;
+    }
+
+    // Decimetres : voir le commentaire de `StimReport` dans protocol.fbs. Borne basse a 0 pour ne
+    // pas replier un rayon negatif en un ushort enorme (un rayon negatif n'a pas de sens, mais un
+    // appelant redscript peut en produire un et le fil ne doit pas mentir).
+    const float clamped = radiusMetres > 0.0f ? radiusMetres : 0.0f;
+    const auto decimetres = static_cast<uint16_t>(
+        clamped * 10.0f > 65535.0f ? 65535.0f : clamped * 10.0f);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto stim = cyberpunk_rp::protocol::CreateStimReport(builder, nature, decimetres, target);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_StimReport, stim.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
 void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::AppearanceSync* sync)

@@ -271,6 +271,35 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // Rejoue sur LA FOULE LOCALE un stimulus produit par un joueur distant.
+    //
+    // C'est le mécanisme central de l'ADR 0022 : on réplique l'ÉVÉNEMENT, jamais ses conséquences.
+    // Le serveur envoie un message ; chaque client fait fuir SES propres passants, avec le système
+    // de réaction natif. Tout le monde voit la même rue se vider au même instant — les individus
+    // diffèrent, la scène est la même. Un message au lieu de mille positions de fuyants.
+    //
+    // `nature` est l'ordinal de `gamedataStimType` dans le jeu (v2.31 épinglée), pas une
+    // numérotation maison. Les 67 valeurs : docs/connaissances/catalogue-stimulus.md.
+    //
+    // ⚠️ Un ordinal hors plage donnerait un enum invalide, que le natif accepterait sans rien
+    // faire — exactement le « succès trompeur » que D1 interdit de compter comme un effet. D'où le
+    // garde-fou explicite plutôt qu'une confiance dans l'émetteur.
+    //
+    // Mesuré : `BroadcastStim` fait bien paniquer la foule sans qu'aucun coup de feu ne parte
+    // (F-PNJ-104, arme rangée). Ce qui n'est PAS mesuré, c'est l'effet des 66 autres types — voir
+    // la colonne « effet mesuré » du catalogue avant d'affirmer quoi que ce soit sur l'un d'eux.
+    public func ApplyServerStim(actor: EntityID, nature: Uint32, radius: Float) -> Bool {
+        if nature > 66u {
+            return false;
+        }
+        let emitter = GameInstance.FindEntityByID(GetGameInstance(), actor) as GameObject;
+        if !IsDefined(emitter) {
+            return false;
+        }
+        StimBroadcasterComponent.BroadcastStim(emitter, IntEnum<gamedataStimType>(Cast<Int32>(nature)), radius);
+        return true;
+    }
+
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }
@@ -318,9 +347,9 @@ public native class NetworkGameSystem extends IGameSystem {
     // le trajet soit joué par le moteur au lieu d'être sauté. Le C++ garde donc la téléportation
     // comme CORRECTION quand la dérive devient trop grande.
     //
-    // `ignoreNavigation = true` : le serveur a déjà planifié le chemin (A* côté shard). Laisser le
-    // moteur re-naviguer ferait diverger les deux, et le PNJ contournerait un obstacle que le
-    // serveur ignore — deux autorités sur le même trajet.
+    // `ignoreNavigation` : voir le commentaire détaillé au point d'usage. Il valait `true` tant que
+    // le serveur annonçait la position du tick suivant ; il vaut `false` depuis qu'il annonce une
+    // destination à 10 m, pour que le moteur navigue par les trottoirs et respecte les feux.
     public func MoveNetworkEntityTo(entityId: EntityID, position: Vector4, locomotion: Int32) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
@@ -350,7 +379,24 @@ public native class NetworkGameSystem extends IGameSystem {
             cmd.movementType = moveMovementType.Walk;
         }
 
-        cmd.ignoreNavigation = true;
+        // ⚠️ `ignoreNavigation` est passé de `true` à `false` le 2026-08-06, et la justification
+        // d'origine (juste au-dessus) ne tient plus depuis le même jour.
+        //
+        // Elle disait : « le serveur a déjà planifié le chemin, laisser le moteur re-naviguer
+        // ferait diverger les deux ». C'était vrai quand le serveur annonçait la position du TICK
+        // SUIVANT — un point à 5 cm, puis à 1 m : le pantin devait y aller exactement, il n'y avait
+        // rien à naviguer.
+        //
+        // Le serveur annonce désormais une DESTINATION à au moins 10 m (`NpcState.move_target`).
+        // Sur ce trajet-là, on VEUT que le moteur navigue : c'est lui qui connaît les trottoirs,
+        // les passages piétons et les feux. Observé en jeu tant que le drapeau valait `true` :
+        // « ils vont sur la route et traversent les passages piétons alors que c'est rouge » —
+        // logique, on lui demandait justement d'ignorer tout ça.
+        //
+        // L'autorité ne change pas de camp pour autant : la position serveur reste la vérité, et
+        // la correction de dérive (8 m, côté C++) rattrape si le moteur choisit un détour trop
+        // large. Le serveur décide OÙ l'on va, le moteur décide COMMENT — c'est F-PNJ-095.
+        cmd.ignoreNavigation = false;
         cmd.finishWhenDestinationReached = true;
         cmd.desiredDistanceFromTarget = 0.50;
 

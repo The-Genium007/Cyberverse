@@ -139,6 +139,9 @@ struct ConfigEntryBuilder;
 struct ConfigSync;
 struct ConfigSyncBuilder;
 
+struct StimReport;
+struct StimReportBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -162,11 +165,12 @@ enum ClientMsg : uint8_t {
   ClientMsg_ElevatorCall = 13,
   ClientMsg_VehicleInput = 14,
   ClientMsg_EquipmentReport = 15,
+  ClientMsg_StimReport = 16,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_EquipmentReport
+  ClientMsg_MAX = ClientMsg_StimReport
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[16] {
+inline const ClientMsg (&EnumValuesClientMsg())[17] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -183,13 +187,14 @@ inline const ClientMsg (&EnumValuesClientMsg())[16] {
     ClientMsg_InteractionChoice,
     ClientMsg_ElevatorCall,
     ClientMsg_VehicleInput,
-    ClientMsg_EquipmentReport
+    ClientMsg_EquipmentReport,
+    ClientMsg_StimReport
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[17] = {
+  static const char * const names[18] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -206,13 +211,14 @@ inline const char * const *EnumNamesClientMsg() {
     "ElevatorCall",
     "VehicleInput",
     "EquipmentReport",
+    "StimReport",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_EquipmentReport)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_StimReport)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -279,6 +285,10 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::VehicleInput> {
 
 template<> struct ClientMsgTraits<cyberpunk_rp::protocol::EquipmentReport> {
   static const ClientMsg enum_value = ClientMsg_EquipmentReport;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::StimReport> {
+  static const ClientMsg enum_value = ClientMsg_StimReport;
 };
 
 template <bool B = false>
@@ -879,7 +889,9 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_BEHAVIOR = 20,
     VT_SPACE_ID = 22,
     VT_TARGET = 24,
-    VT_MOVE_TARGET = 26
+    VT_MOVE_TARGET = 26,
+    VT_MOVE_QUEUE = 28,
+    VT_MOVE_SEQ = 30
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -917,6 +929,12 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::QVec3 *move_target() const {
     return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_MOVE_TARGET);
   }
+  const ::flatbuffers::Vector<const cyberpunk_rp::protocol::QVec3 *> *move_queue() const {
+    return GetPointer<const ::flatbuffers::Vector<const cyberpunk_rp::protocol::QVec3 *> *>(VT_MOVE_QUEUE);
+  }
+  uint32_t move_seq() const {
+    return GetField<uint32_t>(VT_MOVE_SEQ, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -932,6 +950,9 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
            VerifyField<uint64_t>(verifier, VT_TARGET, 8) &&
            VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_MOVE_TARGET, 4) &&
+           VerifyOffset(verifier, VT_MOVE_QUEUE) &&
+           verifier.VerifyVector(move_queue()) &&
+           VerifyField<uint32_t>(verifier, VT_MOVE_SEQ, 4) &&
            verifier.EndTable();
   }
 };
@@ -976,6 +997,12 @@ struct NpcStateBuilder {
   void add_move_target(const cyberpunk_rp::protocol::QVec3 *move_target) {
     fbb_.AddStruct(NpcState::VT_MOVE_TARGET, move_target);
   }
+  void add_move_queue(::flatbuffers::Offset<::flatbuffers::Vector<const cyberpunk_rp::protocol::QVec3 *>> move_queue) {
+    fbb_.AddOffset(NpcState::VT_MOVE_QUEUE, move_queue);
+  }
+  void add_move_seq(uint32_t move_seq) {
+    fbb_.AddElement<uint32_t>(NpcState::VT_MOVE_SEQ, move_seq, 0);
+  }
   explicit NpcStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1000,10 +1027,14 @@ inline ::flatbuffers::Offset<NpcState> CreateNpcState(
     uint8_t behavior = 0,
     uint32_t space_id = 0,
     uint64_t target = 0,
-    const cyberpunk_rp::protocol::QVec3 *move_target = nullptr) {
+    const cyberpunk_rp::protocol::QVec3 *move_target = nullptr,
+    ::flatbuffers::Offset<::flatbuffers::Vector<const cyberpunk_rp::protocol::QVec3 *>> move_queue = 0,
+    uint32_t move_seq = 0) {
   NpcStateBuilder builder_(_fbb);
   builder_.add_target(target);
   builder_.add_id(id);
+  builder_.add_move_seq(move_seq);
+  builder_.add_move_queue(move_queue);
   builder_.add_move_target(move_target);
   builder_.add_space_id(space_id);
   builder_.add_sustained(sustained);
@@ -1015,6 +1046,41 @@ inline ::flatbuffers::Offset<NpcState> CreateNpcState(
   builder_.add_move_dir(move_dir);
   builder_.add_locomotion(locomotion);
   return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<NpcState> CreateNpcStateDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    uint32_t archetype = 0,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0,
+    uint8_t locomotion = 0,
+    uint8_t move_dir = 0,
+    uint8_t flags = 0,
+    uint32_t sustained = 0,
+    uint8_t behavior = 0,
+    uint32_t space_id = 0,
+    uint64_t target = 0,
+    const cyberpunk_rp::protocol::QVec3 *move_target = nullptr,
+    const std::vector<cyberpunk_rp::protocol::QVec3> *move_queue = nullptr,
+    uint32_t move_seq = 0) {
+  auto move_queue__ = move_queue ? _fbb.CreateVectorOfStructs<cyberpunk_rp::protocol::QVec3>(*move_queue) : 0;
+  return cyberpunk_rp::protocol::CreateNpcState(
+      _fbb,
+      id,
+      archetype,
+      position,
+      yaw,
+      locomotion,
+      move_dir,
+      flags,
+      sustained,
+      behavior,
+      space_id,
+      target,
+      move_target,
+      move_queue__,
+      move_seq);
 }
 
 struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -3397,6 +3463,68 @@ inline ::flatbuffers::Offset<ConfigSync> CreateConfigSyncDirect(
       entries__);
 }
 
+struct StimReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef StimReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NATURE = 4,
+    VT_RADIUS = 6,
+    VT_TARGET = 8
+  };
+  uint8_t nature() const {
+    return GetField<uint8_t>(VT_NATURE, 0);
+  }
+  uint16_t radius() const {
+    return GetField<uint16_t>(VT_RADIUS, 0);
+  }
+  uint64_t target() const {
+    return GetField<uint64_t>(VT_TARGET, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_NATURE, 1) &&
+           VerifyField<uint16_t>(verifier, VT_RADIUS, 2) &&
+           VerifyField<uint64_t>(verifier, VT_TARGET, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct StimReportBuilder {
+  typedef StimReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_nature(uint8_t nature) {
+    fbb_.AddElement<uint8_t>(StimReport::VT_NATURE, nature, 0);
+  }
+  void add_radius(uint16_t radius) {
+    fbb_.AddElement<uint16_t>(StimReport::VT_RADIUS, radius, 0);
+  }
+  void add_target(uint64_t target) {
+    fbb_.AddElement<uint64_t>(StimReport::VT_TARGET, target, 0);
+  }
+  explicit StimReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<StimReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<StimReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<StimReport> CreateStimReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t nature = 0,
+    uint16_t radius = 0,
+    uint64_t target = 0) {
+  StimReportBuilder builder_(_fbb);
+  builder_.add_target(target);
+  builder_.add_radius(radius);
+  builder_.add_nature(nature);
+  return builder_.Finish();
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -3454,6 +3582,9 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const cyberpunk_rp::protocol::EquipmentReport *msg_as_EquipmentReport() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_EquipmentReport ? static_cast<const cyberpunk_rp::protocol::EquipmentReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::StimReport *msg_as_StimReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_StimReport ? static_cast<const cyberpunk_rp::protocol::StimReport *>(msg()) : nullptr;
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -3523,6 +3654,10 @@ template<> inline const cyberpunk_rp::protocol::VehicleInput *ClientEnvelope::ms
 
 template<> inline const cyberpunk_rp::protocol::EquipmentReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::EquipmentReport>() const {
   return msg_as_EquipmentReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::StimReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::StimReport>() const {
+  return msg_as_StimReport();
 }
 
 struct ClientEnvelopeBuilder {
@@ -3786,6 +3921,10 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ClientMsg_EquipmentReport: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::EquipmentReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_StimReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StimReport *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

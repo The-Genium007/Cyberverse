@@ -137,6 +137,11 @@ protected:
     // Envoient un ClientEnvelope (Join / PositionUpdate) au serveur Rust autoritaire.
     void SendJoin(const std::string& displayName);
     void SendPositionUpdate(float x, float y, float z, float yaw);
+    // Remonte un stimulus OBSERVE chez le joueur local. Le client observe, il ne decide jamais de
+    // la reaction : c'est le serveur qui rediffuse aux voisins (ADR 0022). `nature` est l'ordinal
+    // de `gamedataStimType`, catalogue des 67 valeurs dans docs/connaissances/catalogue-stimulus.md.
+    // `target` = pantin explicitement vise, 0 sinon (entree de la decision de promotion, serveur).
+    void SendStimReport(uint8_t nature, float radiusMetres, uint64_t target);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
@@ -163,6 +168,10 @@ protected:
     // Identité visuelle décidée par le serveur. Mémorise, et applique tout de suite si l'entité
     // est déjà là (l'apparence peut changer en cours de session : tenue, dégainage).
     void HandleAppearanceSync(const cyberpunk_rp::protocol::AppearanceSync* sync);
+    // Evenement one-shot relaye par le serveur depuis un joueur voisin. kind=1 (Stim) rejoue le
+    // stimulus sur la foule LOCALE : c'est ce qui fait fuir la meme rue au meme instant chez tout
+    // le monde sans repliquer un seul fuyant (ADR 0022).
+    void HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEvent* event);
 
     // Fait apparaître une entité réseau à l'apparence décidée par le serveur, ou au repli si
     // aucune n'est connue pour cet id. Renvoie false si le spawn a échoué (modset non compilé).
@@ -194,6 +203,21 @@ public:
     int32_t Tessera_GetVisiblePlayerCount() const
     {
         return static_cast<int32_t>(m_networkedEntitiesLookup.size());
+    }
+
+    // Remonte un stimulus au serveur depuis redscript. Point d'entree UNIQUE de l'observation :
+    // quel que soit l'entonnoir qui detecte l'evenement (tir, visee, dialogue — l'entonnoir du tir
+    // reste a localiser, cf. plan foule T2), il aboutit ici.
+    //
+    // Aucun appelant automatique aujourd'hui, DELIBEREMENT : les 67 types sont cables et testables,
+    // et chaque entonnoir se branchera dessus sans retoucher ni le fil ni le serveur (decision du
+    // 2026-08-07 — cabler large, activer etroit).
+    //
+    // `nature` en Uint32 et non Uint8 : redscript n'a pas de type 8 bits, la conversion se fait au
+    // franchissement du fil.
+    void Tessera_ReportStim(uint32_t nature, float radiusMetres, uint64_t target)
+    {
+        SendStimReport(static_cast<uint8_t>(nature & 0xFF), radiusMetres, target);
     }
 
     /// Called from the plugin load and unload events
@@ -233,6 +257,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_GetServerShard);
     RTTI_METHOD(Tessera_GetServerOverlaps);
     RTTI_METHOD(Tessera_GetVisiblePlayerCount);
+    RTTI_METHOD(Tessera_ReportStim);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");
