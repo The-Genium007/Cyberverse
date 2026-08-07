@@ -26,6 +26,7 @@
 namespace cyberpunk_rp::protocol {
     struct Snapshot; struct PositionCorrection; struct ShardAssignment;
     struct WorldState; struct Kicked; struct AppearanceSync; struct ConfigSync;
+    struct PlayerEvent;
 }
 
 // Identité visuelle d'une entité réseau, telle que le SERVEUR la décide (`AppearanceSync`).

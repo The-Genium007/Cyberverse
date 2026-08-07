@@ -7,6 +7,12 @@ public native class NetworkGameSystem extends IGameSystem {
     native let playerActionTracker: ref<PlayerActionTracker>;
     public native func EnqueueLoadLastCheckpoint(handler: wref<inkISystemRequestsHandler>) -> Void;
 
+    // Remonte un stimulus observé chez le joueur local (les 67 `gamedataStimType`). Backing natif :
+    // `RTTI_METHOD(Tessera_ReportStim)` dans NetworkGameSystem.h — sans CETTE déclaration, l'appel
+    // ne se résout pas et tout r6/scripts tombe, même si le C++ enregistre bien la méthode.
+    // `nature` en Uint32 : redscript n'a pas de type 8 bits.
+    public native func Tessera_ReportStim(nature: Uint32, radius: Float, target: Uint64) -> Void;
+
     // Autorité serveur (TesseraSynth) — reflètent le dernier ShardAssignment reçu + le nombre de
     // puppets distants suivis. Consommés par le HUD moniteur de cohérence via des wrappers
     // @addMethod(PlayerPuppet) côté modset Tessera (Tessera_GetServerShard/Overlaps/VisiblePlayerCount).

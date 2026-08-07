@@ -21,6 +21,7 @@
 
 #include <zpp_bits.h>
 
+#include <chrono>  // etranglement des stimulus remontes au serveur (budget 40 msg/s du Gateway)
 #include <cmath>   // std::lround/std::fmod (quantization du fil, gel palier 2 — cf. QuantPos/QuantYaw)
 #include <cstdlib> // std::getenv (token ZITADEL transmis par le launcher, cf. SendJoin)
 #include <set>     // set des ids presents dans un Snapshot + garde anti-spam de LogUnhandledServerMsg
@@ -314,6 +315,18 @@ struct CibleCommandee
     float z;
 };
 std::map<uint64_t, CibleCommandee> g_dernieresCibles;
+
+/// Dernier envoi par type de stimulus — meme raison d'etre HORS DE LA CLASSE que ci-dessus.
+///
+/// Pourquoi un etranglement est NECESSAIRE et pas un confort : le Gateway plafonne chaque client a
+/// 40 messages/s, TOUTES familles confondues (rate_limit.rs). Une rafale d'arme automatique emet un
+/// `Gunshot` par balle, soit ~10/s a elle seule — sans garde, les stimulus mangeraient le budget des
+/// mises a jour de position, et un joueur qui arrose se ferait deconnecter pour flood.
+///
+/// 250 ms : une rafale devient ~4 messages/s au lieu de ~10, et deux coups de feu DISTINCTS restent
+/// distinguables. Valeur v1, jamais mesuree en charge reelle.
+std::map<uint8_t, std::chrono::steady_clock::time_point> g_derniersStims;
+constexpr auto kIntervalleStimMin = std::chrono::milliseconds(250);
 } // namespace
 
 void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
@@ -1042,6 +1055,15 @@ void NetworkGameSystem::SendStimReport(uint8_t nature, float radiusMetres, uint6
     {
         return;
     }
+
+    // Etranglement PAR TYPE, pas global : un coup de feu ne doit pas faire taire un cri simultane.
+    const auto maintenant = std::chrono::steady_clock::now();
+    const auto precedent = g_derniersStims.find(nature);
+    if (precedent != g_derniersStims.end() && maintenant - precedent->second < kIntervalleStimMin)
+    {
+        return;
+    }
+    g_derniersStims[nature] = maintenant;
 
     // Decimetres : voir le commentaire de `StimReport` dans protocol.fbs. Borne basse a 0 pour ne
     // pas replier un rayon negatif en un ushort enorme (un rayon negatif n'a pas de sens, mais un
