@@ -1072,6 +1072,12 @@ void NetworkGameSystem::SendStimReport(uint8_t nature, float radiusMetres, uint6
     const auto decimetres = static_cast<uint16_t>(
         clamped * 10.0f > 65535.0f ? 65535.0f : clamped * 10.0f);
 
+    // Journalise CE QUI PART, pour que le silence du serveur soit interpretable : sans cette ligne,
+    // « rien dans les logs serveur » ne distingue pas « le hook n'a pas tire » de « le message s'est
+    // perdu ». Deux causes tres differentes, meme symptome.
+    SDK->logger->InfoF(PLUGIN, "Stim %u envoye (rayon %.1f m, cible %llu)",
+        static_cast<unsigned>(nature), clamped, target);
+
     flatbuffers::FlatBufferBuilder builder;
     const auto stim = cyberpunk_rp::protocol::CreateStimReport(builder, nature, decimetres, target);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
