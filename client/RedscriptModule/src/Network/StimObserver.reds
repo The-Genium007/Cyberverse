@@ -53,9 +53,11 @@ public func TesseraRemonterStim(contextOwner: wref<GameObject>, gdStimType: game
     if !IsDefined(reseau) {
         return;
     }
-    let cible = TesseraCibleVisee(local);
-    reseau.Tessera_ReportStim(Cast<Uint32>(EnumInt(gdStimType)), radius, cible);
-    TesseraPromouvoirSiFigurant(reseau, cible);
+    // La DÉSIGNATION continue de partir (champ `target`) : elle est mesurée et utile (F-PLY-031).
+    // Ce qui est parqué, c'est la promotion DÉCLENCHÉE PAR LA VISÉE — elle fonctionnait, mais sur
+    // une cible qui marche, ce qui rendait l'observation impossible : « on a une espèce de
+    // rémanence » (Lucas, 2026-08-07). Le déclencheur retenu est la MORT, voir Promotion.reds.
+    reseau.Tessera_ReportStim(Cast<Uint32>(EnumInt(gdStimType)), radius, TesseraCibleVisee(local));
 }
 
 // Sur QUOI le joueur agit, à l'instant où il agit.
@@ -89,40 +91,6 @@ public func TesseraCibleVisee(local: ref<GameObject>) -> EntityID {
     }
     FTLog(s"[Tessera/Stim] visée = \(visee.GetClassName()) id=\(EntityID.ToDebugString(visee.GetEntityID()))");
     return visee.GetEntityID();
-}
-
-// LA PROMOTION (ADR 0022) — un figurant devient un personnage parce que quelqu'un s'y intéresse.
-//
-// C'est le mécanisme central du modèle de foule, et sa condition de déclenchement tient en une
-// phrase : le joueur agit sur un pantin que le serveur ne connaît pas encore.
-//
-// ⚠️ On envoie de quoi le REFABRIQUER, jamais un identifiant. Le pantin n'existe que sur cette
-// machine — les autres joueurs ont d'autres passants au même endroit. Un `EntityID` local ne
-// désignerait rien pour eux.
-//
-// `IsCrowd()` restreint aux figurants d'ambiance : un PNJ de quête ou un vendeur ne doit pas être
-// happé par ce chemin, ils relèvent du registre nominatif.
-//
-// ⚠️ LIMITE ASSUMÉE DE CETTE VERSION : le pantin local n'est PAS masqué. On verra donc DEUX
-// personnages au même endroit — l'original natif et le promu serveur. C'est visible, c'est laid, et
-// c'est délibéré : masquer une entité de la foule native est un geste à part, et le faire à
-// l'aveugle en même temps que la promotion rendrait un échec ininterprétable. On mesure d'abord que
-// la promotion arrive, on supprime le doublon ensuite.
-public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: EntityID) -> Void {
-    if !EntityID.IsDefined(cible) || reseau.Tessera_EstEntiteReseau(cible) {
-        return;
-    }
-    let pantin = GameInstance.FindEntityByID(GetGameInstance(), cible) as ScriptedPuppet;
-    if !IsDefined(pantin) || !pantin.IsCrowd() {
-        return;
-    }
-    let pos = pantin.GetWorldPosition();
-    reseau.Tessera_DemanderPromotion(
-        TDBID.ToNumber(pantin.GetRecordID()),
-        pantin.GetCurrentAppearanceName(),
-        // `GetWorldYaw()` rend déjà des DEGRÉS (`entity.script:26`) — pas de conversion, et surtout
-        // pas de `Rad2Deg` : cette fonction n'existe pas dans les scripts du jeu.
-        pos.X, pos.Y, pos.Z, pantin.GetWorldYaw());
 }
 
 // Le fil porte les 67 ; on en REMONTE une poignée. Ce n'est pas une contradiction, c'est la
