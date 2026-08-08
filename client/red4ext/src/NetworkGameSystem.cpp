@@ -372,6 +372,8 @@ std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 /// Le comportement voyage dans CHAQUE snapshot : sans memoire, on rejouerait `Kill` vingt fois par
 /// seconde sur le meme cadavre. Le set retient ce qui est deja fait.
 std::set<uint64_t> g_cadavresAppliques;
+/// Nombre de tentatives par entite — sert uniquement au diagnostic (voir le log associe).
+std::map<uint64_t, uint32_t> g_essaisCadavre;
 constexpr uint8_t kComportementATerre = 5;
 } // namespace
 
@@ -781,9 +783,27 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                     if (entite != m_networkedEntitiesLookup.end())
                     {
                         bool ok = false;
-                        if (Red::CallVirtual(this, "TesseraRendreMort", ok, entite->second) && ok)
+                        const bool appele = Red::CallVirtual(this, "TesseraRendreMort", ok,
+                                                             entite->second);
+                        if (appele && ok)
                         {
                             g_cadavresAppliques.insert(ns->id());
+                            SDK->logger->InfoF(PLUGIN, "Cadavre applique sur %llu", ns->id());
+                        }
+                        else
+                        {
+                            // On RÉESSAIE au snapshot suivant (rien n'est inséré dans le set). Une
+                            // entite qui vient de naitre n'est pas forcement prete a mourir — c'est
+                            // l'hypothese de Lucas, et ce log dit en combien de tentatives on y
+                            // arrive, ou si on n'y arrive jamais. Sans lui, « il est debout » ne
+                            // distingue pas « jamais tente » de « tente et refuse ».
+                            g_essaisCadavre[ns->id()]++;
+                            if (g_essaisCadavre[ns->id()] % 20 == 1)
+                            {
+                                SDK->logger->WarnF(PLUGIN,
+                                    "Cadavre REFUSE sur %llu (essai %u, appel=%s)", ns->id(),
+                                    g_essaisCadavre[ns->id()], appele ? "ok" : "echec");
+                            }
                         }
                     }
                 }

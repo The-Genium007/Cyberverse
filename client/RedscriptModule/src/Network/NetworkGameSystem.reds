@@ -319,6 +319,43 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // Met un PNJ répliqué dans l'état MORT, sur ordre du serveur (`NpcState.behavior = ATerre`).
+    //
+    // ⚠️ MÉTHODE DE CLASSE, pas fonction de module. Le C++ l'appelle par
+    // `Red::CallVirtual(this, "TesseraRendreMort", ...)`, qui cherche une méthode sur la classe de
+    // l'objet. Déclarée au niveau module, l'appel échouait en silence : 2 500 tentatives sans qu'une
+    // seule ligne ne s'exécute (`appel=echec`, mesuré le 2026-08-08).
+    //
+    // ⚠️ `skipNPCDeathAnim = false` — ET C'EST L'ANIMATION QUI COUCHE LE CORPS. Une première version
+    // la sautait, pour éviter de rejouer une agonie sur un personnage déjà mort : le pantin passait
+    // bien à l'état mort mais restait PLANTÉ DEBOUT en idle. On préfère une seconde d'animation à un
+    // cadavre vertical. `disableNPCRagdoll = false` pour la même raison : le ragdoll pose le corps.
+    //
+    // ⚠️ Le succès se mesure sur `IsDead()`, PAS sur « l'appel n'a pas échoué ». C'est la classe
+    // d'erreur que D1 vise : un appel accepté sans effet. Tant que le pantin n'est pas mort, on
+    // renvoie `false` et l'appelant réessaie au snapshot suivant.
+    public func TesseraRendreMort(cible: EntityID) -> Bool {
+        let entite = GameInstance.FindEntityByID(GetGameInstance(), cible);
+        let pantin = entite as ScriptedPuppet;
+        if !IsDefined(pantin) {
+            return false;
+        }
+        // Déjà mort : succès, rien à refaire. Ce test doit venir AVANT `IsAttached`, sinon un
+        // cadavre en cours de destreaming redeviendrait « à retenter » indéfiniment.
+        if pantin.IsDead() {
+            return true;
+        }
+        // Un pantin pas encore ATTACHÉ n'a ni pile d'animation ni pool de vie : `Kill` y serait
+        // accepté sans effet. On refuse, et on réessaiera.
+        if !pantin.IsAttached() {
+            return false;
+        }
+        pantin.Kill(null, false, false);
+        // ⚠️ `Kill` peut être différé d'une frame : un `false` ici ne veut pas dire échec, il veut
+        // dire « pas encore ». L'appelant réessaiera, et ce sera vrai au snapshot suivant.
+        return pantin.IsDead();
+    }
+
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }

@@ -36,26 +36,12 @@ protected func OnDied() -> Void {
     }
 }
 
-// Met un PNJ répliqué dans l'état MORT, sur ordre du serveur (`NpcState.behavior = ATerre`).
-//
-// Pourquoi ça existe : un figurant promu parce qu'il vient de mourir naissait VIVANT chez les autres
-// joueurs — et rejoignait la panique que le relais de stimulus venait de déclencher. Mesuré en jeu
-// le 2026-08-07 : « c'est une personne qui était déjà debout et qui est tout de suite partie parce
-// qu'elle avait le statut effrayé ». L'initiateur avait un cadavre, l'autre joueur un passant qui
-// s'enfuit — deux mondes qui ne racontent pas la même histoire.
-//
-// ⚠️ `skipNPCDeathAnim = true` : le personnage est mort AVANT d'arriver ici. Rejouer l'animation
-// d'agonie ferait tomber un cadavre qui vient d'apparaître debout, ce qui serait plus troublant que
-// l'apparition elle-même. Le ragdoll, lui, est CONSERVÉ (`disableNPCRagdoll = false`) : c'est lui
-// qui pose le corps au sol au lieu de le laisser figé debout.
-public func TesseraRendreMort(cible: EntityID) -> Bool {
-    let pantin = GameInstance.FindEntityByID(GetGameInstance(), cible) as ScriptedPuppet;
-    if !IsDefined(pantin) {
-        return false;
-    }
-    pantin.Kill(null, true, false);
-    return true;
-}
+// ⚠️ `TesseraRendreMort` N'EST PAS ICI, et ce n'est pas un choix de rangement : elle est appelée
+// par le C++ via `Red::CallVirtual(this, "TesseraRendreMort", ...)`, qui cherche une MÉTHODE sur la
+// classe de l'objet — pas une fonction de module. Déclarée ici, l'appel échouait silencieusement
+// (`appel=echec`, 2 500 essais sans qu'une seule ligne de la fonction ne s'exécute). Elle vit donc
+// dans `NetworkGameSystem.reds`, avec `ApplyServerConfig` et `ApplyServerStim` qui suivent la même
+// règle.
 
 // Demande au serveur de prendre un figurant sous autorité.
 //
