@@ -275,10 +275,17 @@ public native class NetworkGameSystem extends IGameSystem {
     // Le bon référent est l'horloge du moteur, parce que c'est elle qui dérive. Tant qu'elle suit
     // le serveur d'assez près, on ne touche à rien et le cycle jour/nuit reste fluide ; dès
     // qu'elle décroche, on corrige d'un coup.
-    public func ApplyServerTime(hours: Int32, minutes: Int32, toleranceMinutes: Int32) -> Bool {
+    // Renvoie la TAILLE du saut appliqué, en minutes de jeu (0 = rien à corriger). C'était un
+    // `Bool` : « corrigé ou non » ne dit pas si le joueur a vu quelque chose, et c'est pourtant la
+    // seule question qui compte pour l'heure — un saut de 4 minutes ne se voit pas, un saut d'une
+    // heure fait basculer le ciel. Mesurer la taille du saut côté SERVEUR est impossible sans
+    // repliement : le rapport de dérive arrive toutes les 5 s et les corrections tombent toutes
+    // les ~4 s, donc l'échantillonnage bat contre la correction et rend une enveloppe fausse
+    // (constaté le 2026-08-08). Ici, la valeur est exacte par construction.
+    public func ApplyServerTime(hours: Int32, minutes: Int32, toleranceMinutes: Int32) -> Int32 {
         let ts = GameInstance.GetTimeSystem(GetGameInstance());
         if !IsDefined(ts) {
-            return false;
+            return 0;
         }
 
         let now = ts.GetGameTime();
@@ -298,11 +305,11 @@ public native class NetworkGameSystem extends IGameSystem {
             delta = -delta;
         }
         if delta < toleranceMinutes {
-            return false;
+            return 0;
         }
 
         ts.SetGameTimeByHMS(hours, minutes, 0);
-        return true;
+        return delta;
     }
 
     // Heure LOCALE observée, en secondes depuis minuit — l'autre moitié de l'horloge partagée.
@@ -346,7 +353,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // trompeur que la doctrine D1 interdit de compter comme un effet.
     public func ApplyServerConfig(flat: String, value: Float) -> Bool {
         if StrLen(flat) == 0 {
-            return false;
+            return 0;
         }
         if !TweakDBManager.SetFlat(TDBID.Create(flat), ToVariant(value)) {
             return false;

@@ -35,6 +35,13 @@ namespace cyberpunk_rp::protocol {
     // vers l'appelant alors que le defaut est ici. Piege deja paye une fois (2026-08-07).
     struct CharacterList; struct CharacterResult;
 }
+    // Piege paye une SECONDE fois le 2026-08-08 : `HandleHealthSync` a ete declaree plus bas sans
+    // passer par ici, et le build entier tombait sur « 'HealthSync' n'est pas membre de
+    // cyberpunk_rp::protocol ». Consequence en chaine : plus de DLL, donc un `.reds` deja deploye
+    // (jonction vers le jeu) qui declare `Tessera_RapporterDegats` sans backing natif, donc TOUT
+    // r6/scripts par terre au prochain lancement. Tout nouveau `Handle<X>` se declare ICI en meme
+    // temps qu'il se declare plus bas.
+    struct HealthSync;
 
 // Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
 // Hors de la classe : `NetworkGameSystem` est alloué par le moteur (`RTTI_IMPL_ALLOCATOR`), lui

@@ -1083,8 +1083,13 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
     const int32_t m = static_cast<int32_t>(state->minute());
     const int32_t tolerance = 3;
 
-    bool applied = false;
-    if (!Red::CallVirtual(this, "ApplyServerTime", applied, h, m, tolerance))
+    // TAILLE du saut en minutes de jeu, 0 si rien n'a bouge — pas un bool. C'est la seule mesure
+    // qui reponde a « le joueur a-t-il vu quelque chose ? » : 4 minutes et le soleil n'a pas bouge
+    // d'un degre, une heure et le ciel bascule. La mesurer cote serveur est impossible sans
+    // repliement (rapport toutes les 5 s contre correction toutes les ~4 s : les deux periodes
+    // battent l'une contre l'autre et rendent une enveloppe fausse — constate le 2026-08-08).
+    int32_t sautMinutes = 0;
+    if (!Red::CallVirtual(this, "ApplyServerTime", sautMinutes, h, m, tolerance))
     {
         // Une seule fois : ce message se repeterait toutes les 2 secondes pendant toute la session.
         if (!m_avertiHeureIntrouvable)
@@ -1097,11 +1102,12 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
         }
         return;
     }
-    // `false` = l'heure locale etait deja assez proche, rien a corriger. Ce n'est pas une erreur,
-    // et le journaliser a chaque message noierait le log.
-    if (applied)
+    // 0 = l'heure locale etait deja assez proche, rien a corriger. Ce n'est pas une erreur, et le
+    // journaliser a chaque message noierait le log.
+    if (sautMinutes > 0)
     {
-        SDK->logger->InfoF(PLUGIN, "Heure serveur appliquee : %02d:%02d", h, m);
+        SDK->logger->InfoF(PLUGIN, "Heure serveur appliquee : %02d:%02d (saut de %d min de jeu)",
+            h, m, sautMinutes);
     }
 }
 
