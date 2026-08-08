@@ -289,6 +289,17 @@ public:
         return SendPromotionRequest(record, apparence.hash, x, y, z, yaw, mort);
     }
 
+    // Journal de SONDE, ecrit dans le log du plugin — donc UN FICHIER PAR INSTANCE DE JEU.
+    //
+    // Pourquoi ne pas utiliser `FTLog` : il ecrit dans `cyber_engine_tweaks/gamelog.log`, PARTAGE
+    // par toutes les instances. Deux clients lances sur la meme install y melangent leurs lignes,
+    // ce qui rend toute comparaison entre eux impossible — or comparer deux clients est justement
+    // ce que nos sondes font depuis qu'on sait en lancer deux (F-PLF-022).
+    void Tessera_Journal(const Red::CString& texte)
+    {
+        SDK->logger->InfoF(PLUGIN, "%s", texte.c_str());
+    }
+
     /// Called from the plugin load and unload events
     static bool Load();
     /// Called from the plugin load and unload events
@@ -328,6 +339,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_GetVisiblePlayerCount);
     RTTI_METHOD(Tessera_ReportStim);
     RTTI_METHOD(Tessera_EstEntiteReseau);
+    RTTI_METHOD(Tessera_Journal);
     RTTI_METHOD(Tessera_DemanderPromotion);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);

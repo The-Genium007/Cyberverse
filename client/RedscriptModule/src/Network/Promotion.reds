@@ -87,15 +87,23 @@ public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: E
     // record nul : masquer quand même effacerait un corps que RIEN ne remplacerait. C'est la raison
     // d'être de la valeur de retour — sans elle, un serveur coupé ferait disparaître les cadavres.
     //
-    // On MASQUE, on ne détruit pas. Le pantin appartient à la foule native : le supprimer sortirait
-    // du périmètre de la promotion et toucherait des systèmes (communauté, population de secteur)
-    // que F-PNJ-091 et F-PNJ-093 décrivent comme rétifs. Un masquage est réversible et local.
+    // ⚠️ `ToggleForcedVisibilityInAnimSystemEvent` a été essayé d'abord et N'A PAS FONCTIONNÉ sur un
+    // pantin en train de mourir — le doublon restait. Hypothèse : le système d'animation ne traite
+    // plus les demandes de visibilité d'une entité qui bascule en état mort. Non confirmé, mais peu
+    // importe : on ne va pas se battre avec ce système pour un corps qu'on veut simplement voir
+    // disparaître.
     //
-    // ⚠️ Il reste un écart d'environ 150 ms entre le masquage et l'arrivée du promu (mesuré :
-    // F-PNJ-116). Le corps disparaît puis revient. Imperceptible en pratique, mais c'est une
-    // approximation, pas une propriété — si ça se voit un jour, il faudra masquer à la RÉCEPTION
-    // du promu plutôt qu'à l'émission.
+    // On DÉPLACE plutôt qu'on ne détruit. Le pantin appartient à la foule native : le supprimer
+    // toucherait des systèmes (communauté, population de secteur) que F-PNJ-091 et F-PNJ-093
+    // décrivent comme rétifs. Sous la carte, il est invisible, inatteignable, et le cycle de vie
+    // natif le nettoiera comme n'importe quel cadavre éloigné.
+    //
+    // ponytail: 1000 m sous le sol plutôt qu'une vraie suppression — grossier mais purement local
+    // et sans dépendance. À remplacer si un despawn propre se trouve (piste : Codeware
+    // `FunctionalTestsGameSystem.DespawnEntityByID`, signature non documentée).
     if partie {
-        GameObject.ToggleForcedVisibilityInAnimSystemEvent(pantin, n"Tessera_Promotion", false, 0.0);
+        let sousLaCarte = new Vector4(pos.X, pos.Y, pos.Z - 1000.0, 1.0);
+        GameInstance.GetTeleportationFacility(GetGameInstance())
+            .Teleport(pantin, sousLaCarte, new EulerAngles(0.0, 0.0, 0.0));
     }
 }

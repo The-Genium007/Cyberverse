@@ -21,6 +21,11 @@ public native class NetworkGameSystem extends IGameSystem {
     // local d'une entité déjà sous autorité.
     public native func Tessera_EstEntiteReseau(cible: EntityID) -> Bool;
 
+    // Journal de SONDE — écrit dans le log du plugin, donc UN FICHIER PAR INSTANCE.
+    // `FTLog` écrit dans le gamelog de CET, partagé par toutes les instances : deux clients y
+    // mélangent leurs lignes, ce qui interdit toute comparaison entre eux.
+    public native func Tessera_Journal(texte: String) -> Void;
+
     // Demande au serveur de prendre un figurant sous son autorité. On envoie de quoi le
     // REFABRIQUER (record, apparence, position), pas un identifiant : le pantin n'existe que sur
     // cette machine — ADR 0022.
