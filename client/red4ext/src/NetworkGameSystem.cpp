@@ -367,6 +367,11 @@ constexpr auto kIntervalleStimMin = std::chrono::milliseconds(250);
 /// A borner si une session longue le montre.
 std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 
+/// Statiques deja rapportes au serveur — un par entite et par session.
+std::set<uint64_t> g_statiquesRapportes;
+// `g_apparencesStatiques` est definie APRES cet espace anonyme : l'en-tete la declare `extern`
+// parce que l'accesseur RTTI `Tessera_ApparenceStatiqueConnue` y est inline.
+
 /// Entites reseau deja mises a l'etat MORT chez nous.
 ///
 /// Le comportement voyage dans CHAQUE snapshot : sans memoire, on rejouerait `Kill` vingt fois par
@@ -376,6 +381,11 @@ std::set<uint64_t> g_cadavresAppliques;
 std::map<uint64_t, uint32_t> g_essaisCadavre;
 constexpr uint8_t kComportementATerre = 5;
 } // namespace
+
+/// Apparence faisant autorite, telle que le serveur l'a dite, par EntityID de statique.
+/// Conservee meme quand l'application echoue : l'entite peut n'etre pas encore streamee, et c'est
+/// cette table qui permet de rejouer l'apparence a son attachement.
+std::map<uint64_t, uint64_t> g_apparencesStatiques;
 
 void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
                                       RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion,
@@ -561,9 +571,18 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_PlayerEvent:
                     HandlePlayerEvent(env->msg_as_PlayerEvent());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_StaticAppearance:
+                    HandleStaticAppearance(env->msg_as_StaticAppearance());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_CharacterList:
+                    HandleCharacterList(env->msg_as_CharacterList());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_CharacterResult:
+                    HandleCharacterResult(env->msg_as_CharacterResult());
+                    break;
                 default:
-                    // Reste non câblé : CommandResult, PermissionSync, CharacterList,
-                    // CharacterResult, QueueStatus, InteractionOpen, InteractionResult,
+                    // Reste non câblé : CommandResult, PermissionSync,
+                    // QueueStatus, InteractionOpen, InteractionResult,
                     // ElevatorStateMsg. Le serveur les émet déjà — les brancher est le chantier
                     // « autorité totale », étapes 2 et 6. Journalisé au lieu d'être jeté en
                     // silence : un message serveur ignoré sans trace est exactement ce qui a fait
@@ -1110,6 +1129,157 @@ bool NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence
     m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// FLUX D'ARRIVEE — personnages du compte (2026-08-08)
+//
+// Le serveur decide de tout : quels personnages existent, combien un compte peut en avoir
+// (`character.slots.N`, defaut 1, illimite pour un joker), et si un pseudonyme est libre. Le client
+// ne fait qu'AFFICHER et DEMANDER. Aucune de ces regles n'est dupliquee ici — c'est ce qui garantit
+// qu'un client modifie ne peut pas s'octroyer un second personnage.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+void NetworkGameSystem::HandleCharacterList(const cyberpunk_rp::protocol::CharacterList* list)
+{
+    if (list == nullptr)
+    {
+        return;
+    }
+    // REMPLACEMENT, pas fusion : le serveur envoie toujours la liste complete. Un personnage
+    // supprime disparait donc de lui-meme, sans message de suppression a traiter.
+    m_personnages.clear();
+    const auto* characters = list->characters();
+    if (characters != nullptr)
+    {
+        for (uint32_t i = 0; i < characters->size(); ++i)
+        {
+            const auto* c = characters->Get(i);
+            if (c == nullptr)
+            {
+                continue;
+            }
+            PersonnageDistant p;
+            p.id = c->id();
+            p.pseudonyme = c->pseudonym() != nullptr ? c->pseudonym()->str() : std::string();
+            m_personnages.push_back(std::move(p));
+        }
+    }
+    m_listeRecue = true;
+    SDK->logger->InfoF(PLUGIN, "CharacterList : %zu personnage(s) sur ce compte", m_personnages.size());
+}
+
+void NetworkGameSystem::HandleCharacterResult(const cyberpunk_rp::protocol::CharacterResult* result)
+{
+    if (result == nullptr)
+    {
+        return;
+    }
+    m_dernierResultatOk = result->success();
+    m_dernierResultatMotif = result->reason() != nullptr ? result->reason()->str() : std::string();
+    m_aUnResultat = true;
+    SDK->logger->InfoF(PLUGIN, "CharacterResult : %s%s%s",
+        m_dernierResultatOk ? "succes" : "refus",
+        m_dernierResultatMotif.empty() ? "" : " — ",
+        m_dernierResultatMotif.c_str());
+}
+
+bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record,
+                                                uint64_t apparence)
+{
+    if (m_pInterface == nullptr)
+    {
+        SDK->logger->Warn(PLUGIN, "CreateCharacter ignore : pas de connexion serveur");
+        return false;
+    }
+    // Le pseudonyme n'est PAS valide ici (longueur, caracteres, unicite) : c'est au serveur de le
+    // faire, puisque lui seul voit tous les comptes et qu'un client modifie contournerait n'importe
+    // quel controle local. Le client se contente de refuser l'evidence — une chaine vide, qui ne
+    // merite pas un aller-retour reseau.
+    const std::string nom = pseudonyme.c_str() != nullptr ? std::string(pseudonyme.c_str()) : std::string();
+    if (nom.empty())
+    {
+        SDK->logger->Warn(PLUGIN, "CreateCharacter ignore : pseudonyme vide");
+        return false;
+    }
+
+    SDK->logger->InfoF(PLUGIN, "CreateCharacter : « %s » record %llu apparence %llu",
+        nom.c_str(), record, apparence);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto pseudo = builder.CreateString(nom);
+    const auto req = cyberpunk_rp::protocol::CreateCreateCharacter(builder, pseudo, record, apparence);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_CreateCharacter, req.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    return true;
+}
+
+bool NetworkGameSystem::Tessera_ChoisirPersonnage(uint64_t id)
+{
+    if (m_pInterface == nullptr || id == 0)
+    {
+        SDK->logger->Warn(PLUGIN, "SelectCharacter ignore : pas de connexion, ou id nul");
+        return false;
+    }
+    SDK->logger->InfoF(PLUGIN, "SelectCharacter : id %llu", id);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto req = cyberpunk_rp::protocol::CreateSelectCharacter(builder, id);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_SelectCharacter, req.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    return true;
+}
+
+void NetworkGameSystem::SendStaticNpcReport(uint64_t entityId, uint64_t record, uint64_t apparence)
+{
+    if (m_pInterface == nullptr || entityId == 0)
+    {
+        return;
+    }
+    // Un seul rapport par entite et par session : le serveur applique « premier arrive fait foi »,
+    // donc reemettre ne changerait rien et ne ferait que consommer le budget de 40 msg/s.
+    if (!g_statiquesRapportes.insert(entityId).second)
+    {
+        return;
+    }
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto rep = cyberpunk_rp::protocol::CreateStaticNpcReport(builder, entityId, record,
+                                                                   apparence);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_StaticNpcReport, rep.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+void NetworkGameSystem::HandleStaticAppearance(const cyberpunk_rp::protocol::StaticAppearance* msg)
+{
+    if (msg == nullptr || msg->entity_id() == 0 || msg->appearance() == 0)
+    {
+        return;
+    }
+    // On note ce qu'on a RECU avant meme de l'appliquer : si l'entite n'est pas encore streamee,
+    // redscript echouera, et c'est cette table qui permettra de reessayer plus tard.
+    g_apparencesStatiques[msg->entity_id()] = msg->appearance();
+
+    const RED4ext::ent::EntityID cible(msg->entity_id());
+    const RED4ext::CName apparence(msg->appearance());
+    bool ok = false;
+    if (!Red::CallVirtual(this, "AppliquerApparenceStatique", ok, cible, apparence) || !ok)
+    {
+        // Cause attendue et NORMALE : le PNJ n'est pas encore charge chez nous. Le serveur diffuse
+        // sans filtre de distance, exprès — un joueur doit connaitre l'apparence AVANT d'arriver,
+        // sinon il la verrait changer sous ses yeux. L'application se refera a l'attachement.
+        SDK->logger->InfoF(PLUGIN, "Apparence statique %llu memorisee (entite pas encore la)",
+            msg->entity_id());
+    }
 }
 
 void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEvent* event)

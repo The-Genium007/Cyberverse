@@ -17,6 +17,7 @@
 #include <clientbound/WorldPacketsClientBound.h>
 #include <map>
 #include <string>
+#include <vector>
 #include <steam/isteamnetworkingsockets.h>
 #include <steam/steamnetworkingtypes.h>
 
@@ -24,10 +25,20 @@
 
 // Protocole TesseraSynth (FlatBuffers) — forward decl pour ne pas tirer l'en-tête généré ici.
 namespace cyberpunk_rp::protocol {
-    struct Snapshot; struct PositionCorrection; struct ShardAssignment;
+    struct Snapshot; struct PositionCorrection; struct ShardAssignment; struct StaticAppearance;
     struct WorldState; struct Kicked; struct AppearanceSync; struct ConfigSync;
     struct PlayerEvent;
+    // ⚠️ Oublier une declaration avancee ici ne donne PAS « type inconnu » : le compilateur lit
+    // `const CharacterList*` comme `const int` et l'erreur sort a l'APPEL, sous la forme
+    // « impossible de convertir 'const CharacterList *' en 'const int' » — un message qui pointe
+    // vers l'appelant alors que le defaut est ici. Piege deja paye une fois (2026-08-07).
+    struct CharacterList; struct CharacterResult;
 }
+
+// Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
+// Hors de la classe : `NetworkGameSystem` est alloué par le moteur (`RTTI_IMPL_ALLOCATOR`), lui
+// ajouter un membre corrompt la mémoire voisine (mesuré le 2026-08-06).
+extern std::map<uint64_t, uint64_t> g_apparencesStatiques;
 
 // Identité visuelle d'une entité réseau, telle que le SERVEUR la décide (`AppearanceSync`).
 // Deux hashes suffisent (modèle PRESET, ADR/design apparence §6.2) : le record TweakDB à faire
@@ -64,6 +75,34 @@ private:
     // immédiatement l'ancienne position (qui redéclencherait une correction côté serveur, cf. spec
     // mouvement §4.3). Un seul tick suffit : le sync suivant lit la position déjà corrigée.
     bool m_skipNextPositionUpdate = false;
+
+    // --- Flux d'arrivee : personnages du compte (lobby Tessera, 2026-08-08) ---
+    // Le serveur envoie un `CharacterList` juste apres le Join, puis un `CharacterResult` apres
+    // chaque creation/selection refusee. Le lobby redscript LIT cet etat, il ne le calcule jamais :
+    // l'autorite sur « quels personnages ce compte possede » est entierement serveur, y compris le
+    // cap de slots (`character.slots.N`, defaut 1, illimite pour un joker).
+    //
+    // Pas de mutex, et c'est DELIBERE : `PollIncomingMessages` est appele depuis `OnNetworkUpdate`,
+    // enregistre en `UpdateTickGroup::FrameBegin`, donc sur le FIL DE JEU — le meme qui execute le
+    // redscript qui lit ces champs. Meme raisonnement que `m_serverShard` ci-dessus. Si la
+    // reception passait un jour sur un fil dedie, il faudrait un verrou ICI.
+    struct PersonnageDistant
+    {
+        uint64_t id = 0;
+        std::string pseudonyme;
+    };
+    std::vector<PersonnageDistant> m_personnages;
+    // Dernier verdict de creation. `m_aUnResultat` distingue « rien recu » de « recu un refus » —
+    // sans lui, une UI ne saurait pas si le serveur a repondu. Le motif n'est PAS traduit ici :
+    // l'ecran est mieux place pour le formuler, et un motif inconnu doit pouvoir traverser sans
+    // etre avale (le schema est append-only, un serveur plus recent peut en inventer).
+    bool m_aUnResultat = false;
+    bool m_dernierResultatOk = false;
+    std::string m_dernierResultatMotif;
+    // Distingue « liste vide » (compte neuf, il faut creer) de « rien recu » (trop tot, il faut
+    // attendre). Deux etats que l'UI doit traiter differemment, et qu'une taille de vecteur seule
+    // ne separe pas.
+    bool m_listeRecue = false;
 
     // --- Détection « modset non compilé » (incident playtest 2026-07-20) ---
     // `SpawnTransientEntity` est déclarée en REDSCRIPT (r6/scripts/Cyberverse/NetworkGameSystem.reds).
@@ -150,6 +189,8 @@ protected:
     /// local : il effacerait un corps sans qu'aucun ne le remplace.
     bool SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y, float z,
                               float yaw, bool mort);
+    // Rapporte un PNJ STATIQUE et l'apparence qu'on lui voit. Le serveur arbitre laquelle fait foi.
+    void SendStaticNpcReport(uint64_t entityId, uint64_t record, uint64_t apparence);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
@@ -180,6 +221,15 @@ protected:
     // stimulus sur la foule LOCALE : c'est ce qui fait fuir la meme rue au meme instant chez tout
     // le monde sans repliquer un seul fuyant (ADR 0022).
     void HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEvent* event);
+    // Apparence FAISANT AUTORITE pour un PNJ statique. On ne cree rien : l'entite existe deja des
+    // deux cotes, seule sa variante visuelle change.
+    void HandleStaticAppearance(const cyberpunk_rp::protocol::StaticAppearance* msg);
+    // Liste des personnages du compte, poussee par le serveur apres le Join et apres chaque
+    // creation. REMPLACE l'etat local : le serveur envoie toujours la liste complete, jamais un
+    // delta — donc pas de fusion a faire, et un personnage supprime disparait de lui-meme.
+    void HandleCharacterList(const cyberpunk_rp::protocol::CharacterList* list);
+    // Verdict d'une creation de personnage (succes, ou motif de refus).
+    void HandleCharacterResult(const cyberpunk_rp::protocol::CharacterResult* result);
 
     // Fait apparaître une entité réseau à l'apparence décidée par le serveur, ou au repli si
     // aucune n'est connue pour cet id. Renvoie false si le spawn a échoué (modset non compilé).
@@ -212,6 +262,53 @@ public:
     {
         return static_cast<int32_t>(m_networkedEntitiesLookup.size());
     }
+
+    // --- Flux d'arrivee : ce que le lobby redscript appelle (2026-08-08) ---
+    // Volontairement plat (des entiers et des chaines, indexes par position) plutot qu'un tableau
+    // de structures : redscript ne consomme pas un `std::vector<PersonnageDistant>`, et exposer un
+    // type par RTTI pour trois champs coute plus cher que trois getters.
+    //
+    // ⚠️ « 0 personnage » n'est PAS « pas encore recu ». Un compte neuf a legitimement une liste
+    // vide, et l'ecran doit alors proposer la creation ; tant que le serveur n'a rien envoye,
+    // `Tessera_ListePersonnagesRecue()` est faux et l'ecran doit attendre au lieu d'affirmer
+    // « aucun personnage ». Sans cette distinction, un lobby ouvert trop tot pousse le joueur a
+    // creer un doublon qui sera refuse par le cap de slots.
+    int32_t Tessera_NombrePersonnages() const { return static_cast<int32_t>(m_personnages.size()); }
+    bool Tessera_ListePersonnagesRecue() const { return m_listeRecue; }
+    Red::CString Tessera_NomPersonnage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_personnages[static_cast<size_t>(index)].pseudonyme.c_str());
+    }
+    uint64_t Tessera_IdPersonnage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size())
+        {
+            return 0;
+        }
+        return m_personnages[static_cast<size_t>(index)].id;
+    }
+    // Verdict de la derniere creation. "" = rien recu depuis le dernier appel ; "ok" = succes ;
+    // toute autre valeur = motif de refus brut du serveur. La lecture CONSOMME le resultat, pour
+    // qu'un ecran ne reaffiche pas indefiniment un refus deja traite.
+    Red::CString Tessera_DernierResultat()
+    {
+        if (!m_aUnResultat)
+        {
+            return Red::CString("");
+        }
+        m_aUnResultat = false;
+        return Red::CString(m_dernierResultatOk ? "ok" : m_dernierResultatMotif.c_str());
+    }
+    // Demande la creation d'un personnage. Le serveur arbitre : cap de slots, pseudonyme deja pris,
+    // apparence hors catalogue. Renvoie false seulement si l'envoi lui-meme n'a pas pu partir
+    // (pas de connexion) — un `true` ne dit RIEN du verdict, qui arrive en `CharacterResult`.
+    bool Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record, uint64_t apparence);
+    // Entre dans le monde avec ce personnage. Meme remarque : `true` = « parti », pas « accepte ».
+    bool Tessera_ChoisirPersonnage(uint64_t id);
 
     // Remonte un stimulus au serveur depuis redscript. Point d'entree UNIQUE de l'observation :
     // l'entonnoir d'action est `StimBroadcasterComponent.TriggerSingleBroadcast` (F-PLY-029), ou
@@ -300,6 +397,30 @@ public:
         SDK->logger->InfoF(PLUGIN, "%s", texte.c_str());
     }
 
+    // Rapporte un statique au serveur depuis redscript.
+    //
+    // ⚠️ `entityId` est passe TEL QUEL, sans traduction — contrairement a `Tessera_ReportStim` qui
+    // traduit en id reseau. C'est LA difference entre les deux populations : l'identifiant d'un
+    // statique derive des donnees de secteur et vaut la meme chose sur toutes les machines
+    // (F-PNJ-128), donc il DESIGNE quelque chose pour le serveur. Celui d'un passant ne designe
+    // rien hors de sa machine.
+    void Tessera_RapporterStatique(RED4ext::ent::EntityID cible, uint64_t record,
+                                   RED4ext::CName apparence)
+    {
+        SendStaticNpcReport(cible.hash, record, apparence.hash);
+    }
+
+    // Apparence faisant autorite deja connue pour ce statique, ou CName nulle si le serveur n'a
+    // rien dit. Sert au REJEU : une apparence peut arriver avant que le PNJ ne soit streame, auquel
+    // cas l'application echoue et doit se refaire a son attachement.
+    RED4ext::CName Tessera_ApparenceStatiqueConnue(RED4ext::ent::EntityID cible) const
+    {
+        const auto it = g_apparencesStatiques.find(cible.hash);
+        // ⚠️ `CName()` et non `CName(0)` : le litteral 0 est un `int`, ambigu avec le
+        // constructeur `const char*`. Le defaut vaut deja hash = 0.
+        return it == g_apparencesStatiques.end() ? RED4ext::CName() : RED4ext::CName(it->second);
+    }
+
     /// Called from the plugin load and unload events
     static bool Load();
     /// Called from the plugin load and unload events
@@ -340,7 +461,16 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ReportStim);
     RTTI_METHOD(Tessera_EstEntiteReseau);
     RTTI_METHOD(Tessera_Journal);
+    RTTI_METHOD(Tessera_RapporterStatique);
+    RTTI_METHOD(Tessera_ApparenceStatiqueConnue);
     RTTI_METHOD(Tessera_DemanderPromotion);
+    RTTI_METHOD(Tessera_NombrePersonnages);
+    RTTI_METHOD(Tessera_ListePersonnagesRecue);
+    RTTI_METHOD(Tessera_NomPersonnage);
+    RTTI_METHOD(Tessera_IdPersonnage);
+    RTTI_METHOD(Tessera_DernierResultat);
+    RTTI_METHOD(Tessera_CreerPersonnage);
+    RTTI_METHOD(Tessera_ChoisirPersonnage);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");

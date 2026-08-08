@@ -26,6 +26,17 @@ public native class NetworkGameSystem extends IGameSystem {
     // mélangent leurs lignes, ce qui interdit toute comparaison entre eux.
     public native func Tessera_Journal(texte: String) -> Void;
 
+    // ── PNJ statiques : apparence arbitrée par le serveur ───────────────────────────────────
+    //
+    // ⚠️ `cible` est passée TELLE QUELLE, sans traduction — contrairement à `Tessera_ReportStim`.
+    // C'est LA différence entre les deux populations : l'identifiant d'un statique dérive des
+    // données de secteur et vaut la même chose sur toutes les machines (F-PNJ-128), donc il désigne
+    // quelque chose pour le serveur. Celui d'un passant ne désigne rien hors de sa machine.
+    public native func Tessera_RapporterStatique(cible: EntityID, record: Uint64, apparence: CName) -> Void;
+    // Apparence déjà connue pour ce statique, ou CName nulle. Sert au REJEU : le serveur diffuse
+    // sans filtre de distance, donc une apparence peut arriver AVANT que le PNJ ne soit chargé.
+    public native func Tessera_ApparenceStatiqueConnue(cible: EntityID) -> CName;
+
     // Demande au serveur de prendre un figurant sous son autorité. On envoie de quoi le
     // REFABRIQUER (record, apparence, position), pas un identifiant : le pantin n'existe que sur
     // cette machine — ADR 0022.
@@ -37,7 +48,35 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_GetServerShard() -> String;
     public native func Tessera_GetServerOverlaps() -> String;
     public native func Tessera_GetVisiblePlayerCount() -> Int32;
-    
+
+    // ── Flux d'arrivée : personnages du compte (lobby Tessera, 2026-08-08) ──────────────────
+    // Backing natif : `RTTI_METHOD(...)` dans NetworkGameSystem.h. ⚠️ Sans CES déclarations,
+    // l'appel ne se résout pas et TOUT r6/scripts tombe — même si le C++ enregistre bien les
+    // méthodes. Les deux côtés se posent ensemble, jamais l'un sans l'autre.
+    //
+    // Le client n'a AUCUNE autorité ici : il affiche ce que le serveur envoie et demande ce que le
+    // joueur clique. Le cap de personnages (`character.slots.N`, défaut 1, illimité pour un joker),
+    // l'unicité du pseudonyme et la validité de l'apparence sont arbitrés serveur — un client
+    // modifié ne peut donc pas s'octroyer un second personnage.
+    //
+    // ⚠️ « 0 personnage » ≠ « pas encore reçu ». Toujours tester `Tessera_ListePersonnagesRecue()`
+    // avant de conclure qu'un compte est vide : un lobby qui affiche « aucun personnage » trop tôt
+    // pousse le joueur à en créer un doublon, que le serveur refusera.
+    public native func Tessera_NombrePersonnages() -> Int32;
+    public native func Tessera_ListePersonnagesRecue() -> Bool;
+    public native func Tessera_NomPersonnage(index: Int32) -> String;
+    public native func Tessera_IdPersonnage(index: Int32) -> Uint64;
+    // "" = rien de neuf · "ok" = créé · sinon le motif brut du serveur (`slot_full`,
+    // `pseudonym_taken`, …). La lecture CONSOMME le résultat : un refus déjà affiché ne revient pas.
+    public native func Tessera_DernierResultat() -> String;
+    // `true` = la demande est PARTIE, pas qu'elle est acceptée. Le verdict arrive séparément.
+    // `record` en Uint64 via `TDBID.ToNumber(...)`, `apparence` en CName passée telle quelle : le
+    // couple exact déjà éprouvé par `Tessera_DemanderPromotion`. Côté C++ les deux arrivent en
+    // `uint64_t` — une CName EST un hash 64 bits, la conversion est faite par le RTTI.
+    public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName) -> Bool;
+    public native func Tessera_ChoisirPersonnage(id: Uint64) -> Bool;
+
+
     public func SpawnTransientEntity(entityName: TweakDBID, worldPosition: Vector4, worldOrientation: Quaternion) -> EntityID {
         let npcSpec = new DynamicEntitySpec();
         //npcSpec.recordID = t"Character.spr_animals_bouncer1_ranged1_omaha_mb";
@@ -359,6 +398,29 @@ public native class NetworkGameSystem extends IGameSystem {
         // ⚠️ `Kill` peut être différé d'une frame : un `false` ici ne veut pas dire échec, il veut
         // dire « pas encore ». L'appelant réessaiera, et ce sera vrai au snapshot suivant.
         return pantin.IsDead();
+    }
+
+    // Applique l'apparence décidée par le serveur sur un PNJ statique déjà présent.
+    //
+    // ⚠️ MÉTHODE DE CLASSE : le C++ l'appelle par `Red::CallVirtual`, qui cherche sur la classe de
+    // l'objet. Déclarée au niveau module, l'appel échouerait EN SILENCE — piège payé le 2026-08-08
+    // sur `TesseraRendreMort` (2 500 tentatives, zéro instruction exécutée).
+    //
+    // On ne crée ni ne détruit rien : l'entité existe déjà sur les deux clients, au même endroit,
+    // avec le même record. Seule sa variante visuelle change.
+    public func AppliquerApparenceStatique(cible: EntityID, apparence: CName) -> Bool {
+        if !IsNameValid(apparence) {
+            return false;
+        }
+        let entite = GameInstance.FindEntityByID(GetGameInstance(), cible);
+        if !IsDefined(entite) {
+            // Pas encore streamé. L'appelant le sait et retentera à l'attachement.
+            return false;
+        }
+        // ⚠️ `ScheduleAppearanceChange` est DIFFÉRÉ : relire l'apparence juste après renvoie encore
+        // l'ancienne (F-PNJ-050). Ne pas tenter de vérifier ici — l'oeil tranche.
+        entite.ScheduleAppearanceChange(apparence);
+        return true;
     }
 
     public func DestroyTransientEntity(entityId: EntityID) {
