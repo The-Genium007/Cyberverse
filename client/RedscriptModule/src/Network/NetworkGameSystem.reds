@@ -36,6 +36,9 @@ public native class NetworkGameSystem extends IGameSystem {
     // Apparence déjà connue pour ce statique, ou CName nulle. Sert au REJEU : le serveur diffuse
     // sans filtre de distance, donc une apparence peut arriver AVANT que le PNJ ne soit chargé.
     public native func Tessera_ApparenceStatiqueConnue(cible: EntityID) -> CName;
+    // SONDE one-shot — voir AppearanceProbe.reds. Renvoie une apparence DIFFÉRENTE déjà vue pour ce
+    // record (donc valide), ou une CName nulle.
+    public native func Tessera_CobayeApparence(record: Uint64, apparence: CName) -> CName;
 
     // Demande au serveur de prendre un figurant sous son autorité. On envoie de quoi le
     // REFABRIQUER (record, apparence, position), pas un identifiant : le pantin n'existe que sur
@@ -302,6 +305,30 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // Heure LOCALE observée, en secondes depuis minuit — l'autre moitié de l'horloge partagée.
+    // Le C++ l'empaquette en `ClientTimeReport` et l'envoie ; le serveur compare à son horloge
+    // autoritaire et journalise l'écart (`world_clock.rs`). Diagnostic pur : rien ici ne corrige
+    // quoi que ce soit, la correction descend par `ApplyServerTime` ci-dessus.
+    //
+    // Pourquoi ici et pas en C++ : même raison que `ApplyServerTime` — `GetTimeSystem` ne se
+    // résout pas depuis le plugin (mesuré en jeu le 2026-08-04).
+    //
+    // `-1` = horloge non lisible (menu principal, pas encore en partie). Le C++ n'envoie alors
+    // rien : un zéro rapporté comme « il est minuit » ferait crier le diagnostic serveur à tort.
+    //
+    // Getters d'INSTANCE `Hours()/Minutes()/Seconds()` (pluriel) : les formes singulières
+    // `Hour()/Minute()` sont STATIQUES et renvoient un GameTime (constructeurs d'unité), et
+    // `Sec()` n'existe pas — vérifié au dump RTTI, c'est ce qui avait produit un
+    // [INVALID_STATIC_USE] ailleurs dans le dépôt.
+    public func ReadLocalGameSeconds() -> Int32 {
+        let ts = GameInstance.GetTimeSystem(GetGameInstance());
+        if !IsDefined(ts) {
+            return -1;
+        }
+        let now = ts.GetGameTime();
+        return now.Hours() * 3600 + now.Minutes() * 60 + now.Seconds();
+    }
+
     // Écrit une valeur de TweakDB décidée par le SERVEUR, en cours de partie.
     //
     // C'est la sonde S-E5, écrite comme du code de production plutôt que comme un jetable : la
@@ -421,6 +448,47 @@ public native class NetworkGameSystem extends IGameSystem {
         // l'ancienne (F-PNJ-050). Ne pas tenter de vérifier ici — l'oeil tranche.
         entite.ScheduleAppearanceChange(apparence);
         return true;
+    }
+
+    // Applique une apparence autoritaire SEULEMENT si le joueur ne peut pas le voir.
+    //
+    // ── L'idée, dans les mots de Lucas (2026-08-08) ─────────────────────────────────────────
+    // « Une espèce de cône de vision : quand on n'est plus dans le cône, ça change l'esthétique du
+    // personnage, pour rendre quelque chose de fidèle pour tout le monde. »
+    //
+    // Elle résout deux choses à la fois : le changement devient invisible, ET les ordres arrivés
+    // trop tôt (PNJ pas encore streamé) finissent par s'appliquer, au lieu d'attendre un
+    // réattachement qui peut ne jamais venir.
+    //
+    // ⚠️ `false` signifie « PAS MAINTENANT », jamais « impossible ». L'appelant réessaiera au tick
+    // suivant. Confondre les deux ferait abandonner un PNJ simplement parce qu'on le regardait.
+    //
+    // Deux échappatoires au cône, et chacune a sa raison :
+    //   · au-delà de 60 m, on applique quand même — le changement est indiscernable à cette
+    //     distance, et attendre l'occultation d'un PNJ lointain pourrait durer toute la session ;
+    //   · dans le dos (produit scalaire négatif), c'est le cas nominal.
+    public func AppliquerApparenceDiscrete(cible: EntityID, apparence: CName) -> Bool {
+        let joueur = GameInstance.GetPlayerSystem(GetGameInstance()).GetLocalPlayerControlledGameObject();
+        let entite = GameInstance.FindEntityByID(GetGameInstance(), cible);
+        if !IsDefined(joueur) || !IsDefined(entite) {
+            return false;
+        }
+        // On reste en `Vector4` de bout en bout : `Vector4To3` n'existe pas dans les scripts du
+        // jeu, et l'opérateur de soustraction est défini sur `Vector4` (`vector.script:153`).
+        let versPnj = entite.GetWorldPosition() - joueur.GetWorldPosition();
+        let distance = Vector4.Length(versPnj);
+        if distance > 60.0 {
+            return this.AppliquerApparenceStatique(cible, apparence);
+        }
+        // Produit scalaire du regard et de la direction du PNJ, normalisés : > 0 = devant.
+        // 0.2 plutôt que 0.0 : une marge, pour ne pas rhabiller quelqu'un en limite de champ que le
+        // joueur verrait du coin de l'oeil.
+        let regard = Vector4.Normalize(joueur.GetWorldForward());
+        let vers = Vector4.Normalize(versPnj);
+        if Vector4.Dot(regard, vers) > 0.2 {
+            return false;
+        }
+        return this.AppliquerApparenceStatique(cible, apparence);
     }
 
     public func DestroyTransientEntity(entityId: EntityID) {

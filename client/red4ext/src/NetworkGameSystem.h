@@ -16,6 +16,7 @@
 #include <RedLib.hpp>
 #include <clientbound/WorldPacketsClientBound.h>
 #include <map>
+#include <set>   // suivi des apparences statiques deja appliquees (hydratation discrete)
 #include <string>
 #include <vector>
 #include <steam/isteamnetworkingsockets.h>
@@ -39,6 +40,12 @@ namespace cyberpunk_rp::protocol {
 // Hors de la classe : `NetworkGameSystem` est alloué par le moteur (`RTTI_IMPL_ALLOCATOR`), lui
 // ajouter un membre corrompt la mémoire voisine (mesuré le 2026-08-06).
 extern std::map<uint64_t, uint64_t> g_apparencesStatiques;
+// Statiques dont l'apparence autoritaire a REELLEMENT ete appliquee. La difference avec
+// `g_apparencesStatiques` est la file de travail de l'hydratation discrete.
+extern std::set<uint64_t> g_apparencesAppliquees;
+// Sonde d'apparence : premiere apparence vue par record, et garde one-shot.
+extern std::map<uint64_t, uint64_t> g_premiereApparence;
+extern bool g_sondeApparenceFaite;
 
 // Identité visuelle d'une entité réseau, telle que le SERVEUR la décide (`AppearanceSync`).
 // Deux hashes suffisent (modèle PRESET, ADR/design apparence §6.2) : le record TweakDB à faire
@@ -141,6 +148,16 @@ private:
     /// sur changement : le serveur diffuse `WorldState` périodiquement, et redemander le même
     /// preset relancerait une transition de 3 s en boucle — un ciel qui ne se stabilise jamais.
     std::string m_lastAppliedWeather;
+    /// Gardes one-shot des avertissements « méthode redscript introuvable ». Sans elles, un modset
+    /// non compilé produit une ligne toutes les 2 secondes (cadence de `WorldState`) et une toutes
+    /// les 5 secondes (rapport d'heure) : des milliers de lignes identiques par session, exactement
+    /// le bruit qui avait déjà noyé le diagnostic des échecs de spawn (~5 Mo de lignes, cf.
+    /// `m_spawnFailureCount`). La première ligne date le problème, les suivantes n'apprennent rien.
+    bool m_avertiHeureIntrouvable = false;
+    bool m_avertiMeteoIntrouvable = false;
+    bool m_avertiLectureHeureIntrouvable = false;
+    /// Secondes écoulées depuis le dernier `ClientTimeReport` (diagnostic de dérive d'horloge).
+    float m_tempsDepuisRapportHeure = 0.0f;
 
 private:
     // Appelé à chaque échec de `SpawnTransientEntity`. Agrège les logs et déclenche UNE fois
@@ -177,6 +194,12 @@ protected:
     // Envoient un ClientEnvelope (Join / PositionUpdate) au serveur Rust autoritaire.
     void SendJoin(const std::string& displayName);
     void SendPositionUpdate(float x, float y, float z, float yaw);
+    // Remonte l'heure que CE client observe localement, pour que le serveur mesure l'ecart avec
+    // son horloge autoritaire (`ClientTimeReport` -> `world_clock.rs`). Diagnostic pur : le
+    // serveur journalise, il ne corrige rien avec — la correction descend, elle, par `WorldState`.
+    // Sans cet envoi, la moitie « mesure » du dispositif n'existait que sur le papier : le serveur
+    // savait lire un rapport que personne n'emettait.
+    void SendClientTimeReport();
     // Remonte un stimulus OBSERVE chez le joueur local. Le client observe, il ne decide jamais de
     // la reaction : c'est le serveur qui rediffuse aux voisins (ADR 0022). `nature` est l'ordinal
     // de `gamedataStimType`, catalogue des 67 valeurs dans docs/connaissances/catalogue-stimulus.md.
@@ -194,6 +217,9 @@ protected:
     // Vide la file des rapports de statiques, UN PAR TICK au plus et pas plus vite que la cadence
     // fixee. Appelee depuis `OnNetworkUpdate`.
     void DrainerRapportsStatiques();
+    // Applique les apparences autoritaires encore en attente, UNE par tick au plus, et seulement
+    // quand le PNJ est hors du champ de vision du joueur. Voir le commentaire dans le .cpp.
+    void HydraterApparencesDiscretement();
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
@@ -424,6 +450,35 @@ public:
         return it == g_apparencesStatiques.end() ? RED4ext::CName() : RED4ext::CName(it->second);
     }
 
+    // SONDE one-shot : `ScheduleAppearanceChange` a-t-il un effet sur un PNJ de communaute ?
+    //
+    // Renvoie une apparence DIFFERENTE deja vue pour ce meme record — donc forcement valide, le
+    // moteur rejetant en silence une apparence etrangere a l'entite (F-PNJ-051) — ou une CName nulle
+    // s'il n'y a pas encore de quoi comparer. Memorise au passage.
+    //
+    // ⚠️ L'etat vit ICI et non en redscript : une classe `ScriptableSystem` maison n'a PAS ete
+    // resolue par `GetScriptableSystemsContainer().Get()` (essai du 2026-08-08, 171 pantins classes
+    // et zero appel). Le C++ garde l'etat, c'est eprouve.
+    RED4ext::CName Tessera_CobayeApparence(uint64_t record, RED4ext::CName apparence)
+    {
+        if (g_sondeApparenceFaite || apparence.hash == 0)
+        {
+            return RED4ext::CName();
+        }
+        const auto it = g_premiereApparence.find(record);
+        if (it == g_premiereApparence.end())
+        {
+            g_premiereApparence[record] = apparence.hash;
+            return RED4ext::CName();
+        }
+        if (it->second == apparence.hash)
+        {
+            return RED4ext::CName(); // meme apparence : pas un cobaye utile
+        }
+        g_sondeApparenceFaite = true;
+        return RED4ext::CName(it->second);
+    }
+
     /// Called from the plugin load and unload events
     static bool Load();
     /// Called from the plugin load and unload events
@@ -466,6 +521,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_Journal);
     RTTI_METHOD(Tessera_RapporterStatique);
     RTTI_METHOD(Tessera_ApparenceStatiqueConnue);
+    RTTI_METHOD(Tessera_CobayeApparence);
     RTTI_METHOD(Tessera_DemanderPromotion);
     RTTI_METHOD(Tessera_NombrePersonnages);
     RTTI_METHOD(Tessera_ListePersonnagesRecue);

@@ -110,6 +110,11 @@ static constexpr uint64_t kSpawnFailureAlertThreshold = 40;
 // Période d'agrégation des logs, en secondes. Sans elle : ~5 Mo de lignes identiques par partie
 // (constaté sur le log d'un playtester le 2026-07-20).
 static constexpr float kSpawnFailureLogPeriodSeconds = 5.0f;
+// Cadence du rapport d'heure locale au serveur (diagnostic de derive). 5 s : assez rare pour
+// peser zero sur le fil (3 octets utiles), assez frequent pour dater une derive a la minute de
+// jeu pres — l'horloge du jeu tourne ~60x le temps reel (F-PNJ-094), 5 s reelles valent donc
+// ~5 minutes de jeu.
+static constexpr float kPeriodeRapportHeureSecondes = 5.0f;
 
 #include <set>
 
@@ -179,6 +184,7 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
 {
     // TODO: make this framerate indepedent, maybe also use multiple UpdateTickGroups.
     DrainerRapportsStatiques();
+    HydraterApparencesDiscretement();
 
     if (!m_hasTriedToConnect)
     {
@@ -210,6 +216,16 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
     PollIncomingMessages();
     TrackPlayerPosition(frame_info.deltaTime);
     InterpolatePuppets(frame_info.deltaTime);
+
+    // Rapport d'heure locale — l'autre moitie de l'horloge partagee. Le serveur DECIDE l'heure
+    // (`WorldState`, descendant) ; ce rapport lui dit ce que le client affiche VRAIMENT, pour
+    // qu'une desynchronisation se voie dans le log au lieu de se deviner sur un ecran.
+    m_tempsDepuisRapportHeure += frame_info.deltaTime;
+    if (m_tempsDepuisRapportHeure >= kPeriodeRapportHeureSecondes)
+    {
+        m_tempsDepuisRapportHeure = 0.0f;
+        SendClientTimeReport();
+    }
 
     // Log agrégé des échecs de spawn : une ligne périodique avec le total, plutôt qu'une ligne par
     // snapshot et par joueur (~5 Mo de lignes identiques constatés sur un log de playtest).
@@ -411,6 +427,11 @@ constexpr uint8_t kComportementATerre = 5;
 /// Conservee meme quand l'application echoue : l'entite peut n'etre pas encore streamee, et c'est
 /// cette table qui permet de rejouer l'apparence a son attachement.
 std::map<uint64_t, uint64_t> g_apparencesStatiques;
+/// Sonde d'apparence — premiere apparence vue par record, et garde one-shot. Une sonde qui
+/// rhabillerait toute la rue changerait la scene observee et rendrait le resultat inexploitable.
+std::set<uint64_t> g_apparencesAppliquees;
+std::map<uint64_t, uint64_t> g_premiereApparence;
+bool g_sondeApparenceFaite = false;
 
 void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
                                       RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion,
@@ -692,6 +713,53 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
         /*frame=*/0, /*slot=*/0);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_PositionUpdate, pu.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(
+        m_hConnection, builder.GetBufferPointer(), builder.GetSize(),
+        k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+void NetworkGameSystem::SendClientTimeReport()
+{
+    if (m_pInterface == nullptr || !FullyConnected)
+    {
+        return;
+    }
+
+    // La LECTURE de l'heure vit en redscript, exactement pour la meme raison que son ECRITURE
+    // (`ApplyServerTime`) : `GetTimeSystem` appele depuis le plugin n'etait JAMAIS resolu —
+    // « TimeSystem introuvable » a chaque message, mesure en jeu le 2026-08-04. On garde la voie
+    // prouvee des deux cotes plutot que d'en entretenir deux.
+    int32_t secondesLocales = -1;
+    if (!Red::CallVirtual(this, "ReadLocalGameSeconds", secondesLocales))
+    {
+        if (!m_avertiLectureHeureIntrouvable)
+        {
+            m_avertiLectureHeureIntrouvable = true;
+            SDK->logger->Warn(PLUGIN,
+                "ReadLocalGameSeconds introuvable (module redscript non compile ?) — aucune "
+                "mesure de derive d'horloge cette session. Message affiche une seule fois.");
+        }
+        return;
+    }
+
+    // Hors bornes = le redscript n'a pas pu lire l'horloge (pas encore en partie, menu principal).
+    // On se TAIT plutot que de rapporter une heure inventee : un rapport faux ferait crier le
+    // diagnostic serveur, et un diagnostic qui crie a tort est pire que pas de diagnostic.
+    if (secondesLocales < 0 || secondesLocales >= 86400)
+    {
+        return;
+    }
+
+    const auto total = static_cast<uint32_t>(secondesLocales);
+    flatbuffers::FlatBufferBuilder builder;
+    const auto report = cyberpunk_rp::protocol::CreateClientTimeReport(
+        builder,
+        static_cast<uint8_t>(total / 3600),
+        static_cast<uint8_t>((total / 60) % 60),
+        static_cast<uint8_t>(total % 60));
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_ClientTimeReport, report.Union());
     builder.Finish(env);
     m_pInterface->SendMessageToConnection(
         m_hConnection, builder.GetBufferPointer(), builder.GetSize(),
@@ -1007,6 +1075,10 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
     //
     // 3 minutes de jeu : assez large pour que l'horloge du moteur suive sans etre corrigee en
     // permanence, assez serre pour qu'aucun joueur ne voie un decalage credible avec les autres.
+    // ⚠️ Ce nombre est APPARIE au seuil d'alerte de derive du serveur
+    // (`TIME_DRIFT_WARN_THRESHOLD_SECS`, gateway.rs) : le serveur ne s'inquiete qu'au-dela de
+    // cette tolerance plus une marge. Bouger l'un sans l'autre remet le diagnostic a crier en
+    // permanence — ou l'aveugle.
     const int32_t h = static_cast<int32_t>(state->hour());
     const int32_t m = static_cast<int32_t>(state->minute());
     const int32_t tolerance = 3;
@@ -1014,7 +1086,15 @@ void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldStat
     bool applied = false;
     if (!Red::CallVirtual(this, "ApplyServerTime", applied, h, m, tolerance))
     {
-        SDK->logger->Warn(PLUGIN, "WorldState : ApplyServerTime introuvable (module redscript ?)");
+        // Une seule fois : ce message se repeterait toutes les 2 secondes pendant toute la session.
+        if (!m_avertiHeureIntrouvable)
+        {
+            m_avertiHeureIntrouvable = true;
+            SDK->logger->Warn(PLUGIN,
+                "WorldState : ApplyServerTime introuvable (module redscript non compile ?) — "
+                "l'heure du monde ne sera PAS synchronisee de toute la session. "
+                "Voir r6/logs/redscript_rCURRENT.log. Message affiche une seule fois.");
+        }
         return;
     }
     // `false` = l'heure locale etait deja assez proche, rien a corriger. Ce n'est pas une erreur,
@@ -1050,7 +1130,16 @@ void NetworkGameSystem::ApplyServerWeather(const cyberpunk_rp::protocol::WorldSt
     bool accepted = false;
     if (!Red::CallVirtual(this, "ApplyServerWeather", accepted, redPreset))
     {
-        SDK->logger->Warn(PLUGIN, "ApplyServerWeather introuvable — module redscript non compile ?");
+        // Une seule fois, meme raison que pour l'heure ci-dessus. Et surtout : on ne memorise
+        // PAS `m_lastAppliedWeather` sur cet echec — memoriser une meteo qu'on n'a pas appliquee
+        // ferait renoncer a la re-demander si le module redscript revenait (rechargement a chaud).
+        if (!m_avertiMeteoIntrouvable)
+        {
+            m_avertiMeteoIntrouvable = true;
+            SDK->logger->Warn(PLUGIN,
+                "ApplyServerWeather introuvable (module redscript non compile ?) — la meteo "
+                "restera celle du jeu. Message affiche une seule fois.");
+        }
         return;
     }
 
@@ -1311,17 +1400,64 @@ void NetworkGameSystem::HandleStaticAppearance(const cyberpunk_rp::protocol::Sta
     // On note ce qu'on a RECU avant meme de l'appliquer : si l'entite n'est pas encore streamee,
     // redscript echouera, et c'est cette table qui permettra de reessayer plus tard.
     g_apparencesStatiques[msg->entity_id()] = msg->appearance();
+    // Retiree de la liste des appliquees : une nouvelle autorite doit etre (re)posee.
+    g_apparencesAppliquees.erase(msg->entity_id());
 
     const RED4ext::ent::EntityID cible(msg->entity_id());
     const RED4ext::CName apparence(msg->appearance());
     bool ok = false;
-    if (!Red::CallVirtual(this, "AppliquerApparenceStatique", ok, cible, apparence) || !ok)
+    if (Red::CallVirtual(this, "AppliquerApparenceStatique", ok, cible, apparence) && ok)
+    {
+        g_apparencesAppliquees.insert(msg->entity_id());
+    }
+    else
     {
         // Cause attendue et NORMALE : le PNJ n'est pas encore charge chez nous. Le serveur diffuse
         // sans filtre de distance, exprès — un joueur doit connaitre l'apparence AVANT d'arriver,
         // sinon il la verrait changer sous ses yeux. L'application se refera a l'attachement.
         SDK->logger->InfoF(PLUGIN, "Apparence statique %llu memorisee (entite pas encore la)",
             msg->entity_id());
+    }
+}
+
+void NetworkGameSystem::HydraterApparencesDiscretement()
+{
+    // ── POURQUOI CETTE PASSE EXISTE ──────────────────────────────────────────────────────────
+    //
+    // Deux defauts qu'elle corrige d'un coup.
+    //
+    // 1. UN ORDRE ARRIVE TROP TOT SE PERDAIT. Le serveur diffuse sans filtre de distance (exprès :
+    //    un joueur doit connaitre l'apparence AVANT d'arriver). Si le PNJ n'est pas encore streame,
+    //    l'application echoue, on memorise… et on ne reessayait qu'a son prochain attachement, qui
+    //    peut ne jamais venir. C'est la cause probable des divergences residuelles observees par
+    //    Lucas le 2026-08-08 (« la majorite a la meme esthetique, mais certains non »).
+    //
+    // 2. UN CHANGEMENT D'APPARENCE SOUS LES YEUX DU JOUEUR SE VOIT. D'ou l'idee de Lucas : ne
+    //    l'appliquer que HORS du champ de vision. Le rendu reste fidele pour tout le monde, et
+    //    personne ne voit un passant se rhabiller.
+    //
+    // Une seule par tick : un lot d'apparences appliquees d'un coup ferait un a-coup visible meme
+    // hors champ (cout de rendu), et rien ne presse.
+    if (g_apparencesStatiques.size() == g_apparencesAppliquees.size())
+    {
+        return;
+    }
+    for (const auto& [id, apparence] : g_apparencesStatiques)
+    {
+        if (g_apparencesAppliquees.contains(id))
+        {
+            continue;
+        }
+        bool ok = false;
+        const RED4ext::ent::EntityID cible(id);
+        const RED4ext::CName nom(apparence);
+        // Le redscript decide s'il est DISCRET d'appliquer maintenant — c'est lui qui voit le
+        // joueur et le PNJ. Un `false` signifie « pas maintenant », pas « impossible ».
+        if (Red::CallVirtual(this, "AppliquerApparenceDiscrete", ok, cible, nom) && ok)
+        {
+            g_apparencesAppliquees.insert(id);
+        }
+        return; // une seule tentative par tick, reussie ou non
     }
 }
 

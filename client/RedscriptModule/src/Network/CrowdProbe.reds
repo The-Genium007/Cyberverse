@@ -63,6 +63,9 @@ class TesseraClassementFoule extends DelayCallback {
         //
         // Deux gestes, dans cet ordre : on APPLIQUE ce que le serveur a déjà décidé (le cas d'un
         // PNJ streamé après coup), et sinon on RAPPORTE ce qu'on voit pour qu'il tranche.
+        // Sonde one-shot : `ScheduleAppearanceChange` a-t-il un effet ? Voir AppearanceProbe.reds.
+        TesseraSonderApparence(reseau, this.pantin);
+
         let connue = reseau.Tessera_ApparenceStatiqueConnue(this.pantin.GetEntityID());
         if IsNameValid(connue) {
             reseau.AppliquerApparenceStatique(this.pantin.GetEntityID(), connue);
