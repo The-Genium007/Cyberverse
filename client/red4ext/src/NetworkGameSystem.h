@@ -191,6 +191,9 @@ protected:
                               float yaw, bool mort);
     // Rapporte un PNJ STATIQUE et l'apparence qu'on lui voit. Le serveur arbitre laquelle fait foi.
     void SendStaticNpcReport(uint64_t entityId, uint64_t record, uint64_t apparence);
+    // Vide la file des rapports de statiques, UN PAR TICK au plus et pas plus vite que la cadence
+    // fixee. Appelee depuis `OnNetworkUpdate`.
+    void DrainerRapportsStatiques();
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le

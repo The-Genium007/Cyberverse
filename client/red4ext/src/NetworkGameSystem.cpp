@@ -22,6 +22,7 @@
 #include <zpp_bits.h>
 
 #include <chrono>  // etranglement des stimulus remontes au serveur (budget 40 msg/s du Gateway)
+#include <deque>   // file des rapports de statiques, drainee a cadence limitee
 #include <tuple>   // cle de deduplication des promotions (record + position arrondie)
 #include <cmath>   // std::lround/std::fmod (quantization du fil, gel palier 2 — cf. QuantPos/QuantYaw)
 #include <cstdlib> // std::getenv (token ZITADEL transmis par le launcher, cf. SendJoin)
@@ -177,6 +178,8 @@ bool NetworkGameSystem::ConnectToServer(const std::string& host, uint16_t port)
 void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext::JobQueue& job_queue)
 {
     // TODO: make this framerate indepedent, maybe also use multiple UpdateTickGroups.
+    DrainerRapportsStatiques();
+
     if (!m_hasTriedToConnect)
     {
         // We auto-connect on the first tick with the CLI address. We don't connect earlier because the message loop
@@ -369,6 +372,28 @@ std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 
 /// Statiques deja rapportes au serveur — un par entite et par session.
 std::set<uint64_t> g_statiquesRapportes;
+
+/// File d'attente des rapports de statiques, drainee A CADENCE LIMITEE.
+///
+/// ⚠️ NECESSAIRE, PAS UN CONFORT. Les statiques s'attachent par RAFALES au chargement d'un secteur :
+/// mesure du 2026-08-08, ~180 pantins classes en quelques secondes, soit des pics de 32-33 rapports
+/// par seconde. Le Gateway plafonne chaque client a 40 messages/s TOUTES familles confondues
+/// (rate_limit.rs) — les rapports passaient donc au-dessus du plafond et etaient JETES :
+/// « message ignore (rate-limit) », 80 statiques arbitres sur 204 observes.
+///
+/// Etaler coute quelques secondes de convergence et ne perd rien. Relever le plafond serveur
+/// aurait desarme une protection contre le vrai flood pour un besoin qui n'est pas urgent.
+struct RapportStatique
+{
+    uint64_t entityId;
+    uint64_t record;
+    uint64_t apparence;
+};
+std::deque<RapportStatique> g_fileStatiques;
+std::chrono::steady_clock::time_point g_dernierEnvoiStatique{};
+/// 5 par seconde : trois ordres de grandeur sous le plafond, et 200 statiques convergent en 40 s —
+/// bien avant qu'un joueur ait traverse le quartier.
+constexpr auto kIntervalleStatique = std::chrono::milliseconds(200);
 // `g_apparencesStatiques` est definie APRES cet espace anonyme : l'en-tete la declare `extern`
 // parce que l'accesseur RTTI `Tessera_ApparenceStatiqueConnue` y est inline.
 
@@ -1242,16 +1267,34 @@ void NetworkGameSystem::SendStaticNpcReport(uint64_t entityId, uint64_t record, 
     {
         return;
     }
-    // Un seul rapport par entite et par session : le serveur applique « premier arrive fait foi »,
-    // donc reemettre ne changerait rien et ne ferait que consommer le budget de 40 msg/s.
+    // Un seul rapport par entite et par session : le serveur applique « premier arrive fait foi ».
     if (!g_statiquesRapportes.insert(entityId).second)
     {
         return;
     }
+    // On MET EN FILE, on n'envoie pas : voir `g_fileStatiques`. Le drainage se fait au tick.
+    g_fileStatiques.push_back({entityId, record, apparence});
+}
+
+void NetworkGameSystem::DrainerRapportsStatiques()
+{
+    if (m_pInterface == nullptr || g_fileStatiques.empty())
+    {
+        return;
+    }
+    const auto maintenant = std::chrono::steady_clock::now();
+    if (maintenant - g_dernierEnvoiStatique < kIntervalleStatique)
+    {
+        return;
+    }
+    g_dernierEnvoiStatique = maintenant;
+
+    const auto rapport = g_fileStatiques.front();
+    g_fileStatiques.pop_front();
 
     flatbuffers::FlatBufferBuilder builder;
-    const auto rep = cyberpunk_rp::protocol::CreateStaticNpcReport(builder, entityId, record,
-                                                                   apparence);
+    const auto rep = cyberpunk_rp::protocol::CreateStaticNpcReport(
+        builder, rapport.entityId, rapport.record, rapport.apparence);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_StaticNpcReport, rep.Union());
     builder.Finish(env);
