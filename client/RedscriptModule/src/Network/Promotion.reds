@@ -69,7 +69,7 @@ public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: E
         return;
     }
     let pos = pantin.GetWorldPosition();
-    reseau.Tessera_DemanderPromotion(
+    let partie = reseau.Tessera_DemanderPromotion(
         TDBID.ToNumber(pantin.GetRecordID()),
         pantin.GetCurrentAppearanceName(),
         // `GetWorldYaw()` rend déjà des DEGRÉS (`entity.script:26`) — pas de conversion, et surtout
@@ -79,4 +79,23 @@ public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: E
         // où un autre s'y branche, ce booléen devra venir de lui — d'où un paramètre plutôt qu'une
         // constante côté serveur.
         true);
+
+    // Le pantin LOCAL cède la place à celui du serveur — sinon le tireur voit DEUX cadavres, le
+    // sien et le promu. Mesuré en jeu le 2026-08-08 : « ça fait un doublon ».
+    //
+    // ⚠️ CONDITIONNÉ à l'envoi réel. Un `false` signifie déduplication, absence de connexion ou
+    // record nul : masquer quand même effacerait un corps que RIEN ne remplacerait. C'est la raison
+    // d'être de la valeur de retour — sans elle, un serveur coupé ferait disparaître les cadavres.
+    //
+    // On MASQUE, on ne détruit pas. Le pantin appartient à la foule native : le supprimer sortirait
+    // du périmètre de la promotion et toucherait des systèmes (communauté, population de secteur)
+    // que F-PNJ-091 et F-PNJ-093 décrivent comme rétifs. Un masquage est réversible et local.
+    //
+    // ⚠️ Il reste un écart d'environ 150 ms entre le masquage et l'arrivée du promu (mesuré :
+    // F-PNJ-116). Le corps disparaît puis revient. Imperceptible en pratique, mais c'est une
+    // approximation, pas une propriété — si ça se voit un jour, il faudra masquer à la RÉCEPTION
+    // du promu plutôt qu'à l'émission.
+    if partie {
+        GameObject.ToggleForcedVisibilityInAnimSystemEvent(pantin, n"Tessera_Promotion", false, 0.0);
+    }
 }

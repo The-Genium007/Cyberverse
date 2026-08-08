@@ -1078,12 +1078,12 @@ void NetworkGameSystem::HandleConfigSync(const cyberpunk_rp::protocol::ConfigSyn
         applied, refused);
 }
 
-void NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y,
+bool NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y,
                                              float z, float yaw, bool mort)
 {
     if (m_pInterface == nullptr || record == 0)
     {
-        return;
+        return false;
     }
 
     // Etranglement : une seule demande par pantin. Sans ca, le meme figurant serait promu a chaque
@@ -1094,7 +1094,7 @@ void NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence
                                      static_cast<int32_t>(z));
     if (!g_promotionsDemandees.insert(cle).second)
     {
-        return;
+        return false;
     }
 
     SDK->logger->InfoF(PLUGIN, "Promotion demandee : record %llu apparence %llu a (%.1f, %.1f, %.1f)%s",
@@ -1109,6 +1109,7 @@ void NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence
     builder.Finish(env);
     m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    return true;
 }
 
 void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEvent* event)

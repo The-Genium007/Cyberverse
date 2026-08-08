@@ -145,7 +145,10 @@ protected:
     void SendStimReport(uint8_t nature, float radiusMetres, uint64_t target);
     // Demande de prise d'autorite sur un figurant local. Porte de quoi le REFABRIQUER, pas un
     // identifiant : voir `PromotionRequest` dans protocol.fbs.
-    void SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y, float z,
+    /// Renvoie true si la requete est REELLEMENT partie. Un false signifie deduplication, absence
+    /// de connexion ou record nul — et l'appelant ne doit alors surtout pas masquer son pantin
+    /// local : il effacerait un corps sans qu'aucun ne le remplace.
+    bool SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y, float z,
                               float yaw, bool mort);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
@@ -280,10 +283,10 @@ public:
     // On envoie de quoi le REFABRIQUER, pas un identifiant : le pantin n'existe que sur cette
     // machine, les autres joueurs ont d'autres passants au meme endroit. Voir `PromotionRequest`
     // dans protocol.fbs.
-    void Tessera_DemanderPromotion(uint64_t record, RED4ext::CName apparence, float x, float y,
+    bool Tessera_DemanderPromotion(uint64_t record, RED4ext::CName apparence, float x, float y,
                                    float z, float yaw, bool mort)
     {
-        SendPromotionRequest(record, apparence.hash, x, y, z, yaw, mort);
+        return SendPromotionRequest(record, apparence.hash, x, y, z, yaw, mort);
     }
 
     /// Called from the plugin load and unload events
