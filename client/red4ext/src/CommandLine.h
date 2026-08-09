@@ -35,3 +35,17 @@ inline std::optional<uint16_t> ParsePortFromCommandLine(char* commandLine) {
 
     return std::stoi(portString.value());
 }
+
+// MODE DÉVELOPPEMENT — `--tessera-dev` sur la ligne de commande.
+//
+// Saute le lobby et entre directement dans le monde avec un personnage assigné d'office. Existe
+// pour une raison précise : itérer sur le JEU sans repasser par un écran de choix à chaque
+// lancement — et surtout pour qu'un agent puisse tester seul, sans un humain pour cliquer.
+//
+// Présence/absence, pas de valeur : un drapeau qui prend un paramètre invite à en inventer d'autres,
+// et celui-ci ne doit rester qu'un interrupteur. Absent = parcours normal, lobby obligatoire.
+inline bool ModeDeveloppementDemande(char* commandLine)
+{
+    if (commandLine == nullptr) { return false; }
+    return std::string(commandLine).find("--tessera-dev") != std::string::npos;
+}

@@ -21,6 +21,47 @@ public native class NetworkGameSystem extends IGameSystem {
     // local d'une entité déjà sous autorité.
     public native func Tessera_EstEntiteReseau(cible: EntityID) -> Bool;
 
+    // Rapporte au serveur des dégâts infligés à une entité réseau. Backing natif :
+    // `RTTI_METHOD(Tessera_RapporterDegats)` — les deux côtés se posent ET se déploient ensemble,
+    // sinon TOUT `r6/scripts` tombe.
+    //
+    // ⚠️ `cible` est une EntityID LOCALE, traduite côté C++ comme celle de `Tessera_ReportStim`.
+    // Rien ne part si la cible n'est pas une entité serveur : un figurant de la foule native ne
+    // désigne personne chez le serveur.
+    //
+    // `degats` en points de vie « jeu », calculés par le moteur du tireur — c'est lui qui sait le
+    // faire (arme, mods, armure, critiques, zone touchée). Le serveur ne les croit pas sur parole :
+    // il écrête, il cadence, et c'est lui qui tient la seule barre de vie qui compte (`sante.rs`).
+    // `false` = rien n'est parti (cible non réseau, dégâts nuls, pas de connexion).
+    public native func Tessera_RapporterDegats(cible: EntityID, degats: Uint32) -> Bool;
+
+    // ── Coma et réapparition (chantier autorité totale, 2026-08-09) ─────────────────────────
+    //
+    // Le serveur décide, le client demande et affiche. `Tessera_DemanderReapparition` renvoie
+    // `true` si le message est PARTI — jamais qu'il a été accepté : le serveur refuse une demande
+    // prématurée sans rien répondre (`sante.rs::reapparaitre`). Un bouton grisé n'est pas une
+    // sécurité ; ce refus, si.
+    public native func Tessera_DemanderReapparition() -> Bool;
+    // Rapporte une variation de vie que le serveur ne peut pas connaître (régénération, soin,
+    // chute, feu, PNJ, véhicule). On lui donne le pourcentage COURANT, il fait tout le reste :
+    // comparaison à la référence, seuil, conversion, envoi.
+    //
+    // ⚠️ Toute la logique est côté C++ EXPRÈS. C'est lui qui tient la référence, et c'est lui que
+    // `HealthSync` met à jour quand le serveur nous impose une valeur — sans quoi on renverrait au
+    // serveur sa propre écriture, en boucle. Dupliquer cette référence ici en ferait deux, qui
+    // dériveraient.
+    //
+    // `cause` : 0=inconnu 1=régénération 2=soin 3=chute 4=environnement 5=PNJ 6=véhicule. On envoie
+    // 0 tant qu'on ne sait pas distinguer — un code faux serait pire qu'un code absent.
+    public native func Tessera_RapporterVariation(pourcentCourant: Float, cause: Uint32) -> Int32;
+    // Secondes de coma restantes, poussées par le serveur chaque seconde. **-1 = vivant** — et ce
+    // n'est pas la même chose que 0, qui veut dire « mort, et l'hôpital est ouvert ».
+    // Jamais décomptées par le client : deux horloges divergeraient, et c'est alors l'écran qui
+    // mentirait au joueur sur le temps qu'il lui reste.
+    public native func Tessera_SecondesSecours() -> Int32;
+    // Le serveur autorise-t-il la réapparition ? À lire tel quel, sans le déduire du décompte.
+    public native func Tessera_HopitalOuvert() -> Bool;
+
     // Journal de SONDE — écrit dans le log du plugin, donc UN FICHIER PAR INSTANCE.
     // `FTLog` écrit dans le gamelog de CET, partagé par toutes les instances : deux clients y
     // mélangent leurs lignes, ce qui interdit toute comparaison entre eux.
@@ -32,7 +73,15 @@ public native class NetworkGameSystem extends IGameSystem {
     // C'est LA différence entre les deux populations : l'identifiant d'un statique dérive des
     // données de secteur et vaut la même chose sur toutes les machines (F-PNJ-128), donc il désigne
     // quelque chose pour le serveur. Celui d'un passant ne désigne rien hors de sa machine.
-    public native func Tessera_RapporterStatique(cible: EntityID, record: Uint64, apparence: CName) -> Void;
+    // ⚠️ La position est celle du PNJ, pas du joueur : c'est elle qui range le rapport dans la
+    // bonne cellule du halo. Un joueur voit à 80 m, donc souvent dans une autre cellule que la
+    // sienne — ranger sur la position du rapporteur éparpillerait la table.
+    // `yaw` (degres) depuis le 2026-08-09 : il ne sert pas a l'apparence, mais a ce qu'un client
+    // a qui ce PNJ MANQUE puisse en fabriquer un remplacant ORIENTE comme le natif.
+    public native func Tessera_RapporterStatique(cible: EntityID, record: Uint64, apparence: CName, x: Float, y: Float, z: Float, yaw: Float) -> Void;
+    // Cette cellule a-t-elle déjà été servie par le serveur ? Si oui, inutile d'y rapporter : c'est
+    // ce qui fait tomber le trafic de 5 rapports/s à un par cellule vierge.
+    public native func Tessera_CelluleConnue(x: Float, y: Float) -> Bool;
     // Apparence déjà connue pour ce statique, ou CName nulle. Sert au REJEU : le serveur diffuse
     // sans filtre de distance, donc une apparence peut arriver AVANT que le PNJ ne soit chargé.
     public native func Tessera_ApparenceStatiqueConnue(cible: EntityID) -> CName;
@@ -67,8 +116,16 @@ public native class NetworkGameSystem extends IGameSystem {
     // pousse le joueur à en créer un doublon, que le serveur refusera.
     public native func Tessera_NombrePersonnages() -> Int32;
     public native func Tessera_ListePersonnagesRecue() -> Bool;
+    // `--tessera-dev` sur la ligne de commande : sauter le lobby et entrer avec un personnage
+    // assigné d'office. Outil de DÉVELOPPEMENT — il court-circuite l'écran d'entrée, donc il n'a
+    // rien à faire chez un joueur ; c'est aussi ce qui permet à un agent de tester sans humain.
+    public native func Tessera_ModeDeveloppement() -> Bool;
     public native func Tessera_NomPersonnage(index: Int32) -> String;
     public native func Tessera_IdPersonnage(index: Int32) -> Uint64;
+    // L'avatar d'un personnage EXISTANT, pour que le lobby puisse dessiner sa jaquette. 0 = pas
+    // d'avatar connu -> silhouette de repli, jamais une carte vide.
+    public native func Tessera_RecordPersonnage(index: Int32) -> Uint64;
+    public native func Tessera_ApparencePersonnage(index: Int32) -> Uint64;
     // "" = rien de neuf · "ok" = créé · sinon le motif brut du serveur (`slot_full`,
     // `pseudonym_taken`, …). La lecture CONSOMME le résultat : un refus déjà affiché ne revient pas.
     public native func Tessera_DernierResultat() -> String;
@@ -78,6 +135,9 @@ public native class NetworkGameSystem extends IGameSystem {
     // `uint64_t` — une CName EST un hash 64 bits, la conversion est faite par le RTTI.
     public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName) -> Bool;
     public native func Tessera_ChoisirPersonnage(id: Uint64) -> Bool;
+    // Supprime un personnage. Le serveur arbitre et renvoie la liste à jour — le client ne retire
+    // rien de lui-même, sinon il afficherait une suppression qui pourrait être refusée.
+    public native func Tessera_SupprimerPersonnage(id: Uint64) -> Bool;
 
 
     public func SpawnTransientEntity(entityName: TweakDBID, worldPosition: Vector4, worldOrientation: Quaternion) -> EntityID {
@@ -353,7 +413,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // trompeur que la doctrine D1 interdit de compter comme un effet.
     public func ApplyServerConfig(flat: String, value: Float) -> Bool {
         if StrLen(flat) == 0 {
-            return 0;
+            return false;
         }
         if !TweakDBManager.SetFlat(TDBID.Create(flat), ToVariant(value)) {
             return false;
@@ -428,10 +488,88 @@ public native class NetworkGameSystem extends IGameSystem {
         if !pantin.IsAttached() {
             return false;
         }
+        // ⚠️ ON LÈVE L'IMMORTALITÉ AVANT DE TUER, et l'ordre n'est pas négociable. Les entités
+        // réseau sont rendues `Immortal` à l'attachement (`AvatarNeutre.reds`) pour qu'elles ne
+        // meurent pas de la comptabilité de leur propre pantin : c'est le SERVEUR qui décide de la
+        // mort. Quand il la décide, il faut donc lever le verrou — sinon `Kill` est accepté sans
+        // effet et le corps reste debout, exactement le « succès trompeur » que D1 interdit de
+        // compter comme un résultat.
+        //
+        // La MÊME source (`n"Tessera"`) qu'à la pose : `RemoveGodMode` est comptée par source, et
+        // en retirer une autre ne lèverait rien.
+        GameInstance.GetGodModeSystem(GetGameInstance())
+            .RemoveGodMode(cible, gameGodModeType.Immortal, n"Tessera");
         pantin.Kill(null, false, false);
         // ⚠️ `Kill` peut être différé d'une frame : un `false` ici ne veut pas dire échec, il veut
         // dire « pas encore ». L'appelant réessaiera, et ce sera vrai au snapshot suivant.
         return pantin.IsDead();
+    }
+
+    // Écrit la santé décidée par le SERVEUR sur le joueur LOCAL. `sante` en pour mille : 1000 =
+    // barre pleine, 0 = mort.
+    //
+    // ⚠️ MÉTHODE DE CLASSE : le C++ l'appelle par `Red::CallVirtual`, qui cherche une méthode sur la
+    // classe de l'objet. Déclarée au niveau module, l'appel échouerait EN SILENCE — piège payé le
+    // 2026-08-08 sur `TesseraRendreMort` (2 500 tentatives, zéro instruction exécutée).
+    //
+    // `Uint32` et non `Uint16` : redscript n'a pas de type 16 bits, la conversion se fait au
+    // franchissement du fil — même règle que `nature` dans `Tessera_ReportStim`.
+    //
+    // ⚠️ ON NE RÉIMPLÉMENTE NI LA MORT NI SON ÉCRAN. À zéro, c'est la mort NATIVE qui s'enclenche,
+    // et l'écran de mort garni (C20, `UiKitDeath.reds`) s'affiche derrière elle — avec le joueur
+    // immobilisé et couché par le moteur, gratuitement. C'est exactement le modèle acté le
+    // 2026-07-27 après la mesure « la mort n'est pas annulable » : on garde le natif, on le garnit.
+    //
+    // `IgnoreChangeMode` et non `RequestSettingStatPoolValue` : c'est la variante qu'emploie
+    // `ScriptedPuppet.Kill` lui-même (`scriptedPuppet.script:2251`), et la seule qui ne se fasse
+    // pas re-lisser par le mode de changement du pool (la régénération de santé).
+    public func AppliquerSanteJoueur(sante: Uint32) -> Bool {
+        let joueur = GameInstance.GetPlayerSystem(GetGameInstance()).GetLocalPlayerControlledGameObject();
+        if !IsDefined(joueur) {
+            return false;
+        }
+        // Pour mille → pourcentage : c'est l'unité des pools de stats du jeu (`perc = true`).
+        let pourcent = Cast<Float>(sante) / 10.0;
+
+        // ⚠️ ON N'ÉCRIT QUE SI L'ÉTAT LOCAL CONTREDIT LE SERVEUR. Ni « à chaque battement » ni
+        // « une seule fois » — les deux ont été essayés en jeu le 2026-08-09 et ont produit deux
+        // pannes opposées :
+        //   · à chaque battement → le joueur se relève entre deux, puis se fait retuer : tremblement ;
+        //   · une seule fois     → plus rien ne le maintient mort, il ressuscite pour de bon.
+        // Le battement de coma répète `0` une fois par seconde pour faire avancer le décompte ; il
+        // ne doit REÉCRIRE la barre que si le moteur local a entre-temps rendu sa vie au joueur.
+        // Cette comparaison rend l'opération idempotente, et donc auto-corrective.
+        let stats = GameInstance.GetStatPoolsSystem(GetGameInstance());
+        let cible = Cast<StatsObjectID>(joueur.GetEntityID());
+        let actuel = stats.GetStatPoolValue(cible, gamedataStatPoolType.Health, true);
+        // 0,5 point de pourcentage : sous cet écart, la barre dit déjà ce que le serveur veut, et
+        // réécrire ne ferait que rejouer une animation de dégâts pour rien.
+        // ⚠️ INSTRUMENTATION — le dernier point aveugle de la chaîne de mort (2026-08-09).
+        //
+        // Trois correctifs ont visé « le personnage se relève » sans le faire disparaître, et à
+        // chaque fois j'ai DÉDUIT au lieu de mesurer. Ce que personne n'a jamais vu, c'est la
+        // valeur de la barre LOCALE à l'instant où le serveur impose la sienne. Elle répond seule à
+        // la question : si le local remonte entre deux battements, le moteur ressuscite le joueur ;
+        // s'il reste à zéro, ce que Lucas voit se relever est ailleurs (l'avatar du mort chez le
+        // tireur, dont `TesseraRendreMort` a été refusé).
+        //
+        // Journalisé à CHAQUE battement, y compris quand on n'écrit pas — c'est précisément le cas
+        // « on n'écrit pas » qui manque au diagnostic.
+        let reseauJournal = GameInstance.GetNetworkGameSystem();
+        if IsDefined(reseauJournal) {
+            reseauJournal.Tessera_Journal(
+                s"santé : serveur \(pourcent)% · local \(actuel)% · écriture \(AbsF(actuel - pourcent) >= 0.5)");
+        }
+        if AbsF(actuel - pourcent) < 0.5 {
+            return true;
+        }
+        stats.RequestSettingStatPoolValueIgnoreChangeMode(
+            cible,
+            gamedataStatPoolType.Health,
+            pourcent,
+            null,
+            true);
+        return true;
     }
 
     // Applique l'apparence décidée par le serveur sur un PNJ statique déjà présent.
@@ -452,7 +590,30 @@ public native class NetworkGameSystem extends IGameSystem {
             return false;
         }
         // ⚠️ `ScheduleAppearanceChange` est DIFFÉRÉ : relire l'apparence juste après renvoie encore
-        // l'ancienne (F-PNJ-050). Ne pas tenter de vérifier ici — l'oeil tranche.
+        // l'ancienne (F-PNJ-050). D'où la relecture à 3 s ci-dessous, et pas ici.
+        //
+        // MESURE DE L'EFFET, pas de l'appel (2026-08-09, après le verdict de Lucas : « l'esthétique
+        // n'est pas hydratée »). Renvoyer `true` parce que l'ordre est passé ne prouve rien — le
+        // moteur REJETTE EN SILENCE une apparence étrangère au jeu d'apparences du PNJ (F-PNJ-051).
+        // Trois issues à distinguer, une seule est un vrai défaut :
+        //   · DEJA-BON   → les deux clients étaient déjà d'accord, il n'y avait rien à faire ;
+        //   · PREND      → l'apparence relue est bien celle demandée ;
+        //   · SANS-EFFET → le moteur a refusé — c'est ce cas-là qu'il faut corriger.
+        let pantin = entite as ScriptedPuppet;
+        if IsDefined(pantin) {
+            let origine = pantin.GetCurrentAppearanceName();
+            if Equals(origine, apparence) {
+                this.Tessera_Journal(s"[Hydra] VERDICT=DEJA-BON \(origine)");
+                return true;
+            }
+            entite.ScheduleAppearanceChange(apparence);
+            let verdict = new TesseraVerdictHydratation();
+            verdict.pantin = pantin;
+            verdict.demandee = apparence;
+            verdict.origine = origine;
+            GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(verdict, 3.0, false);
+            return true;
+        }
         entite.ScheduleAppearanceChange(apparence);
         return true;
     }
@@ -498,6 +659,76 @@ public native class NetworkGameSystem extends IGameSystem {
         return this.AppliquerApparenceStatique(cible, apparence);
     }
 
+    // ── RÉPARATION DU ROSTER (spec 2026-08-09, complétion asymétrique) ──────────────────────────
+    //
+    // Mesuré le 2026-08-09 : deux clients à la position IDENTIQUE ne voient que 83 % des mêmes PNJ
+    // statiques, et le chiffre est PLAT sur neuf minutes — ce n'est pas un retard de streaming, les
+    // deux moteurs peuplent durablement deux mondes différents. On ne peut ni piloter la foule
+    // native (F-PNJ-069) ni en retirer un membre (F-PNJ-091, F-PNJ-093) : on ne peut que COMPLÉTER.
+    //
+    // ⚠️ Le remplaçant est LOCAL, et c'est le cœur de la conception. Si le serveur spawnait
+    // l'entité manquante comme entité réseau, le client qui possède déjà le natif la recevrait
+    // aussi et verrait un DOUBLON qu'on ne sait pas supprimer.
+    //
+    // Renvoie l'EntityID du remplaçant créé, ou une EntityID vide si on n'a rien fait — le C++
+    // retentera au tick suivant. « Rien fait » n'est jamais « impossible ».
+    public func ReparerStatique(cible: EntityID, record: TweakDBID, apparence: CName,
+                                position: Vector4, orientation: Quaternion) -> EntityID {
+        let vide: EntityID;
+        // Le natif est là : rien à faire, et surtout rien à créer.
+        if IsDefined(GameInstance.FindEntityByID(GetGameInstance(), cible)) {
+            return vide;
+        }
+        let joueur = GameInstance.GetPlayerSystem(GetGameInstance()).GetLocalPlayerControlledGameObject();
+        if !IsDefined(joueur) {
+            return vide;
+        }
+        // `Vector4.Length(a - b)` et non `Distance` : c'est la forme déjà utilisée dans ce fichier,
+        // donc déjà compilée contre le vrai RTTI.
+        let distance = Vector4.Length(position - joueur.GetWorldPosition());
+        // Deux bornes, et chacune vient d'un cas du challenge de la spec (§5).
+        //   · sous 30 m : un remplaçant se tient DEBOUT là où le natif est assis ou adossé
+        //     (F-PNJ-072, pas de workspot). De près, ça se voit plus que l'absence.
+        //   · au-delà de 100 m : hors du rayon d'AoI, la géométrie peut ne pas être chargée — on
+        //     poserait un PNJ sans sol, ou dans un mur.
+        // ⚠️ PLUS DE PLANCHER DE DISTANCE (2026-08-09, arbitrage de Lucas : « peu importe si ça fait
+        // un changement brut devant les gens, l'important c'est cent pour cent de fidélité »).
+        // Un remplaçant se tient DEBOUT là où le natif est assis (F-PNJ-072, pas de workspot) : de
+        // près ça se voit. Mais un PNJ ABSENT chez l'un et présent chez l'autre se voit davantage,
+        // et surtout il casse le RP — deux joueurs ne peuvent pas parler de quelqu'un qu'un seul
+        // voit. Le plafond, lui, reste : au-delà du rayon d'AoI la géométrie peut ne pas être
+        // chargée, et on poserait un PNJ sans sol.
+        // 250 m et non 100 : le plafond ne protege que d'une chose — poser un PNJ dans un secteur
+        // non charge, donc sans sol. Or la geometrie du monde streame BEAUCOUP plus loin que la
+        // foule ; c'est precisement pour ca que des PNJ manquent au loin alors que la rue est la.
+        // Mesure du 2026-08-09 : borner a 100 m laissait 10 % de presence non rattrapee, tous
+        // au-dela. ⚠️ Si des remplaçants apparaissent en l'air, c'est CE reglage qu'il faut baisser.
+        if distance > 250.0 {
+            return vide;
+        }
+        let cree = this.SpawnNetworkAvatar(record, apparence, position, orientation);
+        // Journalisé au format `[Etat]`, avec la MÊME clé que la sonde de foule (position au
+        // décimètre) : sans ça la mesure de cohérence ne verrait pas les remplaçants — ils ne sont
+        // pas `IsCrowd()`, donc `CrowdProbe` ne les classe pas. Un PNJ réparé compterait alors
+        // comme absent, et le chiffre dirait exactement le contraire de la vérité.
+        // Le remplaçant se fait SUIVRE comme un natif : sans ça la mesure ne le verrait qu'à sa
+        // naissance et compterait la réparation comme un échec (il n'est pas `IsCrowd()`).
+        let cle = s"\(Cast<Int32>(position.X * 10.0));\(Cast<Int32>(position.Y * 10.0));\(Cast<Int32>(position.Z * 10.0))";
+        this.Tessera_Journal(s"[Etat] \(cle);0;\(NameToString(apparence));remplacant-cree");
+        let releve = new TesseraReleveEtatStatique();
+        releve.cible = cree;
+        releve.cle = cle;
+        releve.attendue = apparence;
+        GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(releve, 10.0, false);
+        return cree;
+    }
+
+    // Le natif a-t-il fini par arriver ? C'est la condition de RETRAIT du remplaçant : sans elle on
+    // laisserait deux PNJ au même endroit — le nôtre et celui du jeu.
+    public func TesseraEntiteExisteLocalement(cible: EntityID) -> Bool {
+        return IsDefined(GameInstance.FindEntityByID(GetGameInstance(), cible));
+    }
+
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }
@@ -521,7 +752,24 @@ public native class NetworkGameSystem extends IGameSystem {
         teleportCommand.doNavTest = false;
 
         puppet.GetAIControllerComponent().SendCommand(teleportCommand);
-        puppet.GetAIControllerComponent().DisableCollider(); // TODO: Temp - In the future this should be controlled by the server, but currently Judy's just annoying :D 
+        // ⚠️ `DisableCollider()` ÉTAIT ICI, ET C'ÉTAIT LA CAUSE DE « impossible de tirer dessus ».
+        //
+        // Bricolage de confort hérité du fork Cyberverse, marqué temporaire par son auteur lui-même
+        // (« TODO: Temp — in the future this should be controlled by the server, but currently
+        // Judy's just annoying :D »). `SetEntityPosition` appelle cette fonction pour TOUTE entité
+        // réseau — au spawn, puis à chaque correction de dérive : le collider de chaque avatar était
+        // donc coupé, et jamais rendu.
+        //
+        // Un pantin sans collider se rend et s'anime parfaitement — il n'est simplement plus là pour
+        // le monde physique. Les balles le traversent. C'est exactement le symptôme observé le
+        // 2026-08-08 : « je vois le joueur bouger parfaitement, mais impossible de tirer dessus ».
+        // Et c'est ce que le registre soupçonnait depuis le 2026-07-21 sans l'avoir mesuré
+        // (F-VEH-022, `hypothèse`).
+        //
+        // La gêne d'origine était réelle : un pantin distant solide pousse le joueur local. Mais
+        // c'est un problème de jeu multijoueur — des joueurs qui se bousculent — pas une raison de
+        // les rendre intangibles. Si ça redevient pénible, ça se règle par la physique, jamais en
+        // retirant l'avatar du monde physique.
         puppet.GetAIControllerComponent().ForceTickNextFrame();
 
         // let attackCommand = new AIMeleeAttackCommand();

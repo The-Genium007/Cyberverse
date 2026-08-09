@@ -7,6 +7,7 @@
 #include "RED4ext/Scripting/Natives/Generated/ink/ISystemRequestsHandler.hpp"
 #include "RED4ext/Scripting/Stack.hpp"
 
+#include "CommandLine.h"
 #include "PlayerActionTracker.h"
 #include "PlayerSync/InterpolationData.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
@@ -17,6 +18,7 @@
 #include <clientbound/WorldPacketsClientBound.h>
 #include <map>
 #include <set>   // suivi des apparences statiques deja appliquees (hydratation discrete)
+#include <cmath> // std::floor pour le decoupage en cellules de halo
 #include <string>
 #include <vector>
 #include <steam/isteamnetworkingsockets.h>
@@ -27,14 +29,13 @@
 // Protocole TesseraSynth (FlatBuffers) — forward decl pour ne pas tirer l'en-tête généré ici.
 namespace cyberpunk_rp::protocol {
     struct Snapshot; struct PositionCorrection; struct ShardAssignment; struct StaticAppearance;
-    struct WorldState; struct Kicked; struct AppearanceSync; struct ConfigSync;
+    struct WorldState; struct Kicked; struct AppearanceSync; struct ConfigSync; struct CellAppearances;
     struct PlayerEvent;
     // ⚠️ Oublier une declaration avancee ici ne donne PAS « type inconnu » : le compilateur lit
     // `const CharacterList*` comme `const int` et l'erreur sort a l'APPEL, sous la forme
     // « impossible de convertir 'const CharacterList *' en 'const int' » — un message qui pointe
     // vers l'appelant alors que le defaut est ici. Piege deja paye une fois (2026-08-07).
     struct CharacterList; struct CharacterResult;
-}
     // Piege paye une SECONDE fois le 2026-08-08 : `HandleHealthSync` a ete declaree plus bas sans
     // passer par ici, et le build entier tombait sur « 'HealthSync' n'est pas membre de
     // cyberpunk_rp::protocol ». Consequence en chaine : plus de DLL, donc un `.reds` deja deploye
@@ -42,11 +43,37 @@ namespace cyberpunk_rp::protocol {
     // r6/scripts par terre au prochain lancement. Tout nouveau `Handle<X>` se declare ICI en meme
     // temps qu'il se declare plus bas.
     struct HealthSync;
+    // Meme regle : toute nouvelle table manipulee ici se declare AUSSI dans ce bloc.
+    struct RespawnRequest;
+    struct HealthReport;
+}
 
 // Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
 // Hors de la classe : `NetworkGameSystem` est alloué par le moteur (`RTTI_IMPL_ALLOCATOR`), lui
 // ajouter un membre corrompt la mémoire voisine (mesuré le 2026-08-06).
 extern std::map<uint64_t, uint64_t> g_apparencesStatiques;
+// Ce qu'il faut pour REFABRIQUER un statique absent chez ce client : record, apparence, pose.
+// Distinct de `g_apparencesStatiques`, qui ne sert qu'a corriger un PNJ deja present. Voir
+// `docs/superpowers/specs/2026-08-09-presence-et-apparence-a-cent-pour-cent-design.md`.
+struct InscriptionRoster
+{
+    uint64_t record = 0;
+    uint64_t apparence = 0;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    int16_t yaw = 0;
+};
+extern std::map<uint64_t, InscriptionRoster> g_rosterStatiques;
+// Nos remplacants : id du natif absent -> id de l'entite LOCALE creee a sa place. C'est la seule
+// entite qu'on ait le droit de detruire ; un PNJ de communaute ne se retire pas (F-PNJ-091).
+extern std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
+// Cellules de halo deja recues du serveur. Meme decoupage que `halo.rs` cote serveur — 64 m.
+extern std::set<std::pair<int32_t, int32_t>> g_cellulesRecues;
+constexpr float kCoteCelluleM = 64.0f;
+inline std::pair<int32_t, int32_t> CelluleDe(float x, float y)
+{
+    return {static_cast<int32_t>(std::floor(x / kCoteCelluleM)),
+            static_cast<int32_t>(std::floor(y / kCoteCelluleM))};
+}
 // Statiques dont l'apparence autoritaire a REELLEMENT ete appliquee. La difference avec
 // `g_apparencesStatiques` est la file de travail de l'hydratation discrete.
 extern std::set<uint64_t> g_apparencesAppliquees;
@@ -104,6 +131,10 @@ private:
     {
         uint64_t id = 0;
         std::string pseudonyme;
+        // L'avatar du personnage, tel que le SERVEUR le connait. Sans lui, le lobby ne peut
+        // afficher qu'une silhouette : il sait QUI est le personnage, pas a quoi il ressemble.
+        uint64_t record = 0;
+        uint64_t apparence = 0;
     };
     std::vector<PersonnageDistant> m_personnages;
     // Dernier verdict de creation. `m_aUnResultat` distingue « rien recu » de « recu un refus » —
@@ -117,6 +148,16 @@ private:
     // attendre). Deux etats que l'UI doit traiter differemment, et qu'une taille de vecteur seule
     // ne separe pas.
     bool m_listeRecue = false;
+
+    // --- Coma / mort (chantier autorite totale, 2026-08-09) ---
+    // Pousses par `HealthSync` quand `mine` est vrai. `-1` = vivant, pour que « pas de decompte »
+    // et « decompte a zero » ne se confondent pas — la seconde autorise l'hopital, la premiere non.
+    int32_t m_secondesSecours = -1;
+    bool m_hopitalOuvert = false;
+    // Derniere sante locale CONNUE, en pourcentage (0-100). `-1` = jamais lue : le premier passage
+    // ne rapporte donc rien, il ne fait qu'etablir la reference. Sans ce -1, l'entree en session
+    // produirait un faux « gain de 100 % ».
+    float m_santeLocaleConnue = -1.0f;
 
     // --- Détection « modset non compilé » (incident playtest 2026-07-20) ---
     // `SpawnTransientEntity` est déclarée en REDSCRIPT (r6/scripts/Cyberverse/NetworkGameSystem.reds).
@@ -212,6 +253,11 @@ protected:
     // de `gamedataStimType`, catalogue des 67 valeurs dans docs/connaissances/catalogue-stimulus.md.
     // `target` = pantin explicitement vise, 0 sinon (entree de la decision de promotion, serveur).
     void SendStimReport(uint8_t nature, float radiusMetres, uint64_t target);
+    // Rapporte des degats infliges a une entite reseau. Passe par `EntityInteraction { target,
+    // kind=5, param }` — un canal DEJA en place, dont le schema declare depuis le gel que la cible
+    // est agnostique (« joueur↔joueur = joueur↔PNJ, meme plomberie »). Rien de neuf sur le fil
+    // montant : seule la branche serveur manquait.
+    void SendAttackReport(uint64_t target, uint32_t degats);
     // Demande de prise d'autorite sur un figurant local. Porte de quoi le REFABRIQUER, pas un
     // identifiant : voir `PromotionRequest` dans protocol.fbs.
     /// Renvoie true si la requete est REELLEMENT partie. Un false signifie deduplication, absence
@@ -220,13 +266,17 @@ protected:
     bool SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y, float z,
                               float yaw, bool mort);
     // Rapporte un PNJ STATIQUE et l'apparence qu'on lui voit. Le serveur arbitre laquelle fait foi.
-    void SendStaticNpcReport(uint64_t entityId, uint64_t record, uint64_t apparence);
+    void SendStaticNpcReport(uint64_t entityId, uint64_t record, uint64_t apparence, float x,
+                             float y, float z, float yaw);
     // Vide la file des rapports de statiques, UN PAR TICK au plus et pas plus vite que la cadence
     // fixee. Appelee depuis `OnNetworkUpdate`.
     void DrainerRapportsStatiques();
     // Applique les apparences autoritaires encore en attente, UNE par tick au plus, et seulement
     // quand le PNJ est hors du champ de vision du joueur. Voir le commentaire dans le .cpp.
     void HydraterApparencesDiscretement();
+    // Complete le roster : cree un remplacant LOCAL pour un statique absent, le retire quand le
+    // natif arrive. Spec 2026-08-09 (complétion asymétrique).
+    void ReparerRoster();
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
@@ -260,6 +310,13 @@ protected:
     // Apparence FAISANT AUTORITE pour un PNJ statique. On ne cree rien : l'entite existe deja des
     // deux cotes, seule sa variante visuelle change.
     void HandleStaticAppearance(const cyberpunk_rp::protocol::StaticAppearance* msg);
+    // Table d'apparences d'une CELLULE entiere, recue quand le joueur entre dans son halo — donc
+    // AVANT qu'il ne voie les PNJ. Remplace l'envoi PNJ par PNJ.
+    void HandleCellAppearances(const cyberpunk_rp::protocol::CellAppearances* msg);
+    // Sante ARBITREE par le serveur. Deux lectures selon `mine`, et le drapeau n'est pas
+    // redondant : ce client ne connait PAS son propre identifiant reseau (rien ne le lui envoie),
+    // donc lui seul distingue « voici TA sante » de « voici celle du voisin ».
+    void HandleHealthSync(const cyberpunk_rp::protocol::HealthSync* msg);
     // Liste des personnages du compte, poussee par le serveur apres le Join et apres chaque
     // creation. REMPLACE l'etat local : le serveur envoie toujours la liste complete, jamais un
     // delta — donc pas de fusion a faire, et un personnage supprime disparait de lui-meme.
@@ -311,6 +368,10 @@ public:
     // creer un doublon qui sera refuse par le cap de slots.
     int32_t Tessera_NombrePersonnages() const { return static_cast<int32_t>(m_personnages.size()); }
     bool Tessera_ListePersonnagesRecue() const { return m_listeRecue; }
+    // `--tessera-dev` : sauter le lobby, entrer avec un personnage assigné d'office. Lu à CHAQUE
+    // appel plutôt que mémorisé — la ligne de commande ne change pas en cours de session, et un
+    // cache serait un état de plus à tenir pour rien.
+    bool Tessera_ModeDeveloppement() const { return ModeDeveloppementDemande(GetCommandLineA()); }
     Red::CString Tessera_NomPersonnage(int32_t index) const
     {
         if (index < 0 || static_cast<size_t>(index) >= m_personnages.size())
@@ -318,6 +379,18 @@ public:
             return Red::CString("");
         }
         return Red::CString(m_personnages[static_cast<size_t>(index)].pseudonyme.c_str());
+    }
+    // (record, apparence) du personnage a cet index — 0 si l'index est hors bornes OU si le serveur
+    // n'a pas d'avatar valide pour lui. Le client traite les deux cas pareil : repli silhouette.
+    uint64_t Tessera_RecordPersonnage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size()) { return 0; }
+        return m_personnages[static_cast<size_t>(index)].record;
+    }
+    uint64_t Tessera_ApparencePersonnage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size()) { return 0; }
+        return m_personnages[static_cast<size_t>(index)].apparence;
     }
     uint64_t Tessera_IdPersonnage(int32_t index) const
     {
@@ -345,6 +418,10 @@ public:
     bool Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record, uint64_t apparence);
     // Entre dans le monde avec ce personnage. Meme remarque : `true` = « parti », pas « accepte ».
     bool Tessera_ChoisirPersonnage(uint64_t id);
+    // Supprime un personnage du compte. Le SERVEUR arbitre (`not_owner`, `not_found`) et renvoie la
+    // liste a jour — le client ne retire rien de son cote, sinon il afficherait une suppression qui
+    // pourrait etre refusee. `true` = la demande est PARTIE, jamais qu'elle a ete acceptee.
+    bool Tessera_SupprimerPersonnage(uint64_t id);
 
     // Remonte un stimulus au serveur depuis redscript. Point d'entree UNIQUE de l'observation :
     // l'entonnoir d'action est `StimBroadcasterComponent.TriggerSingleBroadcast` (F-PLY-029), ou
@@ -396,6 +473,73 @@ public:
         SendStimReport(static_cast<uint8_t>(nature & 0xFF), radiusMetres, idReseau);
     }
 
+    // Rapporte au serveur des degats infliges a une entite reseau, depuis redscript.
+    //
+    // MEME TRADUCTION que `Tessera_ReportStim`, et pour la meme raison : un `EntityID` est local au
+    // client, seul l'id RESEAU designe quelque chose de partage. Une cible qui n'est PAS une entite
+    // reseau (un passant de la foule native) ne produit AUCUN message — un figurant local n'a pas
+    // d'identite chez le serveur, et lui en inventer une serait un mensonge sur le fil.
+    //
+    // `degats` en points de vie « jeu », tels que le moteur du tireur les a calcules — c'est lui qui
+    // sait le faire (arme, mods, armure, critiques, zone touchee). Le serveur, lui, decide de leur
+    // EFFET : il ecrete, il cadence, et il tient la seule barre de vie qui compte (`sante.rs`).
+    //
+    // Renvoie true si un message est parti. `false` = cible non reseau, degats nuls, ou pas de
+    // connexion — l'appelant s'en sert pour savoir s'il doit se taire.
+    bool Tessera_RapporterDegats(RED4ext::ent::EntityID cible, uint32_t degats)
+    {
+        if (!cible.IsDefined() || degats == 0)
+        {
+            return false;
+        }
+        uint64_t idReseau = 0;
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                idReseau = paire.first;
+                break;
+            }
+        }
+        if (idReseau == 0)
+        {
+            return false;
+        }
+        SendAttackReport(idReseau, degats);
+        return true;
+    }
+
+    // Demande au serveur de faire reapparaitre le joueur local apres son coma.
+    //
+    // C'est une DEMANDE : le serveur refuse si le joueur est vivant ou si le delai de secours n'est
+    // pas ecoule (`sante.rs::reapparaitre`), et ne repond alors rien. Le bouton de l'ecran de mort
+    // n'a donc aucune autorite — il ne fait que demander, ce qui est exactement ce qu'on veut d'un
+    // client qu'on ne controle pas.
+    //
+    // Renvoie true si le message est PARTI, jamais s'il a ete accepte.
+    bool Tessera_DemanderReapparition();
+
+    // Secondes de coma restantes, telles que le SERVEUR les pousse. -1 = le joueur n'est pas mort.
+    // Lue par l'ecran de mort ; jamais decomptee par le client (deux horloges divergeraient).
+    int32_t Tessera_SecondesSecours() const { return m_secondesSecours; }
+    // Le serveur autorise-t-il la reapparition ? Le client ne le DEDUIT pas du decompte : c'est le
+    // serveur qui tranche, et lui seul refusera une demande prematuree.
+    bool Tessera_HopitalOuvert() const { return m_hopitalOuvert; }
+
+    // Rapporte au serveur une variation de vie que LUI SEUL ne peut pas connaitre : regeneration,
+    // soin, chute, feu, PNJ, vehicule. Appelee periodiquement par redscript avec le pourcentage de
+    // vie COURANT du joueur local ; toute la logique est ici, pour que le script reste bete.
+    //
+    // ⚠️ LE PIEGE QUE CETTE FONCTION EXISTE POUR EVITER : le serveur ECRIT lui aussi cette barre
+    // (`AppliquerSanteJoueur`, sur `HealthSync`). Sans garde, le client observerait l'ecriture du
+    // serveur, la lui renverrait comme une « variation locale », le serveur la reappliquerait — une
+    // boucle qui diverge. `m_santeLocaleConnue` est donc remise a jour AUSSI par `HandleHealthSync`,
+    // ce qui rend l'ecriture serveur invisible a la detection. C'est le point de conception de tout
+    // ce canal.
+    //
+    // Renvoie le delta REELLEMENT envoye en pour mille (0 = rien, sous le seuil).
+    int32_t Tessera_RapporterVariation(float pourcentCourant, uint32_t cause);
+
     // Cette entite est-elle repliquee par le serveur ? Redscript ne peut pas repondre : la table
     // `networkId → EntityID` vit ici. C'est ce qui distingue un FIGURANT (foule native, purement
     // local) d'une entite deja sous autorite — donc ce qui decide s'il y a lieu de promouvoir.
@@ -441,9 +585,19 @@ public:
     // (F-PNJ-128), donc il DESIGNE quelque chose pour le serveur. Celui d'un passant ne designe
     // rien hors de sa machine.
     void Tessera_RapporterStatique(RED4ext::ent::EntityID cible, uint64_t record,
-                                   RED4ext::CName apparence)
+                                   RED4ext::CName apparence, float x, float y, float z, float yaw)
     {
-        SendStaticNpcReport(cible.hash, record, apparence.hash);
+        // ⚠️ La position est celle du PNJ, pas du joueur : c'est elle qui range le rapport dans la
+        // bonne cellule du halo. Un joueur voit a 80 m, donc souvent dans une autre cellule que la
+        // sienne — ranger sur la position du rapporteur eparpillerait la table.
+        SendStaticNpcReport(cible.hash, record, apparence.hash, x, y, z, yaw);
+    }
+
+    // Cette cellule a-t-elle deja ete servie par le serveur ? Si oui, inutile d'y rapporter quoi que
+    // ce soit : c'est ce qui fait tomber le trafic de 5 rapports/s a un par cellule vierge.
+    bool Tessera_CelluleConnue(float x, float y) const
+    {
+        return g_cellulesRecues.contains(CelluleDe(x, y));
     }
 
     // Apparence faisant autorite deja connue pour ce statique, ou CName nulle si le serveur n'a
@@ -525,18 +679,28 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_GetVisiblePlayerCount);
     RTTI_METHOD(Tessera_ReportStim);
     RTTI_METHOD(Tessera_EstEntiteReseau);
+    RTTI_METHOD(Tessera_RapporterDegats);
+    RTTI_METHOD(Tessera_DemanderReapparition);
+    RTTI_METHOD(Tessera_RapporterVariation);
+    RTTI_METHOD(Tessera_SecondesSecours);
+    RTTI_METHOD(Tessera_HopitalOuvert);
     RTTI_METHOD(Tessera_Journal);
     RTTI_METHOD(Tessera_RapporterStatique);
     RTTI_METHOD(Tessera_ApparenceStatiqueConnue);
+    RTTI_METHOD(Tessera_CelluleConnue);
     RTTI_METHOD(Tessera_CobayeApparence);
     RTTI_METHOD(Tessera_DemanderPromotion);
     RTTI_METHOD(Tessera_NombrePersonnages);
     RTTI_METHOD(Tessera_ListePersonnagesRecue);
+    RTTI_METHOD(Tessera_ModeDeveloppement);
     RTTI_METHOD(Tessera_NomPersonnage);
     RTTI_METHOD(Tessera_IdPersonnage);
+    RTTI_METHOD(Tessera_RecordPersonnage);
+    RTTI_METHOD(Tessera_ApparencePersonnage);
     RTTI_METHOD(Tessera_DernierResultat);
     RTTI_METHOD(Tessera_CreerPersonnage);
     RTTI_METHOD(Tessera_ChoisirPersonnage);
+    RTTI_METHOD(Tessera_SupprimerPersonnage);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");

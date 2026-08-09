@@ -56,7 +56,25 @@ static constexpr uint32_t kTesseraProtocolVersion = 2;
 // Historiquement, `Character.Panam` était codé en dur comme apparence NORMALE de tout joueur
 // distant : tous les joueurs se ressemblaient, et le serveur — qui tient pourtant l'apparence
 // choisie de chacun (`appearance_relay.rs`) — n'avait aucun moyen de le dire.
-static constexpr const char* kFallbackAvatarRecord = "Character.Panam";
+// Record de repli quand le serveur n'a pas (encore) dit a quoi ressemble une entite reseau.
+//
+// ⚠️ C'ETAIT `Character.Panam`, ET C'EST CE QUI RENDAIT LE PVP IMPOSSIBLE. Panam est une compagne
+// de QUETE : son record porte le tag TweakDB `Invulnerable`, et `NPCManager::SetNPCImmortalityMode`
+// (npcManager.script:123-135) lit ces tags a l'attachement pour poser un god mode. Tout avatar ne
+// sous ce repli etait donc litteralement indestructible — mesure le 2026-08-09 par la sonde
+// `sonde_cible` : `recordID Character.Panam`, `GodMode Invulnerable true`, attitude `AIA_Friendly`,
+// groupe d'attitude `panam`. Aucune balle ne pouvait l'atteindre, quelle que soit la visee.
+//
+// Un repli doit etre le personnage le plus BANAL possible : un citoyen d'ambiance, sans tag de
+// quete, sans invulnerabilite, sans attitude amicale imposee. `Character.CitizenBikerMale` est dans
+// le catalogue d'avatars joueur du serveur (`puppet_catalog.rs`), donc valide et deja servi.
+//
+// ⚠️ Ceci ne corrige que la CONSEQUENCE. La cause racine est l'ORDRE : l'`AppearanceSync` arrive
+// apres le spawn (~0,9 s mesure), donc l'avatar nait toujours sous le repli, et
+// `ScheduleAppearanceChange` ne change ensuite que la VARIANTE visuelle — jamais le record, donc
+// jamais les tags. Tant que l'ordre n'est pas corrige, ce repli n'est pas un cas rare : c'est le
+// cas NORMAL.
+static constexpr const char* kFallbackAvatarRecord = "Character.CitizenBikerMale";
 
 // Journalise UNE SEULE FOIS par type de message serveur non câblé. Sans ce garde, un message
 // diffusé à 20 Hz remplirait le log à lui seul (précédent vécu : des centaines de lignes par
@@ -185,6 +203,7 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
     // TODO: make this framerate indepedent, maybe also use multiple UpdateTickGroups.
     DrainerRapportsStatiques();
     HydraterApparencesDiscretement();
+    ReparerRoster();
 
     if (!m_hasTriedToConnect)
     {
@@ -404,6 +423,10 @@ struct RapportStatique
     uint64_t entityId;
     uint64_t record;
     uint64_t apparence;
+    float x, y, z;
+    // Oriente le remplacant qu'un client a qui ce PNJ MANQUE fabriquera a sa place (spec
+    // 2026-08-09). Sans lui, le remplacant regarderait ailleurs.
+    int16_t yaw;
 };
 std::deque<RapportStatique> g_fileStatiques;
 std::chrono::steady_clock::time_point g_dernierEnvoiStatique{};
@@ -427,9 +450,20 @@ constexpr uint8_t kComportementATerre = 5;
 /// Conservee meme quand l'application echoue : l'entite peut n'etre pas encore streamee, et c'est
 /// cette table qui permet de rejouer l'apparence a son attachement.
 std::map<uint64_t, uint64_t> g_apparencesStatiques;
+/// Le ROSTER : de quoi RECREER un statique chez un client a qui il manque (spec 2026-08-09).
+/// Distinct de `g_apparencesStatiques`, qui ne sert qu'a corriger un PNJ deja present.
+std::map<uint64_t, InscriptionRoster> g_rosterStatiques;
+/// Nos remplacants : id du PNJ natif absent -> id de l'entite LOCALE qu'on a creee a sa place.
+/// C'est la seule chose qu'on ait le droit de detruire — un natif ne se retire pas (F-PNJ-091).
+std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
+std::set<std::pair<int32_t, int32_t>> g_cellulesRecues;
 /// Sonde d'apparence — premiere apparence vue par record, et garde one-shot. Une sonde qui
 /// rhabillerait toute la rue changerait la scene observee et rendrait le resultat inexploitable.
 std::set<uint64_t> g_apparencesAppliquees;
+/// Tentatives refusees par le cone de vision (« pas maintenant »). Voir HydraterApparencesDiscretement.
+std::size_t g_hydratationsDifferees = 0;
+/// Depuis quand chaque apparence est connue — sert l'echeance de convergence (kDelaiForcage).
+std::map<uint64_t, std::chrono::steady_clock::time_point> g_apparenceConnueDepuis;
 std::map<uint64_t, uint64_t> g_premiereApparence;
 bool g_sondeApparenceFaite = false;
 
@@ -619,6 +653,12 @@ void NetworkGameSystem::PollIncomingMessages()
                     break;
                 case cyberpunk_rp::protocol::ServerMsg_StaticAppearance:
                     HandleStaticAppearance(env->msg_as_StaticAppearance());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_CellAppearances:
+                    HandleCellAppearances(env->msg_as_CellAppearances());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_HealthSync:
+                    HandleHealthSync(env->msg_as_HealthSync());
                     break;
                 case cyberpunk_rp::protocol::ServerMsg_CharacterList:
                     HandleCharacterList(env->msg_as_CharacterList());
@@ -1282,11 +1322,25 @@ void NetworkGameSystem::HandleCharacterList(const cyberpunk_rp::protocol::Charac
             PersonnageDistant p;
             p.id = c->id();
             p.pseudonyme = c->pseudonym() != nullptr ? c->pseudonym()->str() : std::string();
+            p.record = c->base_record();
+            p.apparence = c->appearance();
             m_personnages.push_back(std::move(p));
         }
     }
     m_listeRecue = true;
     SDK->logger->InfoF(PLUGIN, "CharacterList : %zu personnage(s) sur ce compte", m_personnages.size());
+
+    // TESSERA_AUTO_CHARACTER=1 : incarne le premier personnage sans passer par l'écran de choix.
+    // Réservé aux runs automatisés à deux instances, même usage que TESSERA_DISPLAY_NAME ci-dessus.
+    // POURQUOI (2026-08-08) : sans sélection, la Gateway retient TOUT ce que le client envoie (le
+    // joueur n'incarne personne), le Shard reste à 0 joueur et aucun rapport n'arrive — un silence
+    // que j'ai d'abord pris pour un bug de câblage du halo.
+    if (!m_personnages.empty() && std::getenv("TESSERA_AUTO_CHARACTER") != nullptr)
+    {
+        SDK->logger->InfoF(PLUGIN, "TESSERA_AUTO_CHARACTER : incarnation automatique de %s",
+            m_personnages.front().pseudonyme.c_str());
+        Tessera_ChoisirPersonnage(m_personnages.front().id);
+    }
 }
 
 void NetworkGameSystem::HandleCharacterResult(const cyberpunk_rp::protocol::CharacterResult* result)
@@ -1356,7 +1410,8 @@ bool NetworkGameSystem::Tessera_ChoisirPersonnage(uint64_t id)
     return true;
 }
 
-void NetworkGameSystem::SendStaticNpcReport(uint64_t entityId, uint64_t record, uint64_t apparence)
+void NetworkGameSystem::SendStaticNpcReport(uint64_t entityId, uint64_t record, uint64_t apparence,
+                                            float x, float y, float z, float yaw)
 {
     if (m_pInterface == nullptr || entityId == 0)
     {
@@ -1368,7 +1423,15 @@ void NetworkGameSystem::SendStaticNpcReport(uint64_t entityId, uint64_t record, 
         return;
     }
     // On MET EN FILE, on n'envoie pas : voir `g_fileStatiques`. Le drainage se fait au tick.
-    g_fileStatiques.push_back({entityId, record, apparence});
+    g_fileStatiques.push_back({entityId, record, apparence, x, y, z,
+        static_cast<int16_t>(std::lround(yaw))});
+    // Instrument : sans lui, « le serveur ne recoit rien » ne distingue pas « le client n'envoie
+    // pas » de « le message se perd ». Cadence pour ne pas noyer le journal.
+    if (g_fileStatiques.size() % 25 == 1)
+    {
+        SDK->logger->InfoF(PLUGIN, "Statique mis en file (%zu en attente, %zu deja rapportes)",
+            g_fileStatiques.size(), g_statiquesRapportes.size());
+    }
 }
 
 void NetworkGameSystem::DrainerRapportsStatiques()
@@ -1388,13 +1451,56 @@ void NetworkGameSystem::DrainerRapportsStatiques()
     g_fileStatiques.pop_front();
 
     flatbuffers::FlatBufferBuilder builder;
+    const cyberpunk_rp::protocol::QVec3 pos(QuantPos(rapport.x), QuantPos(rapport.y),
+                                            QuantPos(rapport.z));
     const auto rep = cyberpunk_rp::protocol::CreateStaticNpcReport(
-        builder, rapport.entityId, rapport.record, rapport.apparence);
+        builder, rapport.entityId, rapport.record, rapport.apparence, &pos, rapport.yaw);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_StaticNpcReport, rep.Union());
     builder.Finish(env);
-    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
-        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    const auto res = m_pInterface->SendMessageToConnection(m_hConnection,
+        builder.GetBufferPointer(), builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    if (res != k_EResultOK)
+    {
+        SDK->logger->WarnF(PLUGIN, "Rapport statique REFUSE par le transport (res=%d)",
+            static_cast<int>(res));
+    }
+}
+
+void NetworkGameSystem::HandleCellAppearances(
+    const cyberpunk_rp::protocol::CellAppearances* msg)
+{
+    if (msg == nullptr || msg->entries() == nullptr)
+    {
+        return;
+    }
+    // La cellule est notee RECUE avant meme d'appliquer : c'est ce qui fait cesser les rapports
+    // dans cette zone, que l'application reussisse ou non. Un PNJ pas encore streame sera repris
+    // par la passe d'hydratation.
+    g_cellulesRecues.insert({msg->cell_x(), msg->cell_y()});
+
+    uint32_t n = 0;
+    for (const auto* e : *msg->entries())
+    {
+        if (e == nullptr || e->entity_id() == 0 || e->appearance() == 0)
+        {
+            continue;
+        }
+        g_apparencesStatiques[e->entity_id()] = e->appearance();
+        g_apparenceConnueDepuis.emplace(e->entity_id(), std::chrono::steady_clock::now());
+        g_apparencesAppliquees.erase(e->entity_id());
+        // Le ROSTER, distinct de la table d'apparences : il porte de quoi RECREER le PNJ chez un
+        // client a qui il manque (spec 2026-08-09). Un client qui possede deja le natif n'en fait
+        // rien — c'est justement ce qui rend la reparation asymetrique.
+        if (const auto* p = e->position())
+        {
+            g_rosterStatiques[e->entity_id()] = InscriptionRoster{e->record(), e->appearance(),
+                DequantPos(p->x()), DequantPos(p->y()), DequantPos(p->z()), e->yaw()};
+        }
+        ++n;
+    }
+    SDK->logger->InfoF(PLUGIN, "Halo : cellule (%d,%d) recue — %u apparences", msg->cell_x(),
+        msg->cell_y(), n);
 }
 
 void NetworkGameSystem::HandleStaticAppearance(const cyberpunk_rp::protocol::StaticAppearance* msg)
@@ -1426,6 +1532,106 @@ void NetworkGameSystem::HandleStaticAppearance(const cyberpunk_rp::protocol::Sta
     }
 }
 
+void NetworkGameSystem::ReparerRoster()
+{
+    // ── POURQUOI CETTE PASSE EXISTE ──────────────────────────────────────────────────────────
+    //
+    // Mesure du 2026-08-09, deux clients a la position IDENTIQUE, immobiles : seulement **83 %**
+    // des PNJ statiques sont vus des deux cotes, et le chiffre est **PLAT sur neuf minutes**. Ce
+    // n'est donc pas un retard de streaming qu'il suffirait d'attendre — les deux moteurs peuplent
+    // durablement deux mondes differents.
+    //
+    // On ne peut ni piloter la foule native (F-PNJ-069 : natif C++, aucun point d'entree scripte),
+    // ni en retirer un membre (F-PNJ-091 et F-PNJ-093 sont des impasses). Il ne reste qu'une voie :
+    // COMPLETER ce qui manque, chez le client a qui ca manque.
+    //
+    // ⚠️ Le remplacant est LOCAL, et c'est le coeur de la conception. Si le serveur le spawnait
+    // comme entite reseau, le client qui possede deja le natif le recevrait aussi et verrait un
+    // DOUBLON — qu'on ne saurait pas supprimer.
+    // ⚠️ INTERRUPTEUR DE MESURE (2026-08-09) — `TESSERA_ROSTER_OFF=1`.
+    //
+    // Ce mecanisme et la promotion creent tous deux des PNJ, sans se consulter : un meme personnage
+    // peut donc exister en TROIS exemplaires (figurant local, promu serveur, remplacant de roster).
+    // Observe en jeu le 2026-08-09, avec 704 remplacants crees en une session.
+    //
+    // Cet interrupteur n'existe PAS pour desactiver la fonctionnalite — il existe pour qu'on puisse
+    // mesurer l'autre moitie du systeme sans son bruit. Meme famille que `TESSERA_DISPLAY_NAME` et
+    // `TESSERA_AUTO_CHARACTER` : un reglage de RUN AUTOMATISE, absent par defaut, sans effet sur un
+    // joueur. Le comportement par defaut est strictement inchange.
+    static const bool rosterCoupe = []() {
+        char* v = nullptr;
+        size_t n = 0;
+        const bool ok = _dupenv_s(&v, &n, "TESSERA_ROSTER_OFF") == 0 && v != nullptr;
+        const bool coupe = ok && v[0] == '1';
+        if (v) free(v);
+        return coupe;
+    }();
+    if (rosterCoupe)
+    {
+        return;
+    }
+    if (g_rosterStatiques.empty())
+    {
+        return;
+    }
+    // Delai de grace : on laisse au streaming natif le temps de faire son travail avant de le
+    // suppleer. Substituer trop tot fabriquerait un doublon chaque fois que le natif est
+    // simplement en retard de quelques secondes.
+    constexpr auto kDelaiDeGrace = std::chrono::seconds(10);
+    // Budget par tick, comme l'hydratation : un lot de pantins complets cree d'un coup se verrait.
+    constexpr int kMaxParTick = 4;
+    const auto maintenant = std::chrono::steady_clock::now();
+    int faits = 0;
+
+    for (const auto& [id, inscription] : g_rosterStatiques)
+    {
+        if (faits >= kMaxParTick)
+        {
+            break;
+        }
+        const RED4ext::ent::EntityID cible(id);
+        const auto remplacant = g_remplacants.find(id);
+        if (remplacant != g_remplacants.end())
+        {
+            // On a deja un remplacant : la seule question est de savoir si le natif est arrive.
+            // S'il est la, le notre devient un doublon et doit partir — c'est la moitie du
+            // mecanisme, et l'oublier laisserait deux PNJ au meme endroit.
+            bool existe = false;
+            if (Red::CallVirtual(this, "TesseraEntiteExisteLocalement", existe, cible) && existe)
+            {
+                Red::CallVirtual(this, "DestroyTransientEntity", remplacant->second);
+                SDK->logger->InfoF(PLUGIN, "Roster : natif %llu arrive — remplacant retire", id);
+                g_remplacants.erase(id);
+                ++faits;
+            }
+            continue;
+        }
+        const auto connu = g_apparenceConnueDepuis.find(id);
+        if (connu == g_apparenceConnueDepuis.end() || maintenant - connu->second < kDelaiDeGrace)
+        {
+            continue;
+        }
+        // Le redscript tranche : lui seul voit le joueur, l'entite et les distances. Une EntityID
+        // vide signifie « pas maintenant » (natif present, trop pres, trop loin), jamais
+        // « impossible » — on retentera au tick suivant.
+        const RED4ext::Vector4 position{inscription.x, inscription.y, inscription.z, 1.0f};
+        const float yawRad = static_cast<float>(inscription.yaw) * 3.14159265f / 180.0f;
+        const RED4ext::Quaternion orientation{
+            0.0f, 0.0f, std::sin(yawRad * 0.5f), std::cos(yawRad * 0.5f)};
+        RED4ext::ent::EntityID cree;
+        if (Red::CallVirtual(this, "ReparerStatique", cree, cible,
+                RED4ext::TweakDBID(inscription.record), RED4ext::CName(inscription.apparence),
+                position, orientation)
+            && cree.IsDefined())
+        {
+            g_remplacants[id] = cree;
+            SDK->logger->InfoF(PLUGIN, "Roster : %llu absent — remplacant cree (%zu au total)", id,
+                g_remplacants.size());
+            ++faits;
+        }
+    }
+}
+
 void NetworkGameSystem::HydraterApparencesDiscretement()
 {
     // ── POURQUOI CETTE PASSE EXISTE ──────────────────────────────────────────────────────────
@@ -1444,10 +1650,53 @@ void NetworkGameSystem::HydraterApparencesDiscretement()
     //
     // Une seule par tick : un lot d'apparences appliquees d'un coup ferait un a-coup visible meme
     // hors champ (cout de rendu), et rien ne presse.
+    // ── RE-VERIFICATION PERIODIQUE ───────────────────────────────────────────────────────────
+    //
+    // « Hydrate » n'est PAS un etat definitif. Un PNJ decharge puis recharge (le joueur s'eloigne
+    // et revient) se voit retirer une apparence AU HASARD par le jeu, et rien ne la recorrigeait :
+    // la coherence se degradait a chaque deplacement, en silence. C'est le defaut que le protocole
+    // de Lucas — une instance qui marche, une qui reste — a ete concu pour reveler.
+    //
+    // On repasse donc toute la table a intervalle regulier. Ce n'est pas couteux : une entite deja
+    // correcte repond DEJA-BON cote redscript et ressort sans qu'aucun ordre ne soit emis, donc
+    // sans le moindre effet visible. Remettre l'horloge de forcage a zero est indispensable —
+    // sinon toutes les entites redeviendraient « echues » d'un coup et se rhabilleraient en pleine
+    // vue, ce que les 90 s ci-dessus cherchent justement a eviter.
+    // ⚠️ DOIT rester nettement PLUS LONGUE que `kDelaiForcage` ci-dessous. Sinon la remise a zero
+    // de l'horloge repousse l'echeance a chaque passe et le forcage n'arrive JAMAIS : mesure du
+    // 2026-08-09 avec 1 min contre 90 s — 6 apparences appliquees pour 39 770 refus, et la
+    // coherence retombee de 97 % a 89 %. Les deux reglages se lisent ensemble, jamais separement.
+    constexpr auto kPeriodeVerification = std::chrono::minutes(5);
+    static auto derniereVerification = std::chrono::steady_clock::now();
+    const auto maintenant = std::chrono::steady_clock::now();
+    if (maintenant - derniereVerification > kPeriodeVerification)
+    {
+        derniereVerification = maintenant;
+        g_apparencesAppliquees.clear();
+        for (auto& [id, _] : g_apparenceConnueDepuis)
+        {
+            g_apparenceConnueDepuis[id] = maintenant;
+        }
+        SDK->logger->InfoF(PLUGIN, "Hydratation : re-verification des %zu apparences connues",
+            g_apparencesStatiques.size());
+    }
+
     if (g_apparencesStatiques.size() == g_apparencesAppliquees.size())
     {
         return;
     }
+    // Bornee : un PNJ hors champ se trouve en quelques essais, et on ne balaie pas des milliers
+    // d'entrees a chaque tick quand tout est dans le champ.
+    constexpr int kMaxTentativesParTick = 16;
+    // 90 s et non 15 : le cone doit avoir le TEMPS de trouver son occasion. Un PNJ sort du champ
+    // des que le joueur tourne la tete, entre dans un menu, ou passe une porte — il suffit d'une
+    // fraction de seconde, et l'echange est alors invisible. Forcer a 15 s rhabillait les gens en
+    // pleine vue avant meme que l'occasion ne se presente. L'echeance reste, parce que sans elle
+    // un PNJ fixe en permanence ne convergeait JAMAIS (mesure : 2 appliquees sur 112).
+    // ponytail: constante en dur, a passer en config serveur si un operateur veut arbitrer
+    // « fidelite immediate » contre « aucun rhabillage visible ».
+    constexpr auto kDelaiForcage = std::chrono::seconds(10);
+    int tentatives = 0;
     for (const auto& [id, apparence] : g_apparencesStatiques)
     {
         if (g_apparencesAppliquees.contains(id))
@@ -1457,14 +1706,64 @@ void NetworkGameSystem::HydraterApparencesDiscretement()
         bool ok = false;
         const RED4ext::ent::EntityID cible(id);
         const RED4ext::CName nom(apparence);
+        // ECHEANCE DE CONVERGENCE. La discretion est une preference, pas une condition : un PNJ
+        // qu'on regarde en continu ne quitte jamais le cone, et son apparence ne serait JAMAIS
+        // appliquee. Mesure du 2026-08-08, joueur immobile : 16 appliquees sur 112 connues, 70 985
+        // refus. Passe ce delai on applique quand meme — mieux vaut un changement visible qu'une
+        // divergence permanente entre deux joueurs.
+        const auto connueDepuis = g_apparenceConnueDepuis.find(id);
+        const bool echu = connueDepuis != g_apparenceConnueDepuis.end() &&
+            (std::chrono::steady_clock::now() - connueDepuis->second) > kDelaiForcage;
+        const char* methode = echu ? "AppliquerApparenceStatique" : "AppliquerApparenceDiscrete";
         // Le redscript decide s'il est DISCRET d'appliquer maintenant — c'est lui qui voit le
         // joueur et le PNJ. Un `false` signifie « pas maintenant », pas « impossible ».
-        if (Red::CallVirtual(this, "AppliquerApparenceDiscrete", ok, cible, nom) && ok)
+        if (Red::CallVirtual(this, methode, ok, cible, nom) && ok)
         {
             g_apparencesAppliquees.insert(id);
         }
+        else
+        {
+            ++g_hydratationsDifferees;
+            // ⚠️ NE PAS `return` ici. La version precedente sortait des le premier refus : elle
+            // re-tentait donc la MEME entite a chaque tick, indefiniment, sans jamais atteindre les
+            // suivantes. Mesure du 2026-08-08 : 2 apparences appliquees pour 11 824 refus, sur 112
+            // connues — la cause racine des divergences residuelles vues par Lucas.
+            if (++tentatives >= kMaxTentativesParTick)
+            {
+                return;
+            }
+            continue;
+        }
+        // Deux compteurs, pas un : « appliquees » seul ne dirait pas si le cone de vision BLOQUE
+        // (le PNJ reste dans le champ) ou s'il n'y a simplement rien a faire. Le rapport entre les
+        // deux est ce qui tranchera l'etape 5 de la spec (retirer le cone, ou non).
+        if ((g_apparencesAppliquees.size() + g_hydratationsDifferees) % 25 == 1)
+        {
+            SDK->logger->InfoF(PLUGIN, "Hydratation : %zu appliquees, %zu differees (%zu connues)",
+                g_apparencesAppliquees.size(), g_hydratationsDifferees,
+                g_apparencesStatiques.size());
+        }
         return; // une seule tentative par tick, reussie ou non
     }
+}
+
+bool NetworkGameSystem::Tessera_SupprimerPersonnage(uint64_t id)
+{
+    if (m_pInterface == nullptr || id == 0)
+    {
+        SDK->logger->Warn(PLUGIN, "DeleteCharacter ignore : pas de connexion, ou id nul");
+        return false;
+    }
+    SDK->logger->InfoF(PLUGIN, "DeleteCharacter : id %llu", id);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto req = cyberpunk_rp::protocol::CreateDeleteCharacter(builder, id);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_DeleteCharacter, req.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    return true;
 }
 
 void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEvent* event)
@@ -1516,6 +1815,211 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
         SDK->logger->WarnF(PLUGIN, "Stim %u refuse (acteur %llu, rayon %.1f m)",
             static_cast<unsigned>(event->action()), event->actor(), radiusMetres);
     }
+}
+
+// Seuil d'emission, en pour mille de la barre. Rien ne part en dessous.
+//
+// ⚠️ CHIFFRE INVENTE, et il doit le rester jusqu'a ce qu'une session le cale. 20 pour mille = 2 %
+// de la barre : une regeneration lente n'emet presque rien, un soin d'inhalateur part tout de
+// suite. C'est la regle « un SEUIL, pas une cadence » de la spec 2026-08-09 — la meme qui a fait
+// ses preuves sur l'etranglement des stimulus.
+static constexpr float kSeuilVariationPermille = 20.0f;
+
+int32_t NetworkGameSystem::Tessera_RapporterVariation(float pourcentCourant, uint32_t cause)
+{
+    if (m_pInterface == nullptr || pourcentCourant < 0.0f)
+    {
+        return 0;
+    }
+    // Premier passage : on n'a rien a comparer. On etablit la reference et on se tait — sinon
+    // l'entree en session serait rapportee comme un gain de toute la barre.
+    if (m_santeLocaleConnue < 0.0f)
+    {
+        m_santeLocaleConnue = pourcentCourant;
+        return 0;
+    }
+
+    // Pourcentage -> pour mille : la barre serveur est une FRACTION, donc une variation relative se
+    // transporte telle quelle, quel que soit le maximum de vie du joueur (chrome compris).
+    const float deltaPermille = (pourcentCourant - m_santeLocaleConnue) * 10.0f;
+    if (deltaPermille > -kSeuilVariationPermille && deltaPermille < kSeuilVariationPermille)
+    {
+        return 0; // sous le seuil : on laisse s'accumuler plutot que d'emettre du bruit
+    }
+
+    // ⚠️ ON NE RAPPORTE QUE LES PERTES. JAMAIS LES GAINS. Mesure du 2026-08-09 :
+    //
+    //     17:23:55.650  degats 171 sur 9 -> sante 307
+    //     17:23:56.050  variation +92 de 9 -> sante 399     (400 ms plus tard)
+    //
+    // La victime encaisse la balle DEUX FOIS : le moteur la lui applique localement, et le serveur
+    // la lui applique aussi. Les deux barres divergent, ce sondeur voit la barre locale AU-DESSUS
+    // de celle du serveur, et rapporte l'ecart comme un gain. Le serveur l'accorde — et le mort
+    // remonte. C'est la boucle qui produisait « le personnage se releve alors qu'il est mort ».
+    //
+    // Le sens est asymetrique parce que la REALITE l'est :
+    //   · une PERTE que le serveur ignore est une vraie information (chute, feu, PNJ) ;
+    //   · un GAIN, depuis que la regeneration est coupee, n'est plus jamais une vraie information —
+    //     c'est un ecart de reconciliation. Le seul gain legitime restant serait un soin explicite,
+    //     et il devra passer par sa propre cause, pas par un ecart observe.
+    //
+    // On perd donc la remontee des soins, et c'est assume : mieux vaut un soin non replique qu'un
+    // mort qui se releve.
+    if (deltaPermille > 0.0f)
+    {
+        // La reference avance quand meme : sinon l'ecart se represenerait a chaque passe et on
+        // journaliserait en boucle un gain qu'on ne rapporte pas.
+        m_santeLocaleConnue = pourcentCourant;
+        return 0;
+    }
+
+    // La reference avance AVANT l'envoi : si le message se perd, on ne rejouera pas la meme
+    // variation au passage suivant. Un delta perdu est un delta perdu — le serveur reste la verite,
+    // et il corrigera au prochain HealthSync.
+    m_santeLocaleConnue = pourcentCourant;
+
+    const auto delta = static_cast<int16_t>(deltaPermille);
+    SDK->logger->InfoF(PLUGIN, "Variation de vie rapportee : %+d pour mille (cause %u)",
+        static_cast<int>(delta), cause);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto hr = cyberpunk_rp::protocol::CreateHealthReport(
+        builder, delta, static_cast<uint8_t>(cause));
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_HealthReport, hr.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    return delta;
+}
+
+bool NetworkGameSystem::Tessera_DemanderReapparition()
+{
+    if (m_pInterface == nullptr)
+    {
+        return false;
+    }
+    // ⚠️ DEFINIE DANS LE .CPP, pas dans l'en-tete : celui-ci ne connait le protocole que par
+    // declarations avancees (pour ne pas tirer l'en-tete genere partout), donc aucun
+    // `Create*` n'y est visible. Meme raison que `SendStimReport`.
+    flatbuffers::FlatBufferBuilder builder;
+    const auto rr = cyberpunk_rp::protocol::CreateRespawnRequest(builder);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_RespawnRequest, rr.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    SDK->logger->Info(PLUGIN, "Reapparition demandee au serveur");
+    return true;
+}
+
+void NetworkGameSystem::HandleHealthSync(const cyberpunk_rp::protocol::HealthSync* msg)
+{
+    if (msg == nullptr)
+    {
+        return;
+    }
+
+    // Journalise systematiquement : c'est le SEUL point d'observation du retour serveur. Sans lui,
+    // « la barre ne bouge pas » ne distingue pas « rien n'arrive » de « ca arrive et l'application
+    // echoue » — deux causes opposees, meme symptome a l'ecran.
+    SDK->logger->InfoF(PLUGIN, "HealthSync %llu -> %u/1000 (%s)",
+        msg->id(), static_cast<unsigned>(msg->health()), msg->mine() ? "moi" : "voisin");
+
+    if (msg->mine())
+    {
+        // Etat de coma pousse par le SERVEUR. `-1` quand on est vivant : « pas de decompte » et
+        // « decompte a zero » ne doivent pas se confondre — la seconde autorise l'hopital.
+        if (msg->health() == 0)
+        {
+            m_secondesSecours = static_cast<int32_t>(msg->secondes_secours());
+            m_hopitalOuvert = msg->hopital_ouvert();
+        }
+        else
+        {
+            m_secondesSecours = -1;
+            m_hopitalOuvert = false;
+        }
+
+        // MA sante. Redscript ecrit la barre de vie du joueur local ; a 0, la mort NATIVE
+        // s'enclenche toute seule et l'ecran de mort garni (C20) s'affiche derriere elle. On ne
+        // reimplemente ni la mort, ni son ecran — on ne fait que poser le nombre.
+        // `uint32_t` et non `uint16_t` : redscript n'a pas de type 16 bits, la conversion se fait
+        // au franchissement du fil — meme regle que `nature` dans `Tessera_ReportStim`.
+        // ⚠️ ANTI-ECHO, ET C'EST LE POINT DE CONCEPTION DU CANAL MONTANT. Ce que le serveur nous
+        // impose devient immediatement notre reference : la detection locale ne verra donc PAS
+        // cette ecriture comme une variation, et ne la renverra pas. Sans cette ligne, chaque
+        // HealthSync produirait un HealthReport, qui produirait un HealthSync — une boucle.
+        m_santeLocaleConnue = static_cast<float>(msg->health()) / 10.0f;
+
+        // ⚠️ ON TRANSMET TOUJOURS, ET C'EST REDSCRIPT QUI DECIDE D'ECRIRE OU NON.
+        //
+        // Deux pannes opposees ont ete traversees ici en une heure, et la lecon est la meme :
+        //   · reecrire la barre a CHAQUE battement -> entre deux battements le moteur rend sa vie
+        //     au joueur, il se releve, le battement suivant le retue. Un va-et-vient visible.
+        //   · ne l'ecrire QU'UNE FOIS -> plus rien ne le maintient mort, et il ressuscite pour de
+        //     bon. Pire que le va-et-vient.
+        // La bonne regle n'est ni « toujours » ni « une fois » : c'est **reconcilier quand l'etat
+        // local contredit le serveur**. Or seul redscript peut lire cet etat local. Le C++ se
+        // contente donc de transmettre, et `AppliquerSanteJoueur` compare avant d'ecrire.
+        bool ok = false;
+        if (!Red::CallVirtual(this, "AppliquerSanteJoueur", ok,
+                static_cast<uint32_t>(msg->health()))
+            || !ok)
+        {
+            SDK->logger->WarnF(PLUGIN, "AppliquerSanteJoueur refuse (%u/1000)",
+                static_cast<unsigned>(msg->health()));
+        }
+        return;
+    }
+
+    // Sante d'un VOISIN. On ne s'en sert que pour coucher son avatar quand il tombe a zero : sa
+    // barre de vie a lui n'est affichee nulle part chez nous, et l'avatar est rendu immortel
+    // localement (AvatarNeutre.reds) precisement pour que ce soit le serveur qui tranche.
+    if (msg->health() != 0)
+    {
+        return;
+    }
+    const auto entite = m_networkedEntitiesLookup.find(msg->id());
+    if (entite == m_networkedEntitiesLookup.end())
+    {
+        // Pas spawne chez nous (hors de portee au moment du coup). Rien a coucher — et rien a
+        // rattraper : s'il revient en vue, il reviendra vivant, ce qui est un ecart connu et
+        // borne tant que le serveur ne porte pas l'etat de mort dans le Snapshot.
+        SDK->logger->InfoF(PLUGIN, "Mort de %llu ignoree : avatar pas spawne localement", msg->id());
+        return;
+    }
+    bool ok = false;
+    if (!Red::CallVirtual(this, "TesseraRendreMort", ok, entite->second) || !ok)
+    {
+        // `false` veut souvent dire « pas encore » : `Kill` peut etre differe d'une frame, et le
+        // pantin peut n'etre pas encore attache. Le prochain HealthSync ne viendra pas (le serveur
+        // n'emet que sur changement), donc on journalise pour que le cas se voie.
+        SDK->logger->WarnF(PLUGIN, "TesseraRendreMort refuse pour %llu", msg->id());
+    }
+}
+
+void NetworkGameSystem::SendAttackReport(uint64_t target, uint32_t degats)
+{
+    if (m_pInterface == nullptr || target == 0 || degats == 0)
+    {
+        return;
+    }
+
+    // kind=5=Attaque, `param` = les degats. Constantes du gel du schema (protocol.fbs,
+    // EntityInteraction) — surtout pas une numerotation locale.
+    constexpr uint8_t kKindAttaque = 5;
+
+    SDK->logger->InfoF(PLUGIN, "Degats %u rapportes sur %llu", degats, target);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ei = cyberpunk_rp::protocol::CreateEntityInteraction(
+        builder, target, kKindAttaque, degats);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_EntityInteraction, ei.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
 void NetworkGameSystem::SendStimReport(uint8_t nature, float radiusMetres, uint64_t target)

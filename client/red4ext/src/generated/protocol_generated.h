@@ -151,6 +151,18 @@ struct StaticNpcReportBuilder;
 struct StaticAppearance;
 struct StaticAppearanceBuilder;
 
+struct CellAppearances;
+struct CellAppearancesBuilder;
+
+struct HealthSync;
+struct HealthSyncBuilder;
+
+struct RespawnRequest;
+struct RespawnRequestBuilder;
+
+struct HealthReport;
+struct HealthReportBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -177,11 +189,13 @@ enum ClientMsg : uint8_t {
   ClientMsg_StimReport = 16,
   ClientMsg_PromotionRequest = 17,
   ClientMsg_StaticNpcReport = 18,
+  ClientMsg_RespawnRequest = 19,
+  ClientMsg_HealthReport = 20,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_StaticNpcReport
+  ClientMsg_MAX = ClientMsg_HealthReport
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[19] {
+inline const ClientMsg (&EnumValuesClientMsg())[21] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -201,13 +215,15 @@ inline const ClientMsg (&EnumValuesClientMsg())[19] {
     ClientMsg_EquipmentReport,
     ClientMsg_StimReport,
     ClientMsg_PromotionRequest,
-    ClientMsg_StaticNpcReport
+    ClientMsg_StaticNpcReport,
+    ClientMsg_RespawnRequest,
+    ClientMsg_HealthReport
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[20] = {
+  static const char * const names[22] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -227,13 +243,15 @@ inline const char * const *EnumNamesClientMsg() {
     "StimReport",
     "PromotionRequest",
     "StaticNpcReport",
+    "RespawnRequest",
+    "HealthReport",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_StaticNpcReport)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_HealthReport)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -314,6 +332,14 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::StaticNpcReport> {
   static const ClientMsg enum_value = ClientMsg_StaticNpcReport;
 };
 
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::RespawnRequest> {
+  static const ClientMsg enum_value = ClientMsg_RespawnRequest;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::HealthReport> {
+  static const ClientMsg enum_value = ClientMsg_HealthReport;
+};
+
 template <bool B = false>
 bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ClientMsg type);
 template <bool B = false>
@@ -338,11 +364,13 @@ enum ServerMsg : uint8_t {
   ServerMsg_AppearanceSync = 15,
   ServerMsg_ConfigSync = 16,
   ServerMsg_StaticAppearance = 17,
+  ServerMsg_HealthSync = 18,
+  ServerMsg_CellAppearances = 19,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_StaticAppearance
+  ServerMsg_MAX = ServerMsg_CellAppearances
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[18] {
+inline const ServerMsg (&EnumValuesServerMsg())[20] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -361,13 +389,15 @@ inline const ServerMsg (&EnumValuesServerMsg())[18] {
     ServerMsg_ElevatorStateMsg,
     ServerMsg_AppearanceSync,
     ServerMsg_ConfigSync,
-    ServerMsg_StaticAppearance
+    ServerMsg_StaticAppearance,
+    ServerMsg_HealthSync,
+    ServerMsg_CellAppearances
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[19] = {
+  static const char * const names[21] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -386,13 +416,15 @@ inline const char * const *EnumNamesServerMsg() {
     "AppearanceSync",
     "ConfigSync",
     "StaticAppearance",
+    "HealthSync",
+    "CellAppearances",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_StaticAppearance)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_CellAppearances)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -467,6 +499,14 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ConfigSync> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaticAppearance> {
   static const ServerMsg enum_value = ServerMsg_StaticAppearance;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::HealthSync> {
+  static const ServerMsg enum_value = ServerMsg_HealthSync;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CellAppearances> {
+  static const ServerMsg enum_value = ServerMsg_CellAppearances;
 };
 
 template <bool B = false>
@@ -2281,7 +2321,9 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef CharacterSummaryBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ID = 4,
-    VT_PSEUDONYM = 6
+    VT_PSEUDONYM = 6,
+    VT_BASE_RECORD = 8,
+    VT_APPEARANCE = 10
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -2289,12 +2331,20 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *pseudonym() const {
     return GetPointer<const ::flatbuffers::String *>(VT_PSEUDONYM);
   }
+  uint64_t base_record() const {
+    return GetField<uint64_t>(VT_BASE_RECORD, 0);
+  }
+  uint64_t appearance() const {
+    return GetField<uint64_t>(VT_APPEARANCE, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_ID, 8) &&
            VerifyOffset(verifier, VT_PSEUDONYM) &&
            verifier.VerifyString(pseudonym()) &&
+           VerifyField<uint64_t>(verifier, VT_BASE_RECORD, 8) &&
+           VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
            verifier.EndTable();
   }
 };
@@ -2308,6 +2358,12 @@ struct CharacterSummaryBuilder {
   }
   void add_pseudonym(::flatbuffers::Offset<::flatbuffers::String> pseudonym) {
     fbb_.AddOffset(CharacterSummary::VT_PSEUDONYM, pseudonym);
+  }
+  void add_base_record(uint64_t base_record) {
+    fbb_.AddElement<uint64_t>(CharacterSummary::VT_BASE_RECORD, base_record, 0);
+  }
+  void add_appearance(uint64_t appearance) {
+    fbb_.AddElement<uint64_t>(CharacterSummary::VT_APPEARANCE, appearance, 0);
   }
   explicit CharacterSummaryBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -2323,8 +2379,12 @@ struct CharacterSummaryBuilder {
 inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummary(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t id = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0,
+    uint64_t base_record = 0,
+    uint64_t appearance = 0) {
   CharacterSummaryBuilder builder_(_fbb);
+  builder_.add_appearance(appearance);
+  builder_.add_base_record(base_record);
   builder_.add_id(id);
   builder_.add_pseudonym(pseudonym);
   return builder_.Finish();
@@ -2333,12 +2393,16 @@ inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummary(
 inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummaryDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t id = 0,
-    const char *pseudonym = nullptr) {
+    const char *pseudonym = nullptr,
+    uint64_t base_record = 0,
+    uint64_t appearance = 0) {
   auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
   return cyberpunk_rp::protocol::CreateCharacterSummary(
       _fbb,
       id,
-      pseudonym__);
+      pseudonym__,
+      base_record,
+      appearance);
 }
 
 struct CharacterList FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -3642,7 +3706,9 @@ struct StaticNpcReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ENTITY_ID = 4,
     VT_RECORD = 6,
-    VT_APPEARANCE = 8
+    VT_APPEARANCE = 8,
+    VT_POSITION = 10,
+    VT_YAW = 12
   };
   uint64_t entity_id() const {
     return GetField<uint64_t>(VT_ENTITY_ID, 0);
@@ -3653,12 +3719,20 @@ struct StaticNpcReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t appearance() const {
     return GetField<uint64_t>(VT_APPEARANCE, 0);
   }
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
+  }
+  int16_t yaw() const {
+    return GetField<int16_t>(VT_YAW, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_ENTITY_ID, 8) &&
            VerifyField<uint64_t>(verifier, VT_RECORD, 8) &&
            VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<int16_t>(verifier, VT_YAW, 2) &&
            verifier.EndTable();
   }
 };
@@ -3676,6 +3750,12 @@ struct StaticNpcReportBuilder {
   void add_appearance(uint64_t appearance) {
     fbb_.AddElement<uint64_t>(StaticNpcReport::VT_APPEARANCE, appearance, 0);
   }
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
+    fbb_.AddStruct(StaticNpcReport::VT_POSITION, position);
+  }
+  void add_yaw(int16_t yaw) {
+    fbb_.AddElement<int16_t>(StaticNpcReport::VT_YAW, yaw, 0);
+  }
   explicit StaticNpcReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -3691,11 +3771,15 @@ inline ::flatbuffers::Offset<StaticNpcReport> CreateStaticNpcReport(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t entity_id = 0,
     uint64_t record = 0,
-    uint64_t appearance = 0) {
+    uint64_t appearance = 0,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    int16_t yaw = 0) {
   StaticNpcReportBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_record(record);
   builder_.add_entity_id(entity_id);
+  builder_.add_position(position);
+  builder_.add_yaw(yaw);
   return builder_.Finish();
 }
 
@@ -3704,7 +3788,9 @@ struct StaticAppearance FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ENTITY_ID = 4,
     VT_RECORD = 6,
-    VT_APPEARANCE = 8
+    VT_APPEARANCE = 8,
+    VT_POSITION = 10,
+    VT_YAW = 12
   };
   uint64_t entity_id() const {
     return GetField<uint64_t>(VT_ENTITY_ID, 0);
@@ -3715,12 +3801,20 @@ struct StaticAppearance FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t appearance() const {
     return GetField<uint64_t>(VT_APPEARANCE, 0);
   }
+  const cyberpunk_rp::protocol::QVec3 *position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
+  }
+  int16_t yaw() const {
+    return GetField<int16_t>(VT_YAW, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_ENTITY_ID, 8) &&
            VerifyField<uint64_t>(verifier, VT_RECORD, 8) &&
            VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_POSITION, 4) &&
+           VerifyField<int16_t>(verifier, VT_YAW, 2) &&
            verifier.EndTable();
   }
 };
@@ -3738,6 +3832,12 @@ struct StaticAppearanceBuilder {
   void add_appearance(uint64_t appearance) {
     fbb_.AddElement<uint64_t>(StaticAppearance::VT_APPEARANCE, appearance, 0);
   }
+  void add_position(const cyberpunk_rp::protocol::QVec3 *position) {
+    fbb_.AddStruct(StaticAppearance::VT_POSITION, position);
+  }
+  void add_yaw(int16_t yaw) {
+    fbb_.AddElement<int16_t>(StaticAppearance::VT_YAW, yaw, 0);
+  }
   explicit StaticAppearanceBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -3753,11 +3853,256 @@ inline ::flatbuffers::Offset<StaticAppearance> CreateStaticAppearance(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t entity_id = 0,
     uint64_t record = 0,
-    uint64_t appearance = 0) {
+    uint64_t appearance = 0,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    int16_t yaw = 0) {
   StaticAppearanceBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_record(record);
   builder_.add_entity_id(entity_id);
+  builder_.add_position(position);
+  builder_.add_yaw(yaw);
+  return builder_.Finish();
+}
+
+struct CellAppearances FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CellAppearancesBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_CELL_X = 4,
+    VT_CELL_Y = 6,
+    VT_ENTRIES = 8
+  };
+  int32_t cell_x() const {
+    return GetField<int32_t>(VT_CELL_X, 0);
+  }
+  int32_t cell_y() const {
+    return GetField<int32_t>(VT_CELL_Y, 0);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::StaticAppearance>> *entries() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::StaticAppearance>> *>(VT_ENTRIES);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<int32_t>(verifier, VT_CELL_X, 4) &&
+           VerifyField<int32_t>(verifier, VT_CELL_Y, 4) &&
+           VerifyOffset(verifier, VT_ENTRIES) &&
+           verifier.VerifyVector(entries()) &&
+           verifier.VerifyVectorOfTables(entries()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CellAppearancesBuilder {
+  typedef CellAppearances Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_cell_x(int32_t cell_x) {
+    fbb_.AddElement<int32_t>(CellAppearances::VT_CELL_X, cell_x, 0);
+  }
+  void add_cell_y(int32_t cell_y) {
+    fbb_.AddElement<int32_t>(CellAppearances::VT_CELL_Y, cell_y, 0);
+  }
+  void add_entries(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::StaticAppearance>>> entries) {
+    fbb_.AddOffset(CellAppearances::VT_ENTRIES, entries);
+  }
+  explicit CellAppearancesBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CellAppearances> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CellAppearances>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CellAppearances> CreateCellAppearances(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    int32_t cell_x = 0,
+    int32_t cell_y = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::StaticAppearance>>> entries = 0) {
+  CellAppearancesBuilder builder_(_fbb);
+  builder_.add_entries(entries);
+  builder_.add_cell_y(cell_y);
+  builder_.add_cell_x(cell_x);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CellAppearances> CreateCellAppearancesDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    int32_t cell_x = 0,
+    int32_t cell_y = 0,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::StaticAppearance>> *entries = nullptr) {
+  auto entries__ = entries ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::StaticAppearance>>(*entries) : 0;
+  return cyberpunk_rp::protocol::CreateCellAppearances(
+      _fbb,
+      cell_x,
+      cell_y,
+      entries__);
+}
+
+struct HealthSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef HealthSyncBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_HEALTH = 6,
+    VT_MINE = 8,
+    VT_SECONDES_SECOURS = 10,
+    VT_HOPITAL_OUVERT = 12
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  uint16_t health() const {
+    return GetField<uint16_t>(VT_HEALTH, 0);
+  }
+  bool mine() const {
+    return GetField<uint8_t>(VT_MINE, 0) != 0;
+  }
+  uint16_t secondes_secours() const {
+    return GetField<uint16_t>(VT_SECONDES_SECOURS, 0);
+  }
+  bool hopital_ouvert() const {
+    return GetField<uint8_t>(VT_HOPITAL_OUVERT, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyField<uint16_t>(verifier, VT_HEALTH, 2) &&
+           VerifyField<uint8_t>(verifier, VT_MINE, 1) &&
+           VerifyField<uint16_t>(verifier, VT_SECONDES_SECOURS, 2) &&
+           VerifyField<uint8_t>(verifier, VT_HOPITAL_OUVERT, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct HealthSyncBuilder {
+  typedef HealthSync Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(HealthSync::VT_ID, id, 0);
+  }
+  void add_health(uint16_t health) {
+    fbb_.AddElement<uint16_t>(HealthSync::VT_HEALTH, health, 0);
+  }
+  void add_mine(bool mine) {
+    fbb_.AddElement<uint8_t>(HealthSync::VT_MINE, static_cast<uint8_t>(mine), 0);
+  }
+  void add_secondes_secours(uint16_t secondes_secours) {
+    fbb_.AddElement<uint16_t>(HealthSync::VT_SECONDES_SECOURS, secondes_secours, 0);
+  }
+  void add_hopital_ouvert(bool hopital_ouvert) {
+    fbb_.AddElement<uint8_t>(HealthSync::VT_HOPITAL_OUVERT, static_cast<uint8_t>(hopital_ouvert), 0);
+  }
+  explicit HealthSyncBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<HealthSync> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<HealthSync>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<HealthSync> CreateHealthSync(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    uint16_t health = 0,
+    bool mine = false,
+    uint16_t secondes_secours = 0,
+    bool hopital_ouvert = false) {
+  HealthSyncBuilder builder_(_fbb);
+  builder_.add_id(id);
+  builder_.add_secondes_secours(secondes_secours);
+  builder_.add_health(health);
+  builder_.add_hopital_ouvert(hopital_ouvert);
+  builder_.add_mine(mine);
+  return builder_.Finish();
+}
+
+struct RespawnRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef RespawnRequestBuilder Builder;
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           verifier.EndTable();
+  }
+};
+
+struct RespawnRequestBuilder {
+  typedef RespawnRequest Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  explicit RespawnRequestBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<RespawnRequest> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<RespawnRequest>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<RespawnRequest> CreateRespawnRequest(
+    ::flatbuffers::FlatBufferBuilder &_fbb) {
+  RespawnRequestBuilder builder_(_fbb);
+  return builder_.Finish();
+}
+
+struct HealthReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef HealthReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_DELTA_PERMILLE = 4,
+    VT_CAUSE = 6
+  };
+  int16_t delta_permille() const {
+    return GetField<int16_t>(VT_DELTA_PERMILLE, 0);
+  }
+  uint8_t cause() const {
+    return GetField<uint8_t>(VT_CAUSE, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<int16_t>(verifier, VT_DELTA_PERMILLE, 2) &&
+           VerifyField<uint8_t>(verifier, VT_CAUSE, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct HealthReportBuilder {
+  typedef HealthReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_delta_permille(int16_t delta_permille) {
+    fbb_.AddElement<int16_t>(HealthReport::VT_DELTA_PERMILLE, delta_permille, 0);
+  }
+  void add_cause(uint8_t cause) {
+    fbb_.AddElement<uint8_t>(HealthReport::VT_CAUSE, cause, 0);
+  }
+  explicit HealthReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<HealthReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<HealthReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<HealthReport> CreateHealthReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    int16_t delta_permille = 0,
+    uint8_t cause = 0) {
+  HealthReportBuilder builder_(_fbb);
+  builder_.add_delta_permille(delta_permille);
+  builder_.add_cause(cause);
   return builder_.Finish();
 }
 
@@ -3827,6 +4172,12 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const cyberpunk_rp::protocol::StaticNpcReport *msg_as_StaticNpcReport() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_StaticNpcReport ? static_cast<const cyberpunk_rp::protocol::StaticNpcReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::RespawnRequest *msg_as_RespawnRequest() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_RespawnRequest ? static_cast<const cyberpunk_rp::protocol::RespawnRequest *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::HealthReport *msg_as_HealthReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_HealthReport ? static_cast<const cyberpunk_rp::protocol::HealthReport *>(msg()) : nullptr;
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -3908,6 +4259,14 @@ template<> inline const cyberpunk_rp::protocol::PromotionRequest *ClientEnvelope
 
 template<> inline const cyberpunk_rp::protocol::StaticNpcReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::StaticNpcReport>() const {
   return msg_as_StaticNpcReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::RespawnRequest *ClientEnvelope::msg_as<cyberpunk_rp::protocol::RespawnRequest>() const {
+  return msg_as_RespawnRequest();
+}
+
+template<> inline const cyberpunk_rp::protocol::HealthReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::HealthReport>() const {
+  return msg_as_HealthReport();
 }
 
 struct ClientEnvelopeBuilder {
@@ -4005,6 +4364,12 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::StaticAppearance *msg_as_StaticAppearance() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_StaticAppearance ? static_cast<const cyberpunk_rp::protocol::StaticAppearance *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::HealthSync *msg_as_HealthSync() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_HealthSync ? static_cast<const cyberpunk_rp::protocol::HealthSync *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::CellAppearances *msg_as_CellAppearances() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_CellAppearances ? static_cast<const cyberpunk_rp::protocol::CellAppearances *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -4081,6 +4446,14 @@ template<> inline const cyberpunk_rp::protocol::ConfigSync *ServerEnvelope::msg_
 
 template<> inline const cyberpunk_rp::protocol::StaticAppearance *ServerEnvelope::msg_as<cyberpunk_rp::protocol::StaticAppearance>() const {
   return msg_as_StaticAppearance();
+}
+
+template<> inline const cyberpunk_rp::protocol::HealthSync *ServerEnvelope::msg_as<cyberpunk_rp::protocol::HealthSync>() const {
+  return msg_as_HealthSync();
+}
+
+template<> inline const cyberpunk_rp::protocol::CellAppearances *ServerEnvelope::msg_as<cyberpunk_rp::protocol::CellAppearances>() const {
+  return msg_as_CellAppearances();
 }
 
 struct ServerEnvelopeBuilder {
@@ -4192,6 +4565,14 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaticNpcReport *>(obj);
       return verifier.VerifyTable(ptr);
     }
+    case ClientMsg_RespawnRequest: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::RespawnRequest *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_HealthReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::HealthReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
     default: return true;
   }
 }
@@ -4281,6 +4662,14 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_StaticAppearance: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaticAppearance *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_HealthSync: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::HealthSync *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_CellAppearances: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::CellAppearances *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
