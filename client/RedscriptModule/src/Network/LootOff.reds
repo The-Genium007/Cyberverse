@@ -45,7 +45,15 @@ protected func UpdateLootInteraction() -> Void {
 // `false` = « rien n'a été lâché », ce que l'appelant natif attend d'un pantin qui ne lâche rien —
 // c'est exactement la valeur que rendait déjà le vanilla quand le record disait
 // `DropsWeaponOnDeath() == false`. On ne fabrique pas un état que le jeu ne connaît pas.
-@wrapMethod(ScriptedPuppet)
+//
+// ⚠️ `@replaceMethod` ET NON `@wrapMethod`, parce que la méthode est `private` : le projet a mesuré
+// qu'un `@wrapMethod` sur une méthode privée **compile et ne se déclenche jamais** (mémoire
+// `native-ui-reinvocation-inventory`, rappelé dans `BACKLOG-INGAME.md` Q-UI2), là où
+// `@replaceMethod` remplace le CORPS en place — les appelants existants exécutent bien le nôtre.
+// C'est le même choix, pour la même raison, que `UiKitDeath.reds` sur `PopulateMenuItemList`.
+// La première version de ce fichier utilisait `@wrapMethod` : elle était donc probablement inerte,
+// et « le patch marche » ne le disait pas, puisque l'autre moitié (l'invite de fouille) marchait.
+@replaceMethod(ScriptedPuppet)
 private func DropHeldItems() -> Bool {
     return false;
 }

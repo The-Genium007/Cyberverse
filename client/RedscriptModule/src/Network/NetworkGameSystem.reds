@@ -500,8 +500,33 @@ public native class NetworkGameSystem extends IGameSystem {
         GameInstance.GetGodModeSystem(GetGameInstance())
             .RemoveGodMode(cible, gameGodModeType.Immortal, n"Tessera");
         pantin.Kill(null, false, false);
-        // ⚠️ `Kill` peut être différé d'une frame : un `false` ici ne veut pas dire échec, il veut
-        // dire « pas encore ». L'appelant réessaiera, et ce sera vrai au snapshot suivant.
+
+        // ⚠️ `Kill` est DIFFÉRÉ D'UNE FRAME : `IsDead()` juste en dessous renvoie presque toujours
+        // `false`, et ce `false` ne veut pas dire échec — il veut dire « pas encore ».
+        //
+        // ── Le trou que ça cachait, mesuré le 2026-08-09 ──────────────────────────────────────
+        //
+        // Le commentaire d'origine disait « l'appelant réessaiera au snapshot suivant ». Le journal
+        // dit le contraire : `TesseraRendreMort refuse pour 10` apparaît à CHAQUE mort, et
+        // `Cadavre applique` **jamais**. La voie de reprise par snapshot
+        // (`NetworkGameSystem.cpp:938`, sur `behavior == kComportementATerre`) ne se déclenche pas,
+        // et l'appel one-shot (`:1993`) se contente d'avertir sans rien retenter.
+        //
+        // Ça marchait quand même — le `Kill` prenait bien effet 4 ms plus tard. Mais ça marchait
+        // **sans que personne ne le vérifie** : le jour où `Kill` échoue pour de bon (pantin en
+        // cours de détachement, streaming, état transitoire), le corps reste DEBOUT pour toujours,
+        // et le seul indice serait une ligne d'avertissement qui apparaît déjà à chaque mort
+        // normale — donc que personne ne lit. C'est la panne que Lucas a connue, et elle était
+        // structurellement possible à nouveau.
+        //
+        // On ferme la boucle ICI plutôt que côté C++ : la vérification est du ressort de celui qui
+        // connaît l'effet attendu, et ça évite une reconstruction de DLL pour une logique de
+        // relance. La valeur de retour reste HONNÊTE (l'effet constaté à l'instant, pas l'intention)
+        // — c'est le vérificateur qui garantit le résultat, pas un `true` optimiste.
+        if !pantin.IsDead() {
+            GameInstance.GetDelaySystem(GetGameInstance())
+                .DelayCallback(TesseraVerifieCadavre.Creer(cible, 1u), 0.25, false);
+        }
         return pantin.IsDead();
     }
 
@@ -555,11 +580,38 @@ public native class NetworkGameSystem extends IGameSystem {
         //
         // Journalisé à CHAQUE battement, y compris quand on n'écrit pas — c'est précisément le cas
         // « on n'écrit pas » qui manque au diagnostic.
+        // ⚠️ LES DEUX VERROUS SE RELISENT SUR LA MÊME LIGNE, ET C'EST LA LEÇON DE LA JOURNÉE.
+        //
+        // Trois correctifs posés sur ce joueur se sont révélés INERTES sans jamais le signaler
+        // (`Immortal`, `Defeated`, puis `ForcePreventResurrect` — tous sautés parce que le joueur
+        // n'était pas encore trouvable à l'attachement). Chacun a coûté un cycle complet de
+        // relance + test + lecture de journal pour découvrir qu'il ne s'était rien passé.
+        //
+        // Un verrou qu'on ne peut pas RELIRE est indiscernable d'un verrou absent. On lit donc les
+        // deux valeurs à chaque battement, à côté de la barre qu'elles protègent :
+        //   · `interditReanim` doit valoir 1 — sinon le correctif n'est pas posé, point final ;
+        //   · `secondCoeur` doit valoir 0 tant que le contrôle temporaire est en place.
+        // La prochaine panne se lira en une ligne au lieu d'un cycle.
+        let statsLecture = GameInstance.GetStatsSystem(GetGameInstance());
+        let interditReanim = statsLecture.GetStatValue(cible, gamedataStatType.ForcePreventResurrect);
+        let secondCoeur = statsLecture.GetStatValue(cible, gamedataStatType.HasSecondHeart);
         let reseauJournal = GameInstance.GetNetworkGameSystem();
         if IsDefined(reseauJournal) {
             reseauJournal.Tessera_Journal(
-                s"santé : serveur \(pourcent)% · local \(actuel)% · écriture \(AbsF(actuel - pourcent) >= 0.5)");
+                s"santé : serveur \(pourcent)% · local \(actuel)% · écriture \(AbsF(actuel - pourcent) >= 0.5)"
+                + s" · interditReanim=\(interditReanim) secondCoeur=\(secondCoeur)");
         }
+        // ⚠️ ON NE POSE PAS DE `Defeated` ICI, ET C'EST UN VERDICT, PAS UN OUBLI.
+        //
+        // Une version de ce bloc appliquait `BaseStatusEffect.Defeated` au joueur quand le serveur
+        // annonçait 0, pour le coucher délibérément. Mesuré le 2026-08-09 : **jamais appliqué** —
+        // aucune trace dans le journal, alors que la sonde capte tous les autres statuts du joueur.
+        // `Defeated` est un état de PANTIN ; le joueur a sa propre machine à états.
+        //
+        // Il est de toute façon devenu inutile : la mort native fournit la chute, et c'est bien elle
+        // qu'on veut. Ce qu'il fallait supprimer, ce n'était pas la mort — c'était la RÉSURRECTION
+        // qui la suivait (le Second Cœur, voir `SanteLocale.reds`).
+
         if AbsF(actuel - pourcent) < 0.5 {
             return true;
         }
@@ -855,6 +907,65 @@ public native class NetworkGameSystem extends IGameSystem {
         if (EnumInt(component.GetCommandState(command)) != EnumInt(AICommandState.Success)) {
             component.CancelCommand(command);
         }
+    }
+}
+
+// Vérificateur de cadavre — garantit que la mort ORDONNÉE par le serveur a bien EU LIEU.
+//
+// ⚠️ Il existe parce que « l'appel n'a pas échoué » n'est pas « l'effet s'est produit », et que ce
+// dépôt a déjà payé cette confusion plusieurs fois (D1). `ScriptedPuppet.Kill` est différé d'au
+// moins une frame : le vérifier tout de suite ne prouve rien, et ne pas le vérifier du tout laisse
+// un cadavre debout sans que personne ne l'apprenne.
+//
+// Trois issues, toutes journalisées — c'est le point : aucune ne peut passer inaperçue.
+//   · mort constatée          → une ligne de succès avec le nombre d'essais
+//   · pantin disparu          → le destreaming a réglé le problème autrement, on s'arrête
+//   · huit essais sans effet  → une ligne d'ALERTE, parce que là c'est un vrai défaut
+//
+// Se ré-arme TOUJOURS en dernier et sans condition tant qu'il reste des essais — la leçon du
+// battement de l'écran de mort (2026-08-09) : un ré-armement enfermé dans un test finit par
+// s'arrêter un jour, et plus personne ne comprend pourquoi l'état s'est figé.
+public class TesseraVerifieCadavre extends DelayCallback {
+    let cible: EntityID;
+    let essai: Uint32;
+
+    public static func Creer(cible: EntityID, essai: Uint32) -> ref<TesseraVerifieCadavre> {
+        let v = new TesseraVerifieCadavre();
+        v.cible = cible;
+        v.essai = essai;
+        return v;
+    }
+
+    public func Call() -> Void {
+        let reseau = GameInstance.GetNetworkGameSystem();
+        let pantin = GameInstance.FindEntityByID(GetGameInstance(), this.cible) as ScriptedPuppet;
+
+        // Plus de pantin : destreamé ou détruit. Il n'y a plus de corps debout à corriger, donc plus
+        // rien à faire — et surtout pas à réessayer indéfiniment sur une entité qui n'existe plus.
+        if !IsDefined(pantin) {
+            return;
+        }
+        if pantin.IsDead() {
+            if IsDefined(reseau) {
+                reseau.Tessera_Journal(s"cadavre confirme apres \(this.essai) essai(s)");
+            }
+            return;
+        }
+        // Toujours debout. On relève l'immortalité (elle a pu être reposée à un ré-attachement) et
+        // on réordonne la mort — même séquence qu'à l'origine, parce que c'est elle qui marche.
+        GameInstance.GetGodModeSystem(GetGameInstance())
+            .RemoveGodMode(this.cible, gameGodModeType.Immortal, n"Tessera");
+        pantin.Kill(null, false, false);
+
+        if this.essai >= 8u {
+            if IsDefined(reseau) {
+                reseau.Tessera_Journal(
+                    s"⚠ CADAVRE JAMAIS APPLIQUE apres \(this.essai) essais — le corps reste DEBOUT");
+            }
+            return;
+        }
+        GameInstance.GetDelaySystem(GetGameInstance())
+            .DelayCallback(TesseraVerifieCadavre.Creer(this.cible, this.essai + 1u), 0.25, false);
     }
 }
 

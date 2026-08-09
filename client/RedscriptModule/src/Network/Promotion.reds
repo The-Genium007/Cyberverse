@@ -101,9 +101,35 @@ public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: E
     // ponytail: 1000 m sous le sol plutôt qu'une vraie suppression — grossier mais purement local
     // et sans dépendance. À remplacer si un despawn propre se trouve (piste : Codeware
     // `FunctionalTestsGameSystem.DespawnEntityByID`, signature non documentée).
-    if partie {
-        let sousLaCarte = new Vector4(pos.X, pos.Y, pos.Z - 1000.0, 1.0);
-        GameInstance.GetTeleportationFacility(GetGameInstance())
-            .Teleport(pantin, sousLaCarte, new EulerAngles(0.0, 0.0, 0.0));
+    if !partie {
+        // Journalisé, parce que c'est le SEUL cas où le doublon est ATTENDU et non un bug : la
+        // demande n'est pas partie (dédoublonnage, pas de connexion), donc rien ne remplacera ce
+        // corps et il doit rester. Sans cette ligne, « deux cadavres » ne distingue pas ce cas
+        // normal d'une vraie panne de suppression — deux causes opposées, même symptôme.
+        let r0 = GameInstance.GetNetworkGameSystem();
+        if IsDefined(r0) {
+            r0.Tessera_Journal("promotion NON partie — le figurant local reste (attendu)");
+        }
+        return;
     }
+
+    // ⚠️ ON NE TOUCHE PLUS AU CADAVRE LOCAL — ET C'EST LE SERVEUR QUI A RÉGLÉ LE PROBLÈME.
+    //
+    // Trois mécanismes ont été essayés ici pour faire disparaître le figurant, et mesurés :
+    //   1. `Teleport` 1000 m sous la carte — coordonnée aberrante chez l'un (-1,1e11), transform
+    //      illisible (z=0) sept essais de suite chez l'autre. Fermé (F-PNJ-140).
+    //   2. `ToggleForcedVisibilityInAnimSystemEvent` — sans effet sur un mourant. Fermé (déjà
+    //      consigné avant ce chantier).
+    //   3. extinction des composants de rendu (`IVisualComponent.Toggle(false)`) — 26 à 36
+    //      composants éteints. Celui-ci MARCHE, mais avec un retard de 2-3 s, après quoi le moteur
+    //      rallume les composants : le corps clignote. Observé le 2026-08-09 : « il disparaît
+    //      pendant deux, trois secondes avant de réapparaître ».
+    //
+    // On a donc cessé d'effacer le doublon pour cesser de le CRÉER : le serveur ne renvoie plus à
+    // un joueur le PNJ qu'il a lui-même promu (`server_loop.rs`, table `promoteurs`). Il garde son
+    // cadavre natif, les autres reçoivent celui du serveur, personne n'en voit deux.
+    //
+    // ⚠️ Ne pas remettre de masquage ici « pour faire propre » : il n'y a plus rien à masquer, et
+    // les trois voies ci-dessus sont mesurées. Ce commentaire existe pour que le prochain ne
+    // repaie pas les trois.
 }
