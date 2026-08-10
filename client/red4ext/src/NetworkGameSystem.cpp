@@ -234,7 +234,7 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
 
     PollIncomingMessages();
     TrackPlayerPosition(frame_info.deltaTime);
-    InterpolatePuppets(frame_info.deltaTime);
+    RendreAvatarsDistants(frame_info.deltaTime);
 
     // Rapport d'heure locale — l'autre moitie de l'horloge partagee. Le serveur DECIDE l'heure
     // (`WorldState`, descendant) ; ce rapport lui dit ce que le client affiche VRAIMENT, pour
@@ -903,15 +903,52 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     };
 
     // Le serveur exclut deja le joueur local : `players` = uniquement les autres.
+    //
+    // ── LES JOUEURS NE SONT PLUS PLACES ICI ────────────────────────────────────────────────
+    //
+    // Ils sont RANGES dans un tampon, et rendus a chaque frame avec 100 ms de retard
+    // (`RendreAvatarsDistants`). Les appliquer a l'arrivee revenait a traiter chaque snapshot
+    // comme s'il decrivait le present : un snapshot en retard de 20 ms produisait un a-coup, un
+    // snapshot perdu un trou. C'est le mode de panne le plus banal du multijoueur, et il etait ici
+    // a l'etat pur — le tampon herite du fork n'ayant jamais ete alimente.
+    //
+    // `snapshot->tick()` existe sur le fil depuis le gel du palier 2 et n'etait lu NULLE PART.
+    // C'est la donnee dont depend tout le rendu lisse.
+    m_horlogeRendu.ObserverSnapshot(snapshot->tick());
     const auto* players = snapshot->players();
     if (players != nullptr)
     {
         for (const auto* ps : *players)
         {
-            if (ps != nullptr)
+            if (ps == nullptr || ps->position() == nullptr)
             {
-                applyPose(ps->id(), ps->position(), ps->yaw(), ps->locomotion());
+                continue;
             }
+            present.insert(ps->id());
+
+            const RED4ext::Vector4 positionMonde = {
+                DequantPos(ps->position()->x()), DequantPos(ps->position()->y()),
+                DequantPos(ps->position()->z()), 1.0f
+            };
+            // Premiere vue : il faut bien un corps avant d'avoir quoi que ce soit a animer. On le
+            // fait naitre a la position brute — le tampon n'a pas encore deux echantillons, donc
+            // rien a interpoler.
+            if (m_networkedEntitiesLookup.find(ps->id()) == m_networkedEntitiesLookup.end())
+            {
+                SpawnNetworkEntity(ps->id(), positionMonde);
+            }
+
+            Tessera::Sync::Pose pose;
+            pose.x = positionMonde.X;
+            pose.y = positionMonde.Y;
+            pose.z = positionMonde.Z;
+            pose.yaw = DequantYaw(ps->yaw());
+            pose.locomotion = ps->locomotion();
+            // `move_dir` voyage depuis le gel du palier 2 et n'etait lu nulle part : un joueur qui
+            // marche en crabe ou a reculons etait rendu de face. On le RANGE des maintenant ; ce
+            // qu'on saura en faire depend du backlog Q7.
+            pose.moveDir = ps->move_dir();
+            m_tamponsJoueurs[ps->id()].Pousser(snapshot->tick(), pose);
         }
     }
 
@@ -999,6 +1036,11 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // Meme raison que ci-dessus : la destination commandee decrivait une entite de jeu qui
             // vient d'etre detruite. La garder ferait sauter le premier ordre de marche au respawn.
             g_dernieresCibles.erase(it->first);
+            // Idem cote joueurs. Le tampon PARTICULIEREMENT : garder des echantillons d'avant la
+            // sortie d'AoI ferait interpoler le respawn depuis une position vieille de plusieurs
+            // secondes — l'avatar traverserait la rue pour rejoindre son propre passe.
+            m_tamponsJoueurs.erase(it->first);
+            m_suiviAvatars.erase(it->first);
             it = m_networkedEntitiesLookup.erase(it);
         }
         else
@@ -2271,50 +2313,146 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     this->SendPositionUpdate(X, Y, Z, Yaw);
 }
 
-void NetworkGameSystem::InterpolatePuppets(const float deltaTime)
+void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
 {
-    for (auto it = m_interpolationData.begin(); it != m_interpolationData.end();)
+    if (!m_horlogeRendu.Amorcee())
     {
-        auto& entityId = it->first;
-        auto& interpolator = it->second;
-
-        const auto interpolationProgress = std::min(1.0f, interpolator.CalcInterpolationProgress(deltaTime));
-        const auto targetDestination = Cyberverse::Utils::LerpLocal(interpolator.positionSource, interpolator.positionTarget, interpolationProgress);
-
-        auto angleDirection1 = interpolator.rotationTarget - interpolator.rotationSource;
-        auto angleDirection2 = interpolator.rotationSource - interpolator.rotationTarget;
-
-        if (angleDirection1 < 0.0f)
-        {
-            angleDirection1 += 360.0f;
-        }
-
-        if (angleDirection2 < 0.0f)
-        {
-            angleDirection2 += 360.0f;
-        }
-
-        auto actualAngleDistance = 0.0f;
-        if (angleDirection1 < angleDirection2)
-        {
-            actualAngleDistance = angleDirection1;
-        } else
-        {
-            actualAngleDistance = -angleDirection2;
-        }
-
-        // TODO: Better interpolation here, e.g. if we go from 5 -> 355°, we should only do 10°, not 350.
-        const float targetYaw = interpolator.rotationSource + interpolationProgress * actualAngleDistance;
-        const auto targetDestinationVec4 = Cyberverse::Utils::Vector3To4(targetDestination); // TODO: Get rid of this function call
-        SDK->logger->TraceF(PLUGIN, "Interpolation Progress: %f, yaw: %f. dest (%f, %f, %f)", interpolationProgress, targetYaw, targetDestinationVec4.X, targetDestinationVec4.Y, targetDestinationVec4.Z);
-
-        SetEntityPosition(entityId, targetDestinationVec4, targetYaw);
-
-        if (interpolationProgress >= 1.0f)
-        {
-            it = m_interpolationData.erase(it);
-        } else {
-            ++it;
-        }
+        return; // aucun snapshot recu : rien a rendre, et surtout rien a deviner.
     }
+    m_horlogeRendu.Avancer(deltaTime);
+    const double instant = m_horlogeRendu.TempsRendu();
+
+    for (auto& [networkId, tampon] : m_tamponsJoueurs)
+    {
+        const auto entite = m_networkedEntitiesLookup.find(networkId);
+        if (entite == m_networkedEntitiesLookup.end())
+        {
+            continue; // corps pas encore ne (ou deja detruit) : le tampon attend.
+        }
+        Tessera::Sync::PoseRendue pose;
+        if (!tampon.Echantillonner(instant, pose))
+        {
+            continue;
+        }
+        PiloterAvatar(networkId, entite->second, pose, deltaTime);
+    }
+}
+
+void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
+                                      const Tessera::Sync::PoseRendue& pose, float deltaTime)
+{
+    // ── LA BOUCLE PROUVEE, ET SEULEMENT ELLE ───────────────────────────────────────────────
+    //
+    // Mesuree en jeu le 2026-07-23 (backlog Q6/Q6b, sondes `loco_active`/`loco_lag`/`loco_hybrid`,
+    // enrichie dans F-PLY-008) : commande de marche CONTINUE pour l'ANIMATION + `Teleport` de
+    // recalage pour la POSITION. « Le Teleport ne casse PAS l'anim tant que la commande de marche
+    // tourne. » Le pantin est a la position autoritaire ET s'anime.
+    //
+    // ⚠️ Ce n'est PAS la boucle que suivaient les joueurs jusqu'ici. Ils passaient par
+    // `SetEntityPose`, concu pour les PNJ : commande TERMINANTE
+    // (`finishWhenDestinationReached = true`), `ignoreNavigation = false`, reemission au metre. Ce
+    // reglage-la est date et justifie POUR LES PNJ — le serveur planifie leur trajet et on veut que
+    // le moteur navigue, trottoirs et feux compris (F-PNJ-095). Il ne vaut pas pour un joueur : sa
+    // position FAIT AUTORITE, on ne veut pas que le moteur lui recalcule un chemin autour d'un
+    // obstacle, on le veut la ou le serveur le dit.
+    const RED4ext::Vector4 positionVoulue = { pose.x, pose.y, pose.z, 1.0f };
+
+    const auto entite = Cyberverse::Utils::GetDynamicEntity(entityId);
+    if (!entite.has_value())
+    {
+        return;
+    }
+
+    // ── IMMOBILE : rien a animer ───────────────────────────────────────────────────────────
+    //
+    // Une commande de marche vers un point ou l'on est deja produit un pietinement. On place, et
+    // c'est tout — c'est aussi ce que fait le chemin PNJ pour `locomotion == 0`.
+    if (pose.locomotion == 0)
+    {
+        auto& suivi = m_suiviAvatars[networkId];
+        suivi.commande = false;
+        SetEntityPosition(entityId, positionVoulue, pose.yaw);
+        return;
+    }
+
+    // ── RECALAGE : la position qui fait foi reste celle du serveur ─────────────────────────
+    //
+    // Sans ce garde, un avatar qui a rate des snapshots marcherait indefiniment vers une cible
+    // qu'il ne rattraperait jamais. La derive du suivi seul a ete MESUREE : elle croit d'environ
+    // 2 m/s quand l'allure du pantin est inferieure a la vitesse de la cible (`loco_lag`). Le
+    // recalage n'est donc pas un confort.
+    //
+    // Le seuil descend de 8 m a 2,5 m : a 8 m, un avatar pouvait etre a une demi-rue de sa vraie
+    // position sans que rien ne le corrige. Ce seuil etait dimensionne pour une boucle qui prenait
+    // du retard par construction ; celle-ci ne devrait pas en prendre.
+    //
+    // ponytail: seuil et cadence de reemission non calibres en jeu — ce sont les deux boutons a
+    // tourner si l'avatar sautille (baisser la reemission) ou s'il traine (baisser le seuil).
+    static constexpr float kRecalageM = 2.5f;
+    const auto position = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+    const float dx = positionVoulue.X - position.X;
+    const float dy = positionVoulue.Y - position.Y;
+    const float dz = positionVoulue.Z - position.Z;
+    const float derive = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (derive > kRecalageM)
+    {
+        SetEntityPosition(entityId, positionVoulue, pose.yaw);
+        // La commande survit au Teleport (c'est tout le resultat de Q6b) — mais la cible commandee
+        // date d'avant le saut. On force une reemission au prochain passage.
+        m_suiviAvatars[networkId].commande = false;
+        return;
+    }
+
+    // ── VISER DEVANT, JAMAIS LA POSITION ───────────────────────────────────────────────────
+    //
+    // A 20 Hz, la position serveur n'est en avant que de la distance parcourue en un tick : 15 cm
+    // a 3 m/s. Un pantin envoye a 15 cm y arrive instantanement et s'arrete. C'est la mesure du
+    // 2026-08-06 (« ils fremissent sur place »), corrigee pour les PNJ par `NpcState.move_target`
+    // et jamais portee aux joueurs, faute de champ equivalent dans `PlayerState`.
+    //
+    // On n'en ajoute pas : le tampon donne la VITESSE (derivee de deux echantillons), donc la
+    // direction, donc un point de visee. Le serveur ne connait pas la destination d'un joueur ; le
+    // client, lui, sait ou il va.
+    static constexpr float kViseeM = 3.0f;
+    float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+    Tessera::Sync::PointDeVisee(pose, kViseeM, cx, cy, cz);
+
+    // ── NE PAS REEMETTRE VINGT FOIS PAR SECONDE ────────────────────────────────────────────
+    //
+    // Le 2026-08-06, relancer un cheminement a chaque tick a fait TOMBER le jeu quelques minutes
+    // apres le deploiement (156 PNJ x 20 ordres/s). La commande etant ici CONTINUE et NON
+    // TERMINANTE, elle n'a pas besoin d'etre rejouee : on la rafraichit seulement quand le point de
+    // visee a franchement bouge, ou apres un delai plafond. 4 Hz au pire, et pour une poignee de
+    // joueurs — pas pour 156 pantins.
+    static constexpr float kReemissionMaxS = 0.25f;
+    static constexpr float kEcartVisee = 1.5f;
+    auto& suivi = m_suiviAvatars[networkId];
+    suivi.depuisS += deltaTime;
+    const float vx = cx - suivi.cibleX;
+    const float vy = cy - suivi.cibleY;
+    const float vz = cz - suivi.cibleZ;
+    const bool cibleABouge = std::sqrt(vx * vx + vy * vy + vz * vz) > kEcartVisee;
+    if (suivi.commande && !cibleABouge && suivi.depuisS < kReemissionMaxS)
+    {
+        return; // il est deja en route, dans la bonne direction : on le laisse marcher.
+    }
+
+    const RED4ext::Vector4 visee = { cx, cy, cz, 1.0f };
+    bool enRoute = false;
+    if (Red::CallVirtual(this, "TesseraSuivreAvatar", enRoute, entityId, visee,
+                         static_cast<int32_t>(pose.locomotion))
+        && enRoute)
+    {
+        suivi.cibleX = cx;
+        suivi.cibleY = cy;
+        suivi.cibleZ = cz;
+        suivi.depuisS = 0.0f;
+        suivi.commande = true;
+        return;
+    }
+
+    // Commande refusee (entite pas encore prete, pas un `ScriptedPuppet`…) : on place, plutot que
+    // de laisser l'avatar planté. Le prochain passage retentera la commande.
+    suivi.commande = false;
+    SetEntityPosition(entityId, positionVoulue, pose.yaw);
 }

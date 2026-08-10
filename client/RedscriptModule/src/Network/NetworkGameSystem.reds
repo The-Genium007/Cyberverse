@@ -937,6 +937,78 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // Fait SUIVRE un point de visée à l'avatar d'un JOUEUR distant.
+    //
+    // ⚠️ Ce n'est PAS `MoveNetworkEntityTo` avec d'autres valeurs, et la différence est le sujet.
+    // Deux populations, deux boucles, et les mélanger casse l'une ou l'autre :
+    //
+    //   · un PNJ a une destination CONNUE DU SERVEUR (`NpcState.move_target`, planifiée sur le
+    //     graphe de nav), et on VEUT que le moteur navigue — trottoirs, passages piétons, feux
+    //     (F-PNJ-095). D'où `ignoreNavigation = false` et une commande terminante là-bas ;
+    //   · un joueur n'a aucune destination connue du serveur, et sa position FAIT AUTORITÉ. On ne
+    //     veut surtout pas que le moteur lui recalcule un chemin autour d'un obstacle : on le veut
+    //     là où le serveur le dit. D'où `ignoreNavigation = true` ici.
+    //
+    // ✅ CETTE configuration est celle qui est MESURÉE viable, pas celle qu'on suppose : sonde
+    // `loco_hybrid`, en jeu le 2026-07-23 (backlog Q6/Q6b, registre F-PLY-008). « Pantin sous
+    // commande de marche active + Teleport en rafale → il MARCHE correctement, jambes animées,
+    // entre chaque snap. Le Teleport ne casse PAS l'anim tant que la commande de marche tourne. »
+    // La boucle complète est donc : cette commande pour l'ANIMATION, `TeleportPuppet` pour la
+    // POSITION quand la dérive se creuse.
+    //
+    // `finishWhenDestinationReached = false` : la commande ne se termine JAMAIS d'elle-même. C'est
+    // ce qui évite le défaut mesuré le 2026-08-06 côté PNJ — un pantin qui atteint sa cible,
+    // s'arrête, et attend le prochain ordre. Le C++ ne la réémet que quand le point de visée a
+    // franchement bougé (voir `PiloterAvatar`).
+    //
+    // `desiredDistanceFromTarget = 0.0` : on vise un point DEVANT l'avatar (dérivé de sa vitesse),
+    // pas sa position courante. Y tolérer un rayon d'arrivée le ferait s'arrêter en chemin.
+    public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let controller = puppet.GetAIControllerComponent();
+        if !IsDefined(controller) {
+            return false;
+        }
+
+        let cmd = new AIMoveToCommand();
+        let cible: AIPositionSpec;
+        let wp: WorldPosition;
+        // ⚠️ `AIPositionSpec.SetWorldPosition` attend un `WorldPosition` (virgule fixe), JAMAIS un
+        // `Vector4` — piège déjà payé et consigné au backlog Q6.
+        WorldPosition.SetVector4(wp, visee);
+        AIPositionSpec.SetWorldPosition(cible, wp);
+        cmd.movementTarget = cible;
+
+        // Même correspondance que pour les PNJ. Les valeurs accroupies (4, 5) et l'air (6) n'ont
+        // pas d'équivalent dans `moveMovementType` : elles retombent sur la marche — le moins faux
+        // des choix tant que le backlog Q7 n'a pas tranché le geste.
+        //
+        // ⚠️ `movementType` ne montre son effet QU'AVEC DE LA DISTANCE à couvrir (mesuré
+        // 2026-07-23) : tout près, le pantin marchote quelle que soit l'allure. C'est ce piège qui
+        // a produit un premier verdict « allure ignorée » entièrement faux. Le point de visée à 3 m
+        // est précisément ce qui donne cette distance.
+        if locomotion == 3 {
+            cmd.movementType = moveMovementType.Sprint;
+        } else if locomotion == 2 {
+            cmd.movementType = moveMovementType.Run;
+        } else {
+            cmd.movementType = moveMovementType.Walk;
+        }
+
+        cmd.ignoreNavigation = true;
+        cmd.finishWhenDestinationReached = false;
+        cmd.desiredDistanceFromTarget = 0.0;
+        cmd.useStart = true;
+        cmd.useStop = true;
+
+        controller.SendCommand(cmd);
+        return true;
+    }
+
     public func StopAICommand(puppet: ref<ScriptedPuppet>, command: ref<AICommand>) {
         let component = puppet.GetAIControllerComponent();
         if (EnumInt(component.GetCommandState(command)) != EnumInt(AICommandState.Success)) {

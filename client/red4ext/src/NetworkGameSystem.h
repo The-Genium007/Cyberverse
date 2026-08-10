@@ -8,8 +8,16 @@
 #include "RED4ext/Scripting/Stack.hpp"
 
 #include "CommandLine.h"
+// `SDK` et `PLUGIN` sont utilisés par les fonctions INLINE de cet en-tête (journalisation).
+// ⚠️ Inclus EXPLICITEMENT depuis le 2026-08-10. Ils arrivaient jusque-là par un chemin transitif —
+// `PlayerSync/InterpolationData.h` commençait par `#include "Main.h"`. En remplaçant ce fichier
+// (jamais alimenté, cf. TamponInterpolation.h) par un en-tête délibérément SANS dépendance, le
+// chemin a disparu et la compilation est tombée sur `'SDK': identificateur non déclaré` — dans une
+// autre unité de compilation, à des lignes qui n'avaient pas bougé. Un en-tête doit inclure ce
+// qu'il utilise ; celui-ci ne le faisait pas, et personne ne pouvait le voir.
+#include "Main.h"
 #include "PlayerActionTracker.h"
-#include "PlayerSync/InterpolationData.h"
+#include "PlayerSync/TamponInterpolation.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
 #include "RED4ext/Scripting/Natives/Generated/Vector4.hpp"
 #include "RED4ext/Scripting/Natives/entEntityID.hpp"
@@ -106,7 +114,32 @@ private:
     Red::Handle<Red::ink::ISystemRequestsHandler> m_systemRequestsHandler;
     bool m_gameRestored = false;
     std::map<uint64_t, RED4ext::ent::EntityID> m_networkedEntitiesLookup;
-    std::map<RED4ext::ent::EntityID, InterpolationData> m_interpolationData;
+
+    // --- Rendu des avatars JOUEURS (couches 1-2, cf. PlayerSync/TamponInterpolation.h) ---
+    //
+    // ⚠️ JOUEURS SEULEMENT. Les PNJ gardent leur chemin (`SetEntityPose`), réglé en jeu le
+    // 2026-08-06 : le serveur planifie leur trajet et leur envoie une VRAIE destination
+    // (`NpcState.move_target`), et on veut que le moteur navigue — trottoirs, passages, feux
+    // (F-PNJ-095). Un joueur, lui, n'a pas de destination connue du serveur, et sa position FAIT
+    // AUTORITÉ : on ne veut surtout pas que le moteur lui recalcule un chemin autour d'un obstacle.
+    // Deux populations, deux boucles. Les mélanger casserait l'une ou l'autre.
+    //
+    // Remplace `m_interpolationData`, hérité du fork : cette map n'était écrite NULLE PART, donc
+    // `InterpolatePuppets` parcourait une map vide à chaque frame depuis toujours.
+    Tessera::Sync::HorlogeRendu m_horlogeRendu;
+    std::map<uint64_t, Tessera::Sync::TamponPose> m_tamponsJoueurs;
+    /// Dernier point de visée réellement commandé, et depuis quand — pour ne pas réémettre un ordre
+    /// identique vingt fois par seconde (le moteur s'est effondré pour cette raison le 2026-08-06).
+    struct SuiviAvatar
+    {
+        float cibleX = 0.0f;
+        float cibleY = 0.0f;
+        float cibleZ = 0.0f;
+        float depuisS = 0.0f;
+        bool commande = false;
+    };
+    std::map<uint64_t, SuiviAvatar> m_suiviAvatars;
+
     std::map<RED4ext::ent::EntityID, RED4ext::Handle<RED4ext::AICommand>> m_LastTeleportCommand;
     float m_TimeSinceLastPlayerPositionSync;
 
@@ -241,7 +274,17 @@ private:
     bool ConnectToServer(const std::string& host, uint16_t port);
     static void ConnectionStatusChangedCallback(SteamNetConnectionStatusChangedCallback_t* pInfo);
     void OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext::JobQueue& job_queue);
-    void InterpolatePuppets(float deltaTime);
+    /// Rend TOUS les avatars de joueurs pour l'instant courant, une fois par frame.
+    ///
+    /// Remplace `InterpolatePuppets`, qui itérait sur une map jamais alimentée. La boucle suivie
+    /// ici est celle qui est MESURÉE viable (backlog Q6/Q6b, 2026-07-23, sondes `loco_active`/
+    /// `loco_lag`/`loco_hybrid`) : commande de marche CONTINUE pour l'animation, `Teleport` de
+    /// recalage pour la position. Le Teleport ne casse pas l'animation tant que la commande tourne.
+    void RendreAvatarsDistants(float deltaTime);
+    /// Applique une pose échantillonnée à UN avatar : ordre de marche vers le point de visée si
+    /// besoin, plus recalage si la dérive est trop grande.
+    void PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
+                       const Tessera::Sync::PoseRendue& pose, float deltaTime);
     void SetEntityPosition(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
     // Placement HYBRIDE : marche animée quand l'entité bouge et que la dérive est faible,
     // téléportation de correction sinon. Le mécanisme vient de F-PNJ-082/F-PLY-007, qui posent
