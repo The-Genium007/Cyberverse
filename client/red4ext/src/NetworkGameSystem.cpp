@@ -456,6 +456,10 @@ std::map<uint64_t, InscriptionRoster> g_rosterStatiques;
 /// Nos remplacants : id du PNJ natif absent -> id de l'entite LOCALE qu'on a creee a sa place.
 /// C'est la seule chose qu'on ait le droit de detruire — un natif ne se retire pas (F-PNJ-091).
 std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
+// --- Rendu des avatars JOUEURS : l'etat, hors de la classe (cf. NetworkGameSystem.h) ---
+Tessera::Sync::HorlogeRendu g_horlogeRendu;
+std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
+std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 std::set<std::pair<int32_t, int32_t>> g_cellulesRecues;
 /// Sonde d'apparence — premiere apparence vue par record, et garde one-shot. Une sonde qui
 /// rhabillerait toute la rue changerait la scene observee et rendrait le resultat inexploitable.
@@ -665,6 +669,12 @@ void NetworkGameSystem::PollIncomingMessages()
                     break;
                 case cyberpunk_rp::protocol::ServerMsg_CharacterResult:
                     HandleCharacterResult(env->msg_as_CharacterResult());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_ActionCatalog:
+                    HandleActionCatalog(env->msg_as_ActionCatalog());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_IdentitesConnues:
+                    HandleIdentitesConnues(env->msg_as_IdentitesConnues());
                     break;
                 default:
                     // Reste non câblé : CommandResult, PermissionSync,
@@ -914,7 +924,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     //
     // `snapshot->tick()` existe sur le fil depuis le gel du palier 2 et n'etait lu NULLE PART.
     // C'est la donnee dont depend tout le rendu lisse.
-    m_horlogeRendu.ObserverSnapshot(snapshot->tick());
+    g_horlogeRendu.ObserverSnapshot(snapshot->tick());
     const auto* players = snapshot->players();
     if (players != nullptr)
     {
@@ -948,7 +958,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // marche en crabe ou a reculons etait rendu de face. On le RANGE des maintenant ; ce
             // qu'on saura en faire depend du backlog Q7.
             pose.moveDir = ps->move_dir();
-            m_tamponsJoueurs[ps->id()].Pousser(snapshot->tick(), pose);
+            g_tamponsJoueurs[ps->id()].Pousser(snapshot->tick(), pose);
         }
     }
 
@@ -1039,8 +1049,8 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // Idem cote joueurs. Le tampon PARTICULIEREMENT : garder des echantillons d'avant la
             // sortie d'AoI ferait interpoler le respawn depuis une position vieille de plusieurs
             // secondes — l'avatar traverserait la rue pour rejoindre son propre passe.
-            m_tamponsJoueurs.erase(it->first);
-            m_suiviAvatars.erase(it->first);
+            g_tamponsJoueurs.erase(it->first);
+            g_suiviAvatars.erase(it->first);
             it = m_networkedEntitiesLookup.erase(it);
         }
         else
@@ -1400,6 +1410,88 @@ void NetworkGameSystem::HandleCharacterResult(const cyberpunk_rp::protocol::Char
         m_dernierResultatMotif.c_str());
 }
 
+// ══ INTERACTIONS JOUEUR<->JOUEUR (spec 2026-08-09) ═══════════════════════════════════════════
+
+void NetworkGameSystem::HandleActionCatalog(const cyberpunk_rp::protocol::ActionCatalog* msg)
+{
+    if (msg == nullptr)
+    {
+        return;
+    }
+    // REMPLACEMENT, pas fusion : le serveur envoie toujours la liste complete de ce que ce joueur a
+    // le droit de faire. Une action retiree (`/groupremove`) disparait donc d'elle-meme — la
+    // fusionner la laisserait affichee pour toujours.
+    m_actions.clear();
+    if (msg->actions() != nullptr)
+    {
+        for (const auto* a : *msg->actions())
+        {
+            if (a == nullptr)
+            {
+                continue;
+            }
+            ActionRecue r;
+            r.id = a->id();
+            r.libelle = a->libelle() != nullptr ? a->libelle()->str() : std::string();
+            // Le fil porte des DECIMETRES (`portee_dm`, ushort) : un ushort en metres perdrait les
+            // demi-metres. La conversion se fait ICI, une fois, pour que le script raisonne en
+            // metres comme le reste du jeu.
+            r.portee_m = static_cast<float>(a->portee_dm()) / 10.0f;
+            m_actions.push_back(std::move(r));
+        }
+    }
+    SDK->logger->InfoF(PLUGIN, "ActionCatalog : %zu action(s) disponibles", m_actions.size());
+}
+
+void NetworkGameSystem::HandleIdentitesConnues(
+    const cyberpunk_rp::protocol::IdentitesConnues* msg)
+{
+    if (msg == nullptr || msg->entrees() == nullptr)
+    {
+        return;
+    }
+    // ⚠️ ON ACCUMULE, contrairement au catalogue ci-dessus, et la difference est structurelle : ce
+    // message arrive EN LOT au join, puis A UNE ENTREE a chaque presentation recue. Le traiter
+    // comme un remplacement effacerait toutes les connaissances a chaque poignee de main — et la
+    // panne serait discrete, puisque le nom qui vient d'arriver, lui, s'afficherait.
+    int ajoutes = 0;
+    for (const auto* e : *msg->entrees())
+    {
+        if (e == nullptr || e->nom() == nullptr)
+        {
+            continue;
+        }
+        m_nomsConnus[e->id()] = e->nom()->str();
+        ++ajoutes;
+    }
+    SDK->logger->InfoF(PLUGIN, "IdentitesConnues : +%d, %zu nom(s) connus au total", ajoutes,
+        m_nomsConnus.size());
+}
+
+void NetworkGameSystem::SendActionJoueur(uint64_t target, uint32_t recette)
+{
+    if (m_pInterface == nullptr || target == 0 || recette == 0)
+    {
+        return;
+    }
+
+    // kind=2=Interagit, `param` = l'id de la recette. Constantes du gel du schema (protocol.fbs,
+    // EntityInteraction) — surtout pas une numerotation locale. Zero octet ajoute au fil montant :
+    // le canal existait deja pour les degats (kind=5) et le mount (kind=3/4).
+    constexpr uint8_t kKindInteragit = 2;
+
+    SDK->logger->InfoF(PLUGIN, "Action %u demandee sur %llu", recette, target);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ei = cyberpunk_rp::protocol::CreateEntityInteraction(
+        builder, target, kKindInteragit, recette);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_EntityInteraction, ei.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
 bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record,
                                                 uint64_t apparence)
 {
@@ -1628,6 +1720,40 @@ void NetworkGameSystem::ReparerRoster()
     const auto maintenant = std::chrono::steady_clock::now();
     int faits = 0;
 
+    // ── UN REMPLAÇANT PAR ENDROIT, PAS PAR IDENTIFIANT ─────────────────────────────────────
+    //
+    // La garde `g_remplacants` ci-dessous est correcte, et elle ne suffit pas : elle interdit deux
+    // remplaçants pour un même IDENTIFIANT, alors que le roster contient plusieurs identifiants
+    // pour un même PNJ RÉEL.
+    //
+    // Mesuré le 2026-08-10 (F-PNJ-150), session de 7 min à deux clients : **2 199 identifiants
+    // distincts** ont reçu un remplaçant, pour **238 positions distinctes** — ~9,2 identifiants par
+    // emplacement physique, et jusqu'à **110 remplaçants empilés en un seul point**. C'est ce que
+    // Lucas voyait en jeu : « les PNJ statiques sont dupliqués ».
+    //
+    // ⚠️ Pourquoi une clé de POSITION plutôt qu'une meilleure clé d'identité : parce qu'on ne sait
+    // pas encore POURQUOI un emplacement produit neuf identifiants — re-streaming qui réattribue,
+    // ou deux clients qui rapportent chacun le leur (F-PNJ-150 pose la sonde qui trancherait). Une
+    // clé de position est juste dans les DEUX cas. On ne fait pas dépendre un correctif d'une cause
+    // qui n'est pas isolée.
+    //
+    // Décimètre, et la même formule que le redscript (`Cast<Int32>(x * 10.0)`) : c'est à cette
+    // précision que la mesure a vu les 2 199 s'effondrer sur 238, donc elle suffit — et partager la
+    // formule évite que les deux côtés découpent l'espace différemment.
+    const auto cleDePosition = [](const InscriptionRoster& i) {
+        return std::make_tuple(static_cast<int32_t>(i.x * 10.0f), static_cast<int32_t>(i.y * 10.0f),
+                               static_cast<int32_t>(i.z * 10.0f));
+    };
+    std::set<std::tuple<int32_t, int32_t, int32_t>> occupees;
+    for (const auto& [idPris, _] : g_remplacants)
+    {
+        const auto inscrit = g_rosterStatiques.find(idPris);
+        if (inscrit != g_rosterStatiques.end())
+        {
+            occupees.insert(cleDePosition(inscrit->second));
+        }
+    }
+
     for (const auto& [id, inscription] : g_rosterStatiques)
     {
         if (faits >= kMaxParTick)
@@ -1656,6 +1782,11 @@ void NetworkGameSystem::ReparerRoster()
         {
             continue;
         }
+        // Quelqu'un tient déjà cet endroit : ce serait le 2e, le 10e, le 110e du même individu.
+        if (occupees.contains(cleDePosition(inscription)))
+        {
+            continue;
+        }
         // Le redscript tranche : lui seul voit le joueur, l'entite et les distances. Une EntityID
         // vide signifie « pas maintenant » (natif present, trop pres, trop loin), jamais
         // « impossible » — on retentera au tick suivant.
@@ -1670,6 +1801,10 @@ void NetworkGameSystem::ReparerRoster()
             && cree.IsDefined())
         {
             g_remplacants[id] = cree;
+            // Marquer l'endroit AVANT de sortir de la boucle : sans ça, les huit autres
+            // identifiants du même individu, tous encore à parcourir dans CE passage, en
+            // fabriqueraient chacun un de plus. `occupees` se reconstruit au passage suivant.
+            occupees.insert(cleDePosition(inscription));
             SDK->logger->InfoF(PLUGIN, "Roster : %llu absent — remplacant cree (%zu au total)", id,
                 g_remplacants.size());
             ++faits;
@@ -2315,14 +2450,14 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
 
 void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
 {
-    if (!m_horlogeRendu.Amorcee())
+    if (!g_horlogeRendu.Amorcee())
     {
         return; // aucun snapshot recu : rien a rendre, et surtout rien a deviner.
     }
-    m_horlogeRendu.Avancer(deltaTime);
-    const double instant = m_horlogeRendu.TempsRendu();
+    g_horlogeRendu.Avancer(deltaTime);
+    const double instant = g_horlogeRendu.TempsRendu();
 
-    for (auto& [networkId, tampon] : m_tamponsJoueurs)
+    for (auto& [networkId, tampon] : g_tamponsJoueurs)
     {
         const auto entite = m_networkedEntitiesLookup.find(networkId);
         if (entite == m_networkedEntitiesLookup.end())
@@ -2369,7 +2504,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // c'est tout — c'est aussi ce que fait le chemin PNJ pour `locomotion == 0`.
     if (pose.locomotion == 0)
     {
-        auto& suivi = m_suiviAvatars[networkId];
+        auto& suivi = g_suiviAvatars[networkId];
         suivi.commande = false;
         SetEntityPosition(entityId, positionVoulue, pose.yaw);
         return;
@@ -2399,7 +2534,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         SetEntityPosition(entityId, positionVoulue, pose.yaw);
         // La commande survit au Teleport (c'est tout le resultat de Q6b) — mais la cible commandee
         // date d'avant le saut. On force une reemission au prochain passage.
-        m_suiviAvatars[networkId].commande = false;
+        g_suiviAvatars[networkId].commande = false;
         return;
     }
 
@@ -2426,8 +2561,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // joueurs — pas pour 156 pantins.
     static constexpr float kReemissionMaxS = 0.25f;
     static constexpr float kEcartVisee = 1.5f;
-    auto& suivi = m_suiviAvatars[networkId];
+    auto& suivi = g_suiviAvatars[networkId];
     suivi.depuisS += deltaTime;
+    suivi.depuisLogS += deltaTime;
     const float vx = cx - suivi.cibleX;
     const float vy = cy - suivi.cibleY;
     const float vz = cz - suivi.cibleZ;
@@ -2443,6 +2579,31 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                          static_cast<int32_t>(pose.locomotion))
         && enRoute)
     {
+        // ── L'INSTRUMENT ───────────────────────────────────────────────────────────────────
+        //
+        // Sans lui, la seule chose qu'une session puisse dire est « ça a l'air fluide » — et un
+        // avatar qui traîne de deux mètres a exactement l'air d'un avatar qui va bien, vu de face.
+        // Ces trois nombres tranchent ce que l'oeil ne tranche pas :
+        //   derive     : l'écart à la position autoritaire. C'est LA mesure. S'il croît, l'allure
+        //                commandée est trop lente (mesuré : ~2 m/s de creusement, sonde `loco_lag`).
+        //   extrapole  : le tampon était à sec — un réseau qui hoquette, pas un défaut de rendu.
+        //   ech        : profondeur du tampon. 0 ou 1 = on ne peut pas interpoler, on devine.
+        //
+        // Une ligne toutes les 2 s et par avatar : assez pour voir une tendance, trop peu pour
+        // peser (le log de la session du 2026-08-10 fait déjà 3,7 Mo).
+        //
+        // ⚠️ Ne JAMAIS brider un instrument avant d'avoir mesuré : un plafond posé « au cas où » a
+        // déjà fait passer une manipulation réelle pour un non-événement (protocole de sondage,
+        // règle 10). 2 s est un choix d'échantillonnage, pas un plafond de sécurité.
+        if (suivi.depuisLogS >= 2.0f)
+        {
+            suivi.depuisLogS = 0.0f;
+            SDK->logger->InfoF(PLUGIN,
+                "[avatar %llu] derive=%.2fm allure=%u ech=%zu%s", networkId, derive,
+                static_cast<unsigned>(pose.locomotion), g_tamponsJoueurs[networkId].Nombre(),
+                pose.extrapolee ? " EXTRAPOLE" : "");
+        }
+
         suivi.cibleX = cx;
         suivi.cibleY = cy;
         suivi.cibleZ = cz;

@@ -54,6 +54,9 @@ namespace cyberpunk_rp::protocol {
     // Meme regle : toute nouvelle table manipulee ici se declare AUSSI dans ce bloc.
     struct RespawnRequest;
     struct HealthReport;
+    // Interactions joueur<->joueur (spec 2026-08-09). Meme regle, troisieme rappel.
+    struct ActionCatalog;
+    struct IdentitesConnues;
 }
 
 // Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
@@ -88,6 +91,25 @@ extern std::set<uint64_t> g_apparencesAppliquees;
 // Sonde d'apparence : premiere apparence vue par record, et garde one-shot.
 extern std::map<uint64_t, uint64_t> g_premiereApparence;
 extern bool g_sondeApparenceFaite;
+
+// --- Rendu des avatars JOUEURS : l'état, hors de la classe (même règle que ci-dessus) ---
+// À quel instant de la timeline SERVEUR on rend, maintenant.
+extern Tessera::Sync::HorlogeRendu g_horlogeRendu;
+// Historique récent par id réseau — ce qui permet d'interpoler au lieu de deviner.
+extern std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
+/// Dernier point de visée réellement commandé, et depuis quand — pour ne pas réémettre un ordre
+/// identique vingt fois par seconde (le moteur s'est effondré pour cette raison le 2026-08-06).
+struct SuiviAvatar
+{
+    float cibleX = 0.0f;
+    float cibleY = 0.0f;
+    float cibleZ = 0.0f;
+    float depuisS = 0.0f;
+    /// Temps écoulé depuis la dernière ligne de diagnostic — voir `PiloterAvatar`.
+    float depuisLogS = 0.0f;
+    bool commande = false;
+};
+extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 
 // Identité visuelle d'une entité réseau, telle que le SERVEUR la décide (`AppearanceSync`).
 // Deux hashes suffisent (modèle PRESET, ADR/design apparence §6.2) : le record TweakDB à faire
@@ -126,19 +148,21 @@ private:
     //
     // Remplace `m_interpolationData`, hérité du fork : cette map n'était écrite NULLE PART, donc
     // `InterpolatePuppets` parcourait une map vide à chaque frame depuis toujours.
-    Tessera::Sync::HorlogeRendu m_horlogeRendu;
-    std::map<uint64_t, Tessera::Sync::TamponPose> m_tamponsJoueurs;
-    /// Dernier point de visée réellement commandé, et depuis quand — pour ne pas réémettre un ordre
-    /// identique vingt fois par seconde (le moteur s'est effondré pour cette raison le 2026-08-06).
-    struct SuiviAvatar
-    {
-        float cibleX = 0.0f;
-        float cibleY = 0.0f;
-        float cibleZ = 0.0f;
-        float depuisS = 0.0f;
-        bool commande = false;
-    };
-    std::map<uint64_t, SuiviAvatar> m_suiviAvatars;
+    //
+    // ⚠️ L'ÉTAT VIT HORS DE LA CLASSE — `g_horlogeRendu`, `g_tamponsJoueurs`, `g_suiviAvatars`,
+    // déclarés plus haut avec `g_apparencesStatiques` et ses voisines. Ce fichier prescrit
+    // explicitement cette forme : « `NetworkGameSystem` est alloué par le moteur
+    // (`RTTI_IMPL_ALLOCATOR`), lui ajouter un membre corrompt la mémoire voisine (mesuré le
+    // 2026-08-06) ». J'avais d'abord posé trois membres ici, par réflexe.
+    //
+    // ⚠️⚠️ CETTE CONSIGNE EST À INSTRUIRE, PAS À CROIRE SUR PAROLE. La classe porte déjà 40 membres
+    // non statiques, dont certains ajoutés par des commits POSTÉRIEURS à celui qui a écrit
+    // l'avertissement (`7ecadb4`). Les deux ne peuvent pas être vrais au même sens : soit le danger
+    // est plus étroit que sa formulation, soit un vrai plantage a été attribué à la mauvaise cause.
+    // Le fait n'existe NULLE PART dans `docs/connaissances/` — il ne vit que dans ce commentaire,
+    // donc D3 ne le voit pas et personne ne peut le contredire par une mesure. En attendant qu'une
+    // mesure tranche, on suit la consigne écrite : elle ne coûte rien ici, et l'ignorer coûterait
+    // une corruption silencieuse — le pire mode de panne du lot.
 
     std::map<RED4ext::ent::EntityID, RED4ext::Handle<RED4ext::AICommand>> m_LastTeleportCommand;
     float m_TimeSinceLastPlayerPositionSync;
@@ -257,6 +281,27 @@ private:
     bool m_avertiLectureHeureIntrouvable = false;
     /// Secondes écoulées depuis le dernier `ClientTimeReport` (diagnostic de dérive d'horloge).
     float m_tempsDepuisRapportHeure = 0.0f;
+
+    // --- Interactions joueur<->joueur (spec 2026-08-09) ---
+    /// Une recette du catalogue, telle qu'elle arrive du serveur. `portee_m` sert UNIQUEMENT a
+    /// decider d'afficher ou non une ligne : le serveur revérifie la portée à l'exécution, et c'est
+    /// lui qui tranche. Le client affiche ; il n'autorise jamais.
+    struct ActionRecue
+    {
+        uint32_t id = 0;
+        std::string libelle;
+        float portee_m = 0.0f;
+    };
+    /// Ce que CE joueur a le droit de proposer. Deja filtre par le serveur — il n'apprend jamais
+    /// l'existence des actions qu'il n'a pas, donc pas de liste grisee qui expose celles du staff.
+    std::vector<ActionRecue> m_actions;
+    /// Les noms qu'on CONNAIT, par id reseau. C'est la seule source du nametag.
+    ///
+    /// ⚠️ Une entree n'apparait ici que parce que le serveur l'a envoyee, et il ne l'envoie qu'a
+    /// qui s'est fait presenter. Un nom inconnu n'est pas masque a l'affichage : il n'a JAMAIS
+    /// traverse le fil. La discretion est une propriete du serveur — un binaire modifie ne peut pas
+    /// reveler ce qu'il n'a jamais recu.
+    std::map<uint64_t, std::string> m_nomsConnus;
 
 private:
     // Appelé à chaque échec de `SpawnTransientEntity`. Agrège les logs et déclenche UNE fois
@@ -384,6 +429,20 @@ protected:
     void HandleCharacterList(const cyberpunk_rp::protocol::CharacterList* list);
     // Verdict d'une creation de personnage (succes, ou motif de refus).
     void HandleCharacterResult(const cyberpunk_rp::protocol::CharacterResult* result);
+
+    // ── Interactions joueur<->joueur (spec 2026-08-09) ────────────────────────────────────────
+    // Catalogue DEJA FILTRE pour ce joueur : le serveur n'envoie que ce qu'il a le droit de faire.
+    // REMPLACE l'etat local a chaque reception (join, puis chaque changement de permissions) —
+    // pas un delta, donc rien a fusionner, et une action retiree disparait d'elle-meme.
+    void HandleActionCatalog(const cyberpunk_rp::protocol::ActionCatalog* msg);
+    // Noms que ce joueur CONNAIT. En lot au join, a une entree a chaque presentation recue. On
+    // ACCUMULE ici (contrairement au catalogue) : le message a une entree est un ajout, pas un
+    // remplacement, et le traiter comme tel effacerait toutes les connaissances a chaque poignee
+    // de main.
+    void HandleIdentitesConnues(const cyberpunk_rp::protocol::IdentitesConnues* msg);
+    // Declenche une recette du catalogue sur une cible. `kind = 2` (Interagit), `param` = l'id de
+    // la recette : le canal montant existe depuis le gel, zero octet ajoute au fil.
+    void SendActionJoueur(uint64_t target, uint32_t recette);
 
     // Fait apparaître une entité réseau à l'apparence décidée par le serveur, ou au repli si
     // aucune n'est connue pour cet id. Renvoie false si le spawn a échoué (modset non compilé).
@@ -660,6 +719,98 @@ public:
         return false;
     }
 
+    // ══ INTERACTIONS JOUEUR<->JOUEUR (spec 2026-08-09) ═══════════════════════════════════════
+    //
+    // Pourquoi une liste indexee et non un tableau rendu d'un coup : redscript ne sait pas recevoir
+    // un `array<StructMaison>` d'un natif sans declarer la struct des DEUX cotes, et une struct de
+    // plus est une occasion de plus de desynchroniser les deux declarations — panne qui fait tomber
+    // TOUT r6/scripts (F-PLF-020). Trois accesseurs scalaires ne peuvent pas diverger.
+
+    /// Combien d'actions ce joueur a le droit de proposer. 0 = catalogue vide (cas legitime : un
+    /// serveur sans `actions.toml`), pas une erreur.
+    int32_t Tessera_NombreActions() const { return static_cast<int32_t>(m_actions.size()); }
+
+    /// Id de recette a la position `index` — c'est LUI qui repart au serveur dans
+    /// `Tessera_EnvoyerAction`. Jamais l'index : le catalogue peut changer entre l'affichage et le
+    /// clic (un `/groupgrant` le repousse a chaud), et un index designerait alors autre chose.
+    int32_t Tessera_ActionId(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_actions.size())
+        {
+            return 0;
+        }
+        return static_cast<int32_t>(m_actions[static_cast<size_t>(index)].id);
+    }
+
+    /// Le libelle a afficher, tel que l'operateur l'a ecrit dans son TOML.
+    Red::CString Tessera_ActionLibelle(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_actions.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_actions[static_cast<size_t>(index)].libelle.c_str());
+    }
+
+    /// Portee en METRES (le fil la porte en decimetres, la conversion se fait a la reception).
+    /// 0 = sans limite. Sert a griser/masquer une ligne, jamais a autoriser.
+    float Tessera_ActionPorteeM(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_actions.size())
+        {
+            return 0.0f;
+        }
+        return m_actions[static_cast<size_t>(index)].portee_m;
+    }
+
+    /// Le nom de cette entite, SI on nous l'a donne. Chaine VIDE sinon — et c'est la reponse
+    /// normale pour un inconnu, pas une erreur a journaliser.
+    ///
+    /// ⚠️ Prend une `EntityID` locale et fait la traduction ici, comme `Tessera_RapporterDegats` :
+    /// la table `networkId -> EntityID` vit de ce cote, et le script n'a aucun moyen de la refaire.
+    Red::CString Tessera_NomConnu(RED4ext::ent::EntityID cible) const
+    {
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                const auto it = m_nomsConnus.find(paire.first);
+                return Red::CString(it == m_nomsConnus.end() ? "" : it->second.c_str());
+            }
+        }
+        return Red::CString("");
+    }
+
+    /// Declenche une recette sur une cible. `recette` est l'id rendu par `Tessera_ActionId`.
+    ///
+    /// Renvoie true si le message est PARTI — jamais qu'il a ete accepte (D1). Le serveur reverifie
+    /// droit, portee et etat, et refuse par un `InteractionResult` porteur d'un motif in-fiction.
+    /// `false` ici = cible non reseau, recette nulle, ou pas de connexion.
+    bool Tessera_EnvoyerAction(RED4ext::ent::EntityID cible, uint32_t recette)
+    {
+        if (!cible.IsDefined() || recette == 0)
+        {
+            return false;
+        }
+        uint64_t idReseau = 0;
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                idReseau = paire.first;
+                break;
+            }
+        }
+        if (idReseau == 0)
+        {
+            // Un figurant de la foule native ne designe personne chez le serveur. Lui inventer une
+            // identite serait un mensonge sur le fil (meme regle que `Tessera_RapporterDegats`).
+            return false;
+        }
+        SendActionJoueur(idReseau, recette);
+        return true;
+    }
+
     // Demande au serveur de prendre un figurant sous son autorite (ADR 0022).
     //
     // On envoie de quoi le REFABRIQUER, pas un identifiant : le pantin n'existe que sur cette
@@ -810,6 +961,16 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_CreerPersonnage);
     RTTI_METHOD(Tessera_ChoisirPersonnage);
     RTTI_METHOD(Tessera_SupprimerPersonnage);
+    // Interactions joueur<->joueur. ⚠️ Chacune de ces cinq lignes a son `public native func` dans
+    // `RedscriptModule/src/Network/NetworkGameSystem.reds` : les deux cotes se posent ET se
+    // deploient ENSEMBLE. Un `native func` sans backing dans la DLL deployee fait tomber TOUT
+    // r6/scripts et le jeu se ferme sans un mot (F-PLF-020, F-PLF-023).
+    RTTI_METHOD(Tessera_NombreActions);
+    RTTI_METHOD(Tessera_ActionId);
+    RTTI_METHOD(Tessera_ActionLibelle);
+    RTTI_METHOD(Tessera_ActionPorteeM);
+    RTTI_METHOD(Tessera_NomConnu);
+    RTTI_METHOD(Tessera_EnvoyerAction);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");
