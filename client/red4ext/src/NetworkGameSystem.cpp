@@ -1941,6 +1941,13 @@ void NetworkGameSystem::HandleHealthSync(const cyberpunk_rp::protocol::HealthSyn
             m_hopitalOuvert = false;
         }
 
+        // MES jauges de faim/soif (chantier besoins, 2026-08-09). Simple memorisation : ce sont les
+        // widgets du HUD qui viendront les LIRE (`Tessera_Faim`/`Tessera_Soif`), comme l'ecran de
+        // mort lit deja `Tessera_SecondesSecours`. Aucun appel vers redscript ici — un HUD pas
+        // encore monte n'a alors rien a rater.
+        m_faim = static_cast<int32_t>(msg->faim());
+        m_soif = static_cast<int32_t>(msg->soif());
+
         // MA sante. Redscript ecrit la barre de vie du joueur local ; a 0, la mort NATIVE
         // s'enclenche toute seule et l'ecran de mort garni (C20) s'affiche derriere elle. On ne
         // reimplemente ni la mort, ni son ecran — on ne fait que poser le nombre.

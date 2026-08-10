@@ -3949,7 +3949,9 @@ struct HealthSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_HEALTH = 6,
     VT_MINE = 8,
     VT_SECONDES_SECOURS = 10,
-    VT_HOPITAL_OUVERT = 12
+    VT_HOPITAL_OUVERT = 12,
+    VT_FAIM = 14,
+    VT_SOIF = 16
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -3966,6 +3968,12 @@ struct HealthSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool hopital_ouvert() const {
     return GetField<uint8_t>(VT_HOPITAL_OUVERT, 0) != 0;
   }
+  uint16_t faim() const {
+    return GetField<uint16_t>(VT_FAIM, 0);
+  }
+  uint16_t soif() const {
+    return GetField<uint16_t>(VT_SOIF, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -3974,6 +3982,8 @@ struct HealthSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_MINE, 1) &&
            VerifyField<uint16_t>(verifier, VT_SECONDES_SECOURS, 2) &&
            VerifyField<uint8_t>(verifier, VT_HOPITAL_OUVERT, 1) &&
+           VerifyField<uint16_t>(verifier, VT_FAIM, 2) &&
+           VerifyField<uint16_t>(verifier, VT_SOIF, 2) &&
            verifier.EndTable();
   }
 };
@@ -3997,6 +4007,12 @@ struct HealthSyncBuilder {
   void add_hopital_ouvert(bool hopital_ouvert) {
     fbb_.AddElement<uint8_t>(HealthSync::VT_HOPITAL_OUVERT, static_cast<uint8_t>(hopital_ouvert), 0);
   }
+  void add_faim(uint16_t faim) {
+    fbb_.AddElement<uint16_t>(HealthSync::VT_FAIM, faim, 0);
+  }
+  void add_soif(uint16_t soif) {
+    fbb_.AddElement<uint16_t>(HealthSync::VT_SOIF, soif, 0);
+  }
   explicit HealthSyncBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -4014,9 +4030,13 @@ inline ::flatbuffers::Offset<HealthSync> CreateHealthSync(
     uint16_t health = 0,
     bool mine = false,
     uint16_t secondes_secours = 0,
-    bool hopital_ouvert = false) {
+    bool hopital_ouvert = false,
+    uint16_t faim = 0,
+    uint16_t soif = 0) {
   HealthSyncBuilder builder_(_fbb);
   builder_.add_id(id);
+  builder_.add_soif(soif);
+  builder_.add_faim(faim);
   builder_.add_secondes_secours(secondes_secours);
   builder_.add_health(health);
   builder_.add_hopital_ouvert(hopital_ouvert);

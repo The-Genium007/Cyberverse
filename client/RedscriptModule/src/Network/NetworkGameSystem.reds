@@ -62,6 +62,20 @@ public native class NetworkGameSystem extends IGameSystem {
     // Le serveur autorise-t-il la réapparition ? À lire tel quel, sans le déduire du décompte.
     public native func Tessera_HopitalOuvert() -> Bool;
 
+    // ── Faim & soif (chantier besoins, 2026-08-09) ──────────────────────────────────────────
+    // Pour mille, 1000 = rassasié. Poussées par le serveur dans `HealthSync` (champs `faim`/`soif`,
+    // renseignés uniquement dans la copie `mine = true`) et lues par les jauges du HUD
+    // (`TesseraHudVitals`). Backing C++ : `RTTI_METHOD(Tessera_Faim)`/`(Tessera_Soif)` dans
+    // `NetworkGameSystem.h` — les deux côtés se posent ET se déploient ensemble, sans quoi TOUT
+    // `r6/scripts` tombe (piège payé le 2026-08-08).
+    //
+    // ⚠️ Jamais décomptées par le client, même raison que le coma ci-dessus : la seule horloge qui
+    // compte est celle du serveur. Le HUD ne fait que relire une valeur qu'on lui a donnée. Avant
+    // le premier `HealthSync`, elles valent 1000 (voir `m_faim` côté C++) : le serveur n'émet que
+    // sur CHANGEMENT, donc les premières secondes d'une session n'apportent rien, et un défaut à
+    // zéro afficherait deux jauges vides qu'on lirait comme une panne.
+    public native func Tessera_Faim() -> Int32;
+    public native func Tessera_Soif() -> Int32;
     // Journal de SONDE — écrit dans le log du plugin, donc UN FICHIER PAR INSTANCE.
     // `FTLog` écrit dans le gamelog de CET, partagé par toutes les instances : deux clients y
     // mélangent leurs lignes, ce qui interdit toute comparaison entre eux.

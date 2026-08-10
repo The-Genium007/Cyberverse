@@ -154,6 +154,19 @@ private:
     // et « decompte a zero » ne se confondent pas — la seconde autorise l'hopital, la premiere non.
     int32_t m_secondesSecours = -1;
     bool m_hopitalOuvert = false;
+
+    // --- Faim / soif (chantier besoins, 2026-08-09) ---
+    // Pour mille, 1000 = rassasie. Pousses par `HealthSync` quand `mine` est vrai, et par LUI SEUL :
+    // les copies destinees aux voisins portent 0/0 a dessein (la faim d'un tiers ne regarde
+    // personne, et c'est autant d'octets en moins dans un message diffuse a l'AoI).
+    //
+    // ⚠️ Valeur de depart 1000, pas 0. Le serveur n'emet un `HealthSync` que sur CHANGEMENT de
+    // jauge, soit une dizaine de secondes apres l'entree en session : demarrer a 0 afficherait deux
+    // jauges vides pendant tout ce temps, ce qui se lirait comme « le serveur me laisse mourir de
+    // faim » alors que rien n'est encore arrive. Le defaut doit ressembler a la verite, pas a zero.
+    int32_t m_faim = 1000;
+    int32_t m_soif = 1000;
+
     // Derniere sante locale CONNUE, en pourcentage (0-100). `-1` = jamais lue : le premier passage
     // ne rapporte donc rien, il ne fait qu'etablir la reference. Sans ce -1, l'entree en session
     // produirait un faux « gain de 100 % ».
@@ -526,6 +539,14 @@ public:
     // serveur qui tranche, et lui seul refusera une demande prematuree.
     bool Tessera_HopitalOuvert() const { return m_hopitalOuvert; }
 
+    // Faim / soif en POUR MILLE (0-1000), telles que le serveur les pousse. Lues par les jauges du
+    // HUD (`TesseraHudVitals`), jamais decomptees par le client : la seule horloge qui compte est
+    // celle du serveur, exactement comme pour le coma ci-dessus.
+    //
+    // `int32_t` et non `uint16_t` : redscript n'a pas de type 16 bits — la conversion se fait au
+    // franchissement du fil, meme regle que `nature` dans `Tessera_ReportStim`.
+    int32_t Tessera_Faim() const { return m_faim; }
+    int32_t Tessera_Soif() const { return m_soif; }
     // Rapporte au serveur une variation de vie que LUI SEUL ne peut pas connaitre : regeneration,
     // soin, chute, feu, PNJ, vehicule. Appelee periodiquement par redscript avec le pourcentage de
     // vie COURANT du joueur local ; toute la logique est ici, pour que le script reste bete.
@@ -684,6 +705,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_RapporterVariation);
     RTTI_METHOD(Tessera_SecondesSecours);
     RTTI_METHOD(Tessera_HopitalOuvert);
+    RTTI_METHOD(Tessera_Faim);
+    RTTI_METHOD(Tessera_Soif);
     RTTI_METHOD(Tessera_Journal);
     RTTI_METHOD(Tessera_RapporterStatique);
     RTTI_METHOD(Tessera_ApparenceStatiqueConnue);
