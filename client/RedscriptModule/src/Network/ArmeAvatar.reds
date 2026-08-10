@@ -1,5 +1,29 @@
 module Cyberverse.Network.Managers
 
+// ⚠️⚠️ SOLUTION TEMPORAIRE — ACTÉE COMME TELLE PAR LUCAS LE 2026-08-10.
+//
+// Ce fichier MARCHE : dégainer, changer d'arme et ranger sont vus par les autres joueurs, dans les
+// deux sens, avec les poings et les bras renforcés. Mais il marche **par insistance**, pas par
+// conception : le moteur ne nous donne aucune prise franche sur l'équipement d'un pantin de foule,
+// alors on ordonne, on constate, on recommence, et on force le slot à la main quand la commande
+// native n'aboutit pas.
+//
+// Le verdict de Lucas est « c'est pas parfait, mais pour l'instant on va se contenter de ça » —
+// c'est un choix de priorité, pas un aboutissement, et ça se lit ici plutôt que de se deviner dans
+// six mois.
+//
+// Ce qui reste insatisfaisant, nommément :
+//   · le rangement natif (`AIUnequipCommand`) **n'aboutit jamais** sur ces pantins — on le remplace
+//     par un vidage de slot, donc SANS animation de rangement ;
+//   · un changement d'arme demande encore ~1 s, contre ~0,3 s pour un premier dégainage ;
+//   · la posture poings levés n'est pas vérifiée ;
+//   · toute la boucle repose sur un SONDAGE et une insistance, là où le bon mécanisme serait de
+//     prendre l'autorité sur l'IA du pantin — c'est ce que Lucas a nommé « une autorité pour
+//     imposer l'animation et écraser l'existante », et il a probablement raison.
+//
+// La suite est consignée dans `tools/game-harness/BACKLOG-INGAME.md`. Faits mesurés : F-PLY-036
+// (le mécanisme d'affichage) et F-PLY-039 (les quatre pièges de la boucle de commandes).
+
 // L'arme en main d'un joueur, vue par tous les autres.
 //
 // ── Ce qui est MESURÉ, et qui a demandé trois tours ───────────────────────────────────────────
@@ -255,11 +279,28 @@ public class TesseraArmeAvatar extends DelayCallback {
             return;
         }
 
-        // ⚠️ Annuler l'ordre précédent : une commande d'IA reste ACTIVE tant qu'elle n'a pas
-        // conclu, et en empiler une seconde ne la remplace pas.
+        // ── NE JAMAIS INTERROMPRE UN ORDRE QUI S'EXÉCUTE ─────────────────────────────────
+        //
+        // ⚠️ DÉFAUT QUE JE M'ÉTAIS INFLIGÉ, visible dans le journal : le rangement demandait
+        // systématiquement 4 essais (~8 s) avant d'aboutir. La cause n'était pas le moteur —
+        // c'était moi. À chaque retente j'annulais la commande précédente, y compris quand elle
+        // était en train de jouer son animation. Une animation plus longue que le délai de retente
+        // ne pouvait donc JAMAIS finir : je la tuais juste avant.
+        //
+        // On distingue maintenant les deux cas, et la distinction est celle que l'enum donne :
+        //   · `Executing` — elle travaille, on la LAISSE finir ;
+        //   · autre chose (`Enqueued`, `NotExecuting`…) — elle est coincée, on l'annule.
+        //
+        // C'est une correction qu'aucune relecture n'aurait donnée : il a fallu voir « essai 4 »
+        // dans le journal pour comprendre que le système se battait contre lui-même.
         if IsDefined(this.derniere) {
-            if NotEquals(EnumInt(controleur.GetCommandState(this.derniere)),
-                         EnumInt(AICommandState.Success)) {
+            let etat = controleur.GetCommandState(this.derniere);
+            if Equals(EnumInt(etat), EnumInt(AICommandState.Executing)) {
+                // Elle joue. On repousse la prochaine évaluation sans rien envoyer.
+                this.attente = 7u;
+                return;
+            }
+            if NotEquals(EnumInt(etat), EnumInt(AICommandState.Success)) {
                 controleur.CancelCommand(this.derniere);
             }
             this.derniere = null;
@@ -273,10 +314,28 @@ public class TesseraArmeAvatar extends DelayCallback {
             TesseraJournalArme(
                 s"⚠ l'avatar refuse l'arme depuis 10 ordres — porte=\(porte) attendu=\(TDBID.ToNumber(attendue))");
         }
-        // ~1 s à 0,15 s par passe : le temps qu'une animation de dégainage se joue.
-        this.attente = 7u;
+        // ⚠️ ~0,45 s, ET NON ~1 s. Ce délai est le prix payé à CHAQUE essai, et le journal montrait
+        // des changements d'arme à 6 secondes pour trois essais — presque entièrement notre propre
+        // back-off. On garde de quoi ne pas hacher une animation qui démarre, sans plus : le garde
+        // `Executing` juste au-dessus protège déjà les animations qui, elles, se jouent vraiment.
+        this.attente = 3u;
 
-        if TDBID.ToNumber(attendue) == 0ul {
+        // ── ON PASSE TOUJOURS PAR LES MAINS VIDES ────────────────────────────────────────
+        //
+        // ⚠️ RÈGLE TIRÉE DU JOURNAL, PAS D'UNE INTUITION. La trace est sans ambiguïté :
+        //
+        //     porte=0            → ordre → convergé en 1 ordre        ✅
+        //     porte=163061804068 → essai 1, 2, 3, 4 … jamais          ❌
+        //
+        // Un ordre d'équipement réussit du PREMIER coup quand le pantin a les mains vides, et
+        // échoue indéfiniment quand il tient déjà quelque chose. Le moteur ne sait pas échanger une
+        // arme contre une autre en un geste — ce qui est cohérent avec le fait que le jeu lui-même
+        // expose des commandes de BASCULE distinctes (`AISwitchToPrimary/SecondaryWeaponCommand`).
+        //
+        // On décompose donc en deux temps, et la boucle de convergence les enchaîne toute seule :
+        // ranger d'abord, équiper au tour suivant une fois les mains constatées vides. Aucun état
+        // à tenir pour ça — c'est le slot de l'avatar qui dit où on en est.
+        if porte != 0ul {
             // ── RANGEMENT ────────────────────────────────────────────────────────────────
             // `AIUnequipCommand` et non un retrait de slot : c'est la commande native, donc elle
             // joue l'animation de rangement au lieu de faire disparaître l'arme d'un coup.
@@ -285,11 +344,47 @@ public class TesseraArmeAvatar extends DelayCallback {
             controleur.SendCommand(rangement);
             controleur.ForceTickNextFrame();
             this.derniere = rangement;
-            TesseraJournalArme(s"ordre : rangement (essai \(this.essais))");
+
+            // ── FILET : SI LA COMMANDE NATIVE NE RANGE PAS, ON VIDE LE SLOT ──────────────
+            //
+            // ⚠️ MESURÉ LE 2026-08-10, et c'est ce qui bloquait TOUT. Le journal montre quatre
+            // ordres de rangement en dix secondes sans le moindre effet :
+            //
+            //     11:46:01 rangement AVANT Silverhand (essai 1)   11:46:05 … (essai 3)
+            //     11:46:03 …                        (essai 2)     11:46:08 … (essai 4)
+            //
+            // `AIUnequipCommand` n'aboutit pas sur un pantin de foule. Et comme TOUT changement
+            // d'arme passe d'abord par un rangement (le moteur ne sait pas échanger directement),
+            // cette seule commande paralysait la chaîne entière : l'avatar sortait sa première arme
+            // et n'en changeait plus jamais.
+            //
+            // On garde donc la commande native pour le PREMIER essai — quand elle marche, elle joue
+            // l'animation de rangement, et c'est ce qu'on veut. À partir du second, on vide le slot
+            // à la main : le geste est sec, sans animation, mais il aboutit **toujours**.
+            //
+            // ⚠️ C'est un arbitrage assumé, et il vient de Lucas : « le changement d'arme, c'est
+            // quand même quelque chose de très important ». Dans un serveur RP, voir l'arme que
+            // quelqu'un tient n'est pas cosmétique — c'est ce qui dit s'il est en train de vous
+            // braquer. Une transition parfaite qui n'arrive jamais vaut moins qu'une transition
+            // abrupte qui arrive toujours.
+            // ⚠️ DÈS LE PREMIER ESSAI, et non au second. Attendre un tour « pour laisser sa chance
+            // à l'animation » coûtait ~1 s sur CHAQUE changement d'arme, pour une commande dont le
+            // journal a établi qu'elle n'aboutit jamais ici. On ne paie pas une seconde de latence
+            // à chaque geste pour une politesse envers un mécanisme mesuré inopérant.
+            transactions.RemoveItemFromSlot(avatar, slot);
+            // Le journal dit si ce rangement est la CIBLE ou seulement l'étape 1 d'un changement —
+            // sans quoi une trace pleine de « rangement » se lirait comme un défaut alors que c'est
+            // la moitié d'un échange qui se déroule normalement.
+            if TDBID.ToNumber(attendue) == 0ul {
+                TesseraJournalArme(s"ordre : rangement (essai \(this.essais))");
+            } else {
+                TesseraJournalArme(
+                    s"ordre : rangement AVANT \(TDBID.ToStringDEBUG(attendue)) (essai \(this.essais))");
+            }
             return;
         }
 
-        // ── DÉGAINAGE OU CHANGEMENT ──────────────────────────────────────────────────────
+        // ── DÉGAINAGE (mains constatées vides) ───────────────────────────────────────────
         //
         // ⚠️ On donne l'item AVANT de l'équiper, et par le MÊME identifiant que celui demandé.
         // Mesuré le 2026-07-24 : un item donné par une autre voie reçoit un `ItemID` dynamique
@@ -298,6 +393,20 @@ public class TesseraArmeAvatar extends DelayCallback {
         if !transactions.HasItem(avatar, identifiant) {
             transactions.GiveItem(avatar, identifiant, 1);
         }
+        // ⚠️ `AddItemToSlot` RESTAURÉ — je l'avais perdu en route, et c'est une régression de ma
+        // main. La toute première version qui a marché en jeu faisait les TROIS gestes :
+        // `GiveItem`, puis `AddItemToSlot`, puis la commande d'IA. En passant du miroir local au
+        // pilotage serveur j'ai réécrit ce bloc et laissé tomber le deuxième, sans le remarquer —
+        // il ne « servait à rien » puisque seul l'ordre d'IA produit le visuel.
+        //
+        // Sauf qu'il sert : il met l'arme dans le slot IMMÉDIATEMENT. La commande d'IA n'a alors
+        // plus qu'à jouer l'animation sur un slot déjà pourvu, au lieu de devoir tout faire. Le
+        // journal montrait 3 à 4 ordres nécessaires depuis des mains pourtant vides ; c'est ce
+        // geste manquant qui les expliquait.
+        //
+        // La leçon dépasse ce bloc : une réécriture qui « nettoie » une séquence mesurée doit
+        // re-mesurer, sinon elle défait en silence ce qu'une session entière avait établi.
+        transactions.AddItemToSlot(avatar, slot, identifiant);
         let equipement = new AIEquipCommand();
         equipement.slotId = slot;
         equipement.itemId = attendue;
