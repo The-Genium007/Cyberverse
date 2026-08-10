@@ -1764,14 +1764,31 @@ void NetworkGameSystem::ReparerRoster()
         const auto remplacant = g_remplacants.find(id);
         if (remplacant != g_remplacants.end())
         {
-            // On a deja un remplacant : la seule question est de savoir si le natif est arrive.
-            // S'il est la, le notre devient un doublon et doit partir — c'est la moitie du
-            // mecanisme, et l'oublier laisserait deux PNJ au meme endroit.
-            bool existe = false;
-            if (Red::CallVirtual(this, "TesseraEntiteExisteLocalement", existe, cible) && existe)
+            // On a deja un remplacant : la seule question est de savoir si quelqu'un d'AUTRE se
+            // tient desormais a cet endroit. Si oui, le notre est le doublon et doit partir.
+            //
+            // ── L'ARBITRAGE, ET POURQUOI IL N'EST PAS UN CHOIX ────────────────────────────
+            //
+            // C'est TOUJOURS le notre qui part, jamais l'autre — non par preference, mais par
+            // capacite : un PNJ de communaute natif NE SE RETIRE PAS (F-PNJ-091, F-PNJ-093, deux
+            // impasses mesurees), et `DeleteEntity` rend meme un succes sans rien supprimer quand
+            // l'entite est de-streamee (F-PNJ-090). Notre remplaçant est la seule entite qu'on ait
+            // le droit — et le pouvoir — de detruire. La regle « garder le natif » n'est donc pas
+            // discutable, elle est la seule executable.
+            //
+            // ⚠️ La question posee change : on demandait « l'identifiant `cible` existe-t-il ? »
+            // (`TesseraEntiteExisteLocalement`), on demande maintenant « cet ENDROIT est-il occupe
+            // par un autre ? ». Le premier reposait sur `FindEntityByID`, qui rend nil sur un
+            // pantin bien vivant (F-PNJ-088) : quand il se trompait, notre doublon SURVIVAIT au
+            // natif revenu. Le second ne depend d'aucune cle.
+            const RED4ext::Vector4 ici{inscription.x, inscription.y, inscription.z, 1.0f};
+            bool occupe = false;
+            if (Red::CallVirtual(this, "TesseraQuelquUnIci", occupe, ici, 0.6f, remplacant->second)
+                && occupe)
             {
                 Red::CallVirtual(this, "DestroyTransientEntity", remplacant->second);
-                SDK->logger->InfoF(PLUGIN, "Roster : natif %llu arrive — remplacant retire", id);
+                SDK->logger->InfoF(PLUGIN,
+                    "Roster : place de %llu occupee par un autre — notre remplacant retire", id);
                 g_remplacants.erase(id);
                 ++faits;
             }

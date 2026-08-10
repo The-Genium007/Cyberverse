@@ -793,6 +793,17 @@ public native class NetworkGameSystem extends IGameSystem {
         if distance > 250.0 {
             return vide;
         }
+        // ⚠️ LA GARDE QUI MANQUAIT. `FindEntityByID` ci-dessus ne suffit pas — il rend nil sur un
+        // pantin bien vivant (F-PNJ-088), et un faux « absent » pose un remplaçant PAR-DESSUS un
+        // natif présent, avec l'apparence du roster : deux personnes au même endroit, habillées
+        // différemment. C'est ce que Lucas a observé après la déduplication par identifiant.
+        //
+        // 0,6 m : un pantin debout occupe ~0,5 m d'emprise au sol. Assez large pour attraper un
+        // natif dont la position rapportée diffère de quelques centimètres, assez étroit pour ne
+        // pas refuser un voisin légitime — deux PNJ distincts ne se tiennent pas à 60 cm.
+        if this.TesseraQuelquUnIci(position, 0.6, vide) {
+            return vide;
+        }
         let cree = this.SpawnNetworkAvatar(record, apparence, position, orientation);
         // Journalisé au format `[Etat]`, avec la MÊME clé que la sonde de foule (position au
         // décimètre) : sans ça la mesure de cohérence ne verrait pas les remplaçants — ils ne sont
@@ -814,6 +825,54 @@ public native class NetworkGameSystem extends IGameSystem {
     // laisserait deux PNJ au même endroit — le nôtre et celui du jeu.
     public func TesseraEntiteExisteLocalement(cible: EntityID) -> Bool {
         return IsDefined(GameInstance.FindEntityByID(GetGameInstance(), cible));
+    }
+
+    // Y a-t-il DÉJÀ quelqu'un debout à cet endroit, autre que `sauf` ?
+    //
+    // ── POURQUOI SPATIALE, ET PAS PAR IDENTIFIANT ──────────────────────────────────────────
+    //
+    // La déduplication par identifiant, puis par position du roster, ne couvrait qu'une chose :
+    // nos remplaçants entre eux. Or **trois** mécanismes créent des PNJ sans se consulter — le
+    // figurant natif du jeu, le PNJ promu par le serveur, et notre remplaçant de roster. Lucas les
+    // a vus empilés « avec des esthétiques différentes » : c'est la signature d'entités venues de
+    // sources différentes, pas de doublons d'une même source.
+    //
+    // ⚠️ Et le test de présence sur lequel tout reposait n'est pas fiable : `FindEntityByID` rend
+    // nil sur un pantin bien vivant (**F-PNJ-088**, mesuré le 2026-08-05 — seule la voie par tag le
+    // retrouvait). Un faux « absent » fabrique un remplaçant PAR-DESSUS un natif présent, et comme
+    // son apparence vient du roster, il porte une autre tenue. C'est exactement le symptôme.
+    //
+    // On cesse donc de demander « cet identifiant existe-t-il ? » pour demander « cet ENDROIT
+    // est-il occupé ? ». La question spatiale ne dépend d'aucune clé — donc d'aucune des deux
+    // hypothèses que F-PNJ-150 laisse ouvertes sur l'origine des identifiants multiples.
+    //
+    // `GetEntitiesAroundObject` (`gameObject.script:936`) énumère autour de l'APPELANT : la portée
+    // demandée couvre donc la distance joueur→cible plus le rayon. Au-delà de ce que la requête de
+    // ciblage sait rendre, on répond `false` — dégradation vers le comportement d'avant, jamais un
+    // refus de réparer.
+    public func TesseraQuelquUnIci(position: Vector4, rayon: Float, sauf: EntityID) -> Bool {
+        let joueur = GameInstance.GetPlayerSystem(GetGameInstance()).GetLocalPlayerControlledGameObject();
+        if !IsDefined(joueur) {
+            return false;
+        }
+        let portee = Vector4.Length(position - joueur.GetWorldPosition()) + rayon;
+        let autour = joueur.GetEntitiesAroundObject(portee);
+        // ⚠️ PAS de `continue` : le mot-clé N'EXISTE PAS en redscript, et l'erreur ne le dit pas
+        // ainsi — `unresolved reference 'continue'`, comme s'il s'agissait d'une variable. Attrapé
+        // par le compile-check hors jeu ; en jeu, il aurait fait tomber TOUT r6/scripts.
+        let i = 0;
+        while i < ArraySize(autour) {
+            let go = autour[i] as GameObject;
+            i += 1;
+            if IsDefined(go) {
+                // Notre propre remplaçant n'occupe pas sa place contre lui-même.
+                let estMoi = EntityID.IsDefined(sauf) && go.GetEntityID() == sauf;
+                if !estMoi && Vector4.Length(go.GetWorldPosition() - position) <= rayon {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public func DestroyTransientEntity(entityId: EntityID) {
