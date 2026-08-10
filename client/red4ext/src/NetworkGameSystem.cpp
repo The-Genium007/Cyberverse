@@ -1499,8 +1499,11 @@ void NetworkGameSystem::HandleCellAppearances(
         }
         ++n;
     }
-    SDK->logger->InfoF(PLUGIN, "Halo : cellule (%d,%d) recue — %u apparences", msg->cell_x(),
-        msg->cell_y(), n);
+    // Le compte du ROSTER est journalise a part, et ce n'est pas un doublon : une entree sans
+    // position n'entre pas au roster, donc « N apparences » peut valoir 40 pendant que le roster
+    // reste vide — ce qui s'est produit, et que rien ne disait.
+    SDK->logger->InfoF(PLUGIN, "Halo : cellule (%d,%d) recue — %u apparences, roster %zu entrees",
+        msg->cell_x(), msg->cell_y(), n, g_rosterStatiques.size());
 }
 
 void NetworkGameSystem::HandleStaticAppearance(const cyberpunk_rp::protocol::StaticAppearance* msg)
@@ -2029,6 +2032,34 @@ void NetworkGameSystem::SendAttackReport(uint64_t target, uint32_t degats)
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
+bool NetworkGameSystem::Tessera_RapporterArme(uint64_t item, bool degainee)
+{
+    if (m_pInterface == nullptr)
+    {
+        return false;
+    }
+
+    // ⚠️ `slot` = 0 : le SERVEUR ne connait pas les slots du jeu et n'a pas a les connaitre. C'est
+    // le client qui resout « le slot d'arme principal » a la reception. Coder un hash de slot en
+    // dur ici ferait dependre le protocole d'un detail de version du jeu — exactement ce que la
+    // separation des depots evite.
+    //
+    // ⚠️ `equipped = true` toujours : ce canal ne parle QUE de l'arme en main. Le desequipement
+    // d'inventaire (poser une arme dans un coffre) est un autre sujet, et melanger les deux dans un
+    // meme champ ferait qu'un jour l'un annulerait l'autre.
+    SDK->logger->InfoF(PLUGIN, "Arme rapportee : item=%llu degainee=%s", item,
+        degainee ? "oui" : "non");
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto er = cyberpunk_rp::protocol::CreateEquipmentReport(builder, item, 0, degainee, true);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_EquipmentReport, er.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    return true;
+}
+
 void NetworkGameSystem::SendStimReport(uint8_t nature, float radiusMetres, uint64_t target)
 {
     if (m_pInterface == nullptr)
@@ -2083,10 +2114,29 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
     NetworkAppearance appearance;
     appearance.baseRecord = sync->spec()->base_record();
     appearance.appearance = sync->spec()->appearance();
+
+    // ── L'ARME EN MAIN, TRANSPORTEE PAR `garments` ────────────────────────────────────────────
+    //
+    // Le champ existait dans le schema depuis l'origine et n'avait jamais eu d'emetteur. Il porte
+    // desormais l'arme tenue par le joueur que cet avatar represente : un seul `EquippedItem`.
+    //
+    // ⚠️ VECTEUR ABSENT = MAINS VIDES, et c'est un etat A PART ENTIERE, pas un « pas d'info ». Le
+    // serveur retire le garment quand le joueur range son arme (`appearance_relay.rs`) : traiter
+    // l'absence comme « on ne sait pas » laisserait l'arme dans les mains de l'avatar pour
+    // toujours. On ecrit donc explicitement 0.
+    appearance.arme = 0;
+    if (sync->spec()->garments() != nullptr && sync->spec()->garments()->size() > 0)
+    {
+        const auto* premier = sync->spec()->garments()->Get(0);
+        if (premier != nullptr && premier->drawn())
+        {
+            appearance.arme = premier->item();
+        }
+    }
     m_appearances[id] = appearance;
 
-    SDK->logger->InfoF(PLUGIN, "AppearanceSync %llu : record=%llu apparence=%llu",
-        id, appearance.baseRecord, appearance.appearance);
+    SDK->logger->InfoF(PLUGIN, "AppearanceSync %llu : record=%llu apparence=%llu arme=%llu",
+        id, appearance.baseRecord, appearance.appearance, appearance.arme);
 
     // L'apparence arrive AVANT le premier Snapshot qui porte l'entite (le serveur la pousse a
     // l'entree en AoI) — dans ce cas il n'y a rien a appliquer, le spawn s'en servira. Mais elle

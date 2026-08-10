@@ -63,3 +63,34 @@ public class TesseraRelectureApparence extends DelayCallback {
         reseau.Tessera_Journal(s"[SondeApp] VERDICT=\(verdict) relue=\(relue) imposee=\(this.imposee) origine=\(this.origine)");
     }
 }
+
+// Verdict de l'HYDRATATION (2026-08-09) — même mesure que la sonde ci-dessus, mais posée sur le
+// chemin de production plutôt que sur un cobaye.
+//
+// POURQUOI. Le compteur « apparences appliquées » de la boucle d'hydratation comptait des ORDRES
+// PASSÉS, jamais des effets : `AppliquerApparenceStatique` renvoie `true` dès que l'entité est
+// trouvée. Lucas a tranché à l'oeil le 2026-08-09 — « l'esthétique n'est pas hydratée » — alors que
+// le compteur annonçait 81 sur 96. Exactement le piège de F-PNJ-130, repris par l'autre bout.
+//
+// `SANS-EFFET` est le verdict qui accuse : le moteur rejette en silence une apparence étrangère au
+// jeu d'apparences du PNJ (F-PNJ-051), ce qui arrive dès que les deux clients n'ont pas le même
+// record pour cette entité.
+public class TesseraVerdictHydratation extends DelayCallback {
+    let pantin: wref<ScriptedPuppet>;
+    let demandee: CName;
+    let origine: CName;
+
+    public func Call() -> Void {
+        let reseau = GameInstance.GetNetworkGameSystem();
+        if !IsDefined(reseau) {
+            return;
+        }
+        if !IsDefined(this.pantin) {
+            reseau.Tessera_Journal(s"[Hydra] VERDICT=entite-absente demandee=\(this.demandee)");
+            return;
+        }
+        let relue = this.pantin.GetCurrentAppearanceName();
+        let verdict = Equals(relue, this.demandee) ? "PREND" : (Equals(relue, this.origine) ? "SANS-EFFET" : "AUTRE");
+        reseau.Tessera_Journal(s"[Hydra] VERDICT=\(verdict) relue=\(relue) demandee=\(this.demandee) origine=\(this.origine)");
+    }
+}

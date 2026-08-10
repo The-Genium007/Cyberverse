@@ -35,6 +35,26 @@ public native class NetworkGameSystem extends IGameSystem {
     // `false` = rien n'est parti (cible non réseau, dégâts nuls, pas de connexion).
     public native func Tessera_RapporterDegats(cible: EntityID, degats: Uint32) -> Bool;
 
+    // ── L'arme en main (chantier arme distante, 2026-08-10) ────────────────────────────────
+    //
+    // Ce que le joueur LOCAL tient, annoncé au serveur. `item` = hash TweakDBID, `degainee` dit si
+    // elle est en main — une arme rangée s'annonce avec `false`, et le serveur vide alors les mains
+    // de l'avatar chez tous les observateurs.
+    //
+    // ⚠️ N'ÉMETTRE QUE SUR CHANGEMENT. Le détecteur sonde deux fois par seconde ; réémettre à
+    // chaque sondage inonderait le fil ET ferait rejouer l'animation de dégainage en boucle chez
+    // tous ceux qui regardent. Le filtre vit dans `ArmeAvatar.reds`, qui SAIT ce qui a changé.
+    public native func Tessera_RapporterArme(item: Uint64, degainee: Bool) -> Bool;
+
+    // L'arme que le SERVEUR annonce pour CETTE entité réseau. Renvoie un `TweakDBID` INVALIDE si
+    // l'entité est inconnue ou si son joueur a les mains vides. C'est ce qui remplace le miroir
+    // local : chaque avatar porte l'arme de SON joueur, plus la nôtre.
+    //
+    // ⚠️ Renvoie un `TweakDBID` et non un `Uint64`, parce que redscript expose `TDBID.ToNumber`
+    // mais **aucune conversion inverse** : un hash 64 bits y est un cul-de-sac. La conversion se
+    // fait donc côté C++, où le hash EST déjà un TweakDBID.
+    public native func Tessera_ArmeDeLEntite(cible: EntityID) -> TweakDBID;
+
     // ── Coma et réapparition (chantier autorité totale, 2026-08-09) ─────────────────────────
     //
     // Le serveur décide, le client demande et affiche. `Tessera_DemanderReapparition` renvoie
@@ -76,6 +96,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // zéro afficherait deux jauges vides qu'on lirait comme une panne.
     public native func Tessera_Faim() -> Int32;
     public native func Tessera_Soif() -> Int32;
+
     // Journal de SONDE — écrit dans le log du plugin, donc UN FICHIER PAR INSTANCE.
     // `FTLog` écrit dans le gamelog de CET, partagé par toutes les instances : deux clients y
     // mélangent leurs lignes, ce qui interdit toute comparaison entre eux.

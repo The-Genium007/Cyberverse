@@ -99,7 +99,12 @@ jobs:
           # (verifie le 2026-07-15) — seul Network/ compose le package netcode.
           $reds = "staging/r6/scripts/Cyberverse"
           New-Item -ItemType Directory -Force -Path $reds | Out-Null
-          foreach ($f in @('NetworkGameSystem.reds', 'PlayerActionTracker.reds')) {
+          #
+          # ⚠️ Liste NOMINATIVE et non un glob de src/Network/ : CrowdProbe.reds y vit aussi et
+          # c'est une SONDE de recherche, qui n'a rien a faire chez un joueur. Tout .reds de
+          # production ajoute dans src/Network/ doit donc etre ajoute ici, sinon il est deploye a
+          # la main sur le poste de dev et n'atteint jamais les joueurs.
+          foreach ($f in @('NetworkGameSystem.reds', 'PlayerActionTracker.reds', 'AvatarNeutre.reds', 'LootOff.reds', 'DegatsPvp.reds', 'SanteLocale.reds')) {
             $src = "client/RedscriptModule/src/Network/$f"
             if (-not (Test-Path $src)) { Write-Error "Module redscript introuvable : $src"; exit 1 }
             Copy-Item $src $reds/; Write-Host "Redscript -> r6/scripts/Cyberverse : $f"

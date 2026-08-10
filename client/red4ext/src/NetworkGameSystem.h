@@ -89,6 +89,11 @@ struct NetworkAppearance
 {
     uint64_t baseRecord = 0;
     uint64_t appearance = 0;
+    // Arme actuellement EN MAIN (hash TweakDBID), 0 = mains vides. Transportee par `garments` dans
+    // `AppearanceSync`. ⚠️ `0` est un ETAT, pas une absence d'information : le serveur le pousse
+    // quand le joueur range son arme, et le confondre avec « pas d'info » laisserait l'arme dans
+    // les mains de l'avatar pour toujours.
+    uint64_t arme = 0;
 };
 
 class NetworkGameSystem : public Red::IGameSystem
@@ -522,6 +527,41 @@ public:
         return true;
     }
 
+    // ── L'ARME EN MAIN : ce que le joueur LOCAL tient, annonce au serveur ─────────────────────
+    //
+    // `item` = hash TweakDBID de l'arme, `degainee` = elle est en main. Une arme rangee s'annonce
+    // avec `degainee = false` ; le serveur ecrit alors 0 et l'avatar se retrouve les mains vides
+    // chez tout le monde.
+    //
+    // ⚠️ N'EMETTRE QUE SUR CHANGEMENT. Le detecteur cote redscript sonde deux fois par seconde
+    // (`ArmeAvatar.reds`) ; reemettre a chaque sondage inonderait le fil pour rien ET ferait
+    // rejouer l'animation de degainage en boucle chez tous les observateurs. Le filtre vit du cote
+    // qui SAIT ce qui a change, pas ici.
+    //
+    // Renvoie true si un message est parti — jamais qu'il a ete accepte (D1).
+    bool Tessera_RapporterArme(uint64_t item, bool degainee);
+
+    // L'arme que le SERVEUR annonce pour une entite reseau donnee. Renvoie un `TweakDBID` INVALIDE
+    // (hash 0) si l'entite est inconnue ou si le joueur a les mains vides.
+    //
+    // ⚠️ RENVOIE UN `TweakDBID`, PAS UN `uint64_t`, ET C'EST OBLIGATOIRE. redscript expose bien
+    // `TDBID.ToNumber` mais **aucune conversion inverse** : un hash 64 bits y est un cul-de-sac,
+    // impossible a retransformer en identifiant utilisable. La conversion doit donc se faire ICI,
+    // ou le hash EST deja un TweakDBID. Verifie dans `core/data/tweakDBID.script` avant d'ecrire
+    // la premiere ligne du cote script — sans quoi tout le chemin de reception aurait ete a jeter.
+    RED4ext::TweakDBID Tessera_ArmeDeLEntite(RED4ext::ent::EntityID cible) const
+    {
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                const auto it = m_appearances.find(paire.first);
+                return RED4ext::TweakDBID(it == m_appearances.end() ? 0 : it->second.arme);
+            }
+        }
+        return RED4ext::TweakDBID(static_cast<uint64_t>(0));
+    }
+
     // Demande au serveur de faire reapparaitre le joueur local apres son coma.
     //
     // C'est une DEMANDE : le serveur refuse si le joueur est vivant ou si le delai de secours n'est
@@ -547,6 +587,7 @@ public:
     // franchissement du fil, meme regle que `nature` dans `Tessera_ReportStim`.
     int32_t Tessera_Faim() const { return m_faim; }
     int32_t Tessera_Soif() const { return m_soif; }
+
     // Rapporte au serveur une variation de vie que LUI SEUL ne peut pas connaitre : regeneration,
     // soin, chute, feu, PNJ, vehicule. Appelee periodiquement par redscript avec le pourcentage de
     // vie COURANT du joueur local ; toute la logique est ici, pour que le script reste bete.
@@ -701,6 +742,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ReportStim);
     RTTI_METHOD(Tessera_EstEntiteReseau);
     RTTI_METHOD(Tessera_RapporterDegats);
+    RTTI_METHOD(Tessera_RapporterArme);
+    RTTI_METHOD(Tessera_ArmeDeLEntite);
     RTTI_METHOD(Tessera_DemanderReapparition);
     RTTI_METHOD(Tessera_RapporterVariation);
     RTTI_METHOD(Tessera_SecondesSecours);
