@@ -6,6 +6,7 @@ set(PROJECT_HEADER_FILES
   Utils.h
   PlayerActionTracker.h
         PlayerSync/InterpolationData.h
+        PlayerSync/TamponInterpolation.h
         CommandLine.h
 )
 
