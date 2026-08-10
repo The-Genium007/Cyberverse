@@ -128,23 +128,27 @@ protected cb func OnGameAttached() -> Bool {
   stats.AddModifier(moi, RPGManager.CreateStatModifier(
       gamedataStatType.ForcePreventResurrect, gameStatModifierType.Additive, 1.0));
 
-  // 2. ⚠️ CONTRÔLE TEMPORAIRE, DEMANDÉ PAR LUCAS LE 2026-08-09 — À RETIRER APRÈS VERDICT.
+  // 2. ⚠️ ON N'AMPUTE PAS LE SECOND CŒUR — et c'est un choix, pas un oubli.
   //
-  // On coupe le Second Cœur À LA SOURCE, en plus de l'interdiction ci-dessus. Ce n'est pas une
-  // ceinture-et-bretelles par confort : c'est une EXPÉRIENCE DE CONTRÔLE. Si les deux chutes
-  // disparaissent, on saura que toute la chaîne de mort était déjà correcte et que cet implant
-  // était le seul défaut restant — hypothèse de Lucas, et elle vaut d'être tranchée nettement
-  // plutôt que noyée dans un correctif qui marche « pour une raison ou une autre ».
+  // Une version de ce bloc ajoutait `HasSecondHeart × 0` en plus de l'interdiction ci-dessus. C'était
+  // l'expérience de contrôle demandée par Lucas le 2026-08-09, et elle a rempli son rôle : elle a
+  // prouvé que le Second Cœur était bien la cause des deux chutes (F-PLY-033).
   //
-  // `Multiplier 0` et non `Additive -1` : le stat est accordé DEUX fois (l'`OnEquip` du cyberware
-  // et l'`abilityPackage` de `HasSecondHeart`, +1 chacun). Un `-1` laisserait 1 et on chercherait
-  // pourquoi. Un multiplicateur nul est insensible au nombre de sources.
+  // Elle ne doit pas SURVIVRE à son verdict. Couper le stat retire une capacité que le joueur a
+  // achetée, sans le lui dire, alors que `ForcePreventResurrect` suffit à obtenir le même résultat
+  // par le mécanisme prévu : le jeu conserve son implant, il n'a simplement plus le droit de
+  // conclure à la place du serveur. C'est la même règle que partout ailleurs ici — on neutralise le
+  // déclencheur, jamais le mécanisme.
   //
-  // ⚠️ Ceci retire une capacité PAYÉE par le joueur. Ça n'a rien à faire dans un serveur de
-  // production tel quel : la bonne forme sera un arbitrage SERVEUR (l'implant demande, le serveur
-  // accorde ou refuse la résurrection), pas une amputation silencieuse côté client.
-  stats.AddModifier(moi, RPGManager.CreateStatModifier(
-      gamedataStatType.HasSecondHeart, gameStatModifierType.Multiplier, 0.0));
+  // Si le mesuré démentait ça — c'est-à-dire si `statut=BaseStatusEffect.SecondHeart` réapparaissait
+  // dans le journal — l'amputation reviendrait, en une ligne, avec la mesure qui la justifie :
+  //   stats.AddModifier(moi, RPGManager.CreateStatModifier(
+  //       gamedataStatType.HasSecondHeart, gameStatModifierType.Multiplier, 0.0));
+  // (`Multiplier` et non `Additive -1` : le stat est accordé DEUX fois — l'`OnEquip` du cyberware et
+  // l'`abilityPackage` de l'ability, +1 chacun. Un `-1` en laisserait un et on chercherait pourquoi.)
+  //
+  // La forme définitive reste un arbitrage SERVEUR : l'implant demande la résurrection, le serveur
+  // l'accorde ou la refuse. Consigné dans `tools/game-harness/BACKLOG-INGAME.md`.
 
   return resultat;
 }
