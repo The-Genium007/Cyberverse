@@ -61,18 +61,22 @@ static void InterpoleExactementEntreDeuxEchantillons()
 {
     std::printf("interpolation exacte au milieu de deux echantillons\n");
     TamponPose t;
+    // ⚠️ Des ecarts REALISTES. Ce test affirmait 1 m et 2 m en 50 ms, soit 44,7 m/s — une vitesse
+    // qu'aucun joueur a pied n'atteint (le sprint plafonne vers 9 m/s). Il passait quand meme,
+    // parce que rien ne bornait la vitesse derivee ; le bridage l'a fait tomber, et c'est le test
+    // qui avait tort. On mesure ici la DERIVATION, pas la capacite a croire l'impossible :
+    // 0,10 m et 0,20 m en 50 ms = 2 et 4 m/s, l'allure d'une vraie marche.
     t.Pousser(100, PoseXY(0.0f, 0.0f));
-    t.Pousser(101, PoseXY(1.0f, 2.0f));
+    t.Pousser(101, PoseXY(0.10f, 0.20f));
 
     PoseRendue r;
     // Tick 100 = 5,000 s ; tick 101 = 5,050 s. Milieu = 5,025 s.
     Verifier(t.Echantillonner(5.025, r), "echantillonnage possible");
-    Proche(r.x, 0.5f, "x au milieu");
-    Proche(r.y, 1.0f, "y au milieu");
+    Proche(r.x, 0.05f, "x au milieu");
+    Proche(r.y, 0.10f, "y au milieu");
     Verifier(!r.extrapolee, "milieu de deux echantillons = interpole, jamais extrapole");
-    // Vitesse : 1 m et 2 m parcourus en 50 ms.
-    Proche(r.vx, 20.0f, "vitesse x deduite", 0.01f);
-    Proche(r.vy, 40.0f, "vitesse y deduite", 0.01f);
+    Proche(r.vx, 2.0f, "vitesse x deduite", 0.01f);
+    Proche(r.vy, 4.0f, "vitesse y deduite", 0.01f);
 }
 
 static void LeYawPrendLePlusCourtChemin()
@@ -278,6 +282,48 @@ static void LAgeDuDernierEchantillonDitQuandLeFilSeTait()
            "un tampon vide ne pretend pas avoir un age");
 }
 
+static void UneVitesseAberranteEstBridee()
+{
+    std::printf("une vitesse aberrante est bridee - pas de teleportation par extrapolation\n");
+    TamponPose t;
+    // Deux echantillons separes de 5 m en 50 ms : 100 m/s. C'est ce que produit un paquet
+    // desordonne depuis le passage en canal non fiable.
+    t.Pousser(100, PoseXY(0.0f, 0.0f));
+    t.Pousser(101, PoseXY(5.0f, 0.0f));
+
+    PoseRendue r;
+    Verifier(t.Echantillonner(5.025, r), "echantillonnage possible");
+    const float norme = std::sqrt(r.vx * r.vx + r.vy * r.vy + r.vz * r.vz);
+    Verifier(norme <= kVitesseMaxMS + 1e-3f, "la vitesse est bridee au plafond");
+    Verifier(r.vx > 0.0f, "mais la DIRECTION est conservee");
+
+    // Et surtout : l'extrapolation a la borne ne doit plus faire de saut de dizaines de metres.
+    PoseRendue loin;
+    Verifier(t.Echantillonner(9.999, loin), "tres au-dela de la borne");
+    const float saut = std::sqrt((loin.x - 5.0f) * (loin.x - 5.0f) + loin.y * loin.y);
+    Verifier(saut <= kVitesseMaxMS * static_cast<float>(kExtrapolationMaxS) + 0.01f,
+             "l'extrapolation reste bornee par la vitesse bridee");
+    Verifier(saut < 6.0f, "et donc tres loin des dizaines de metres observees en jeu");
+}
+
+static void UneDiscontinuiteCoupeAuLieuDeGlisser()
+{
+    std::printf("une discontinuite coupe l'historique au lieu de faire glisser l'avatar\n");
+    TamponPose t;
+    t.Pousser(100, PoseXY(0.0f, 0.0f));
+    t.Pousser(101, PoseXY(0.2f, 0.0f));
+    Verifier(t.Nombre() == 2, "deux echantillons normaux");
+
+    // Saut franc : teleportation, ascenseur, ou paquet desordonne.
+    t.Pousser(102, PoseXY(500.0f, 0.0f));
+    Verifier(t.Nombre() == 1, "l'historique est jete : on ne glisse pas a travers la ville");
+
+    PoseRendue r;
+    Verifier(t.Echantillonner(102.0 * kPeriodeTickS, r), "echantillonnage possible");
+    Proche(r.x, 500.0f, "on est NET a la nouvelle position, pas quelque part entre les deux");
+    Proche(r.vx, 0.0f, "et sans vitesse heritee du saut");
+}
+
 static void UnTamponVideNeRendRien()
 {
     std::printf("un tampon vide ne rend rien — l'appelant ne doit rien afficher\n");
@@ -298,6 +344,8 @@ int main()
     LEtatDAnimationNAntipipeJamais();
     LHorlogeSAmorceRattrapeEtSaute();
     LePointDeViseeEstDevantEtStableALArret();
+    UneVitesseAberranteEstBridee();
+    UneDiscontinuiteCoupeAuLieuDeGlisser();
     LeDelaiSAdapteALaGigueEtRedescendLentement();
     LeDelaiEstPlafonne();
     LAgeDuDernierEchantillonDitQuandLeFilSeTait();

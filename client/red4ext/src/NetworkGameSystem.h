@@ -107,6 +107,9 @@ struct StatsRoster
     /// Avatars figés parce que leur fil s'est tu (micro-coupure) — voir `PiloterAvatar`.
     /// Un compteur qui monte sans arrêt dit que le réseau souffre, pas que le code est faux.
     std::uint64_t avatarsFiges = 0;
+    /// Recalages francs d'avatar (dérive au-delà du seuil). C'est le compteur de la MALADIE :
+    /// il doit rester proche de zéro. S'il monte, la boucle de suivi ne tient pas la cible.
+    std::uint64_t recalagesAvatar = 0;
 };
 extern StatsRoster g_statsRoster;
 // Cellules de halo deja recues du serveur. Meme decoupage que `halo.rs` cote serveur — 64 m.
@@ -829,6 +832,30 @@ public:
         return Red::CString("");
     }
 
+    // L'EntityID de la N-ieme entite reseau. Sert a PARCOURIR les avatars depuis redscript, pour y
+    // poser un nametag sans attendre que le joueur en vise un.
+    //
+    // Le COMPTE se lit avec `Tessera_GetVisiblePlayerCount`, qui rend deja la taille de cette meme
+    // table — on n'ajoute donc qu'un seul natif, pas deux.
+    //
+    // ⚠️ L'index n'est PAS un identifiant : la table est un `std::map` dont l'ordre change quand une
+    // entite apparait ou disparait. Un appelant doit s'en servir pour ENUMERER dans la foulee, et
+    // memoriser l'`EntityID`, jamais l'index.
+    //
+    // ⚠️ Elle contient les avatars de joueurs ET les PNJ promus (meme table que
+    // `Tessera_EstEntiteReseau`). Ce n'est pas un defaut ici : `Tessera_NomConnu` rend une chaine
+    // vide pour tout ce que le serveur n'a pas nomme, donc un PNJ promu n'obtient jamais de nametag.
+    RED4ext::ent::EntityID Tessera_AvatarParIndex(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_networkedEntitiesLookup.size())
+        {
+            return RED4ext::ent::EntityID{};
+        }
+        auto it = m_networkedEntitiesLookup.begin();
+        std::advance(it, index);
+        return it->second;
+    }
+
     /// Declenche une recette sur une cible. `recette` est l'id rendu par `Tessera_ActionId`.
     ///
     /// Renvoie true si le message est PARTI — jamais qu'il a ete accepte (D1). Le serveur reverifie
@@ -1019,6 +1046,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ActionPorteeM);
     RTTI_METHOD(Tessera_NomConnu);
     RTTI_METHOD(Tessera_EnvoyerAction);
+    RTTI_METHOD(Tessera_AvatarParIndex);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");

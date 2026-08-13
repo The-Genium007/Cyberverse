@@ -2854,6 +2854,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     const float derive = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (derive > kRecalageM)
     {
+        // ⚠️ CE CHEMIN EST LE PLUS IMPORTANT À JOURNALISER, et il ne l'était pas.
+        //
+        // Le 2026-08-13, Lucas a signalé « de grosses téléportations de plusieurs dizaines de
+        // mètres ». Les compteurs ne montraient RIEN : la ligne de diagnostic vivait dans la
+        // branche NOMINALE (celle qui commande la marche), jamais dans celle-ci. On journalisait
+        // donc la santé et jamais la maladie — l'erreur d'instrument la plus banale, et la plus
+        // coûteuse : les dérives lues plafonnaient à 1,68 m précisément parce que tout ce qui
+        // dépassait 2,5 m sortait ici, en silence.
+        SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECALAGE derive=%.2fm allure=%u ech=%zu%s",
+            networkId, derive, static_cast<unsigned>(pose.locomotion),
+            g_tamponsJoueurs[networkId].Nombre(), pose.extrapolee ? " EXTRAPOLE" : "");
+        ++g_statsRoster.recalagesAvatar;
         SetEntityPosition(entityId, positionVoulue, pose.yaw);
         // La commande survit au Teleport (c'est tout le resultat de Q6b) — mais la cible commandee
         // date d'avant le saut. On force une reemission au prochain passage.

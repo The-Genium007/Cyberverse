@@ -56,6 +56,15 @@ inline constexpr double kDecrueGigue = 0.02;
 /// coûteux qu'un arrêt visible.
 inline constexpr double kExtrapolationMaxS = 0.25;
 
+/// Plafond de la vitesse DÉRIVÉE, en m/s. Voir `PoserVitesse` — c'est le garde-fou qui empêche
+/// une erreur d'échantillon de devenir une téléportation de plusieurs dizaines de mètres.
+/// 20 m/s : bien au-dessus du sprint (~8-9 m/s), donc jamais atteint par un joueur à pied.
+inline constexpr float kVitesseMaxMS = 20.0f;
+
+/// Écart entre deux échantillons consécutifs au-delà duquel on parle de DISCONTINUITÉ, pas de
+/// déplacement. Voir `TamponPose::Pousser`. 15 m à 20 Hz vaudrait 300 m/s.
+inline constexpr float kSautFrancM = 15.0f;
+
 /// Écart au-delà duquel l'horloge de rendu SAUTE au lieu de rattraper doucement
 /// (chargement de zone, pause, reprise après coupure).
 inline constexpr double kEcartRecalageFrancS = 0.5;
@@ -239,6 +248,32 @@ public:
         {
             return;
         }
+        // ── UNE DISCONTINUITÉ SE COUPE, ELLE NE S'INTERPOLE PAS ────────────────────────────
+        //
+        // Un saut franc — téléportation, ascenseur, sortie puis retour dans l'AoI, ou simplement
+        // un paquet désordonné depuis le passage en non-fiable — n'est PAS un déplacement. Le
+        // traiter comme tel fait GLISSER l'avatar d'un point à l'autre en ligne droite, à travers
+        // les murs, sur toute la distance. C'est ce que Lucas décrit comme des « effets fantômes ».
+        //
+        // On jette donc l'historique et on repart de la nouvelle pose : l'avatar est replacé net.
+        // Une coupure franche est honnête ; un glissement de trente mètres à travers un immeuble
+        // ne l'est pas.
+        //
+        // 15 m entre deux échantillons consécutifs : à 20 Hz, aucun déplacement humain n'y arrive
+        // (ce serait 300 m/s), et c'est bien en dessous du seuil de téléport franc de l'anti-triche
+        // serveur (200 m) — on coupe donc AVANT que le serveur ne juge, jamais après.
+        if (m_nombre > 0)
+        {
+            const Entree& dernier = At(m_nombre - 1);
+            const float dx = pose.x - dernier.pose.x;
+            const float dy = pose.y - dernier.pose.y;
+            const float dz = pose.z - dernier.pose.z;
+            if (std::sqrt(dx * dx + dy * dy + dz * dz) > kSautFrancM)
+            {
+                m_nombre = 0;
+                m_tete = 0;
+            }
+        }
         m_entrees[m_tete] = Entree{tick, pose};
         m_tete = (m_tete + 1) % kProfondeurTampon;
         if (m_nombre < kProfondeurTampon)
@@ -379,6 +414,23 @@ private:
         return r;
     }
 
+    /// ⚠️ LA VITESSE EST BRIDÉE, ET C'EST LE GARDE-FOU LE PLUS IMPORTANT DU FICHIER.
+    ///
+    /// Elle est DÉRIVÉE de deux échantillons : une erreur sur l'un des deux devient une vitesse
+    /// aberrante, et l'extrapolation la multiplie ensuite par un temps. Sans bride, une vitesse de
+    /// 100 m/s (5 m d'écart lus sur un intervalle de 50 ms) produit **25 m de saut** à la borne
+    /// d'extrapolation. C'est ce que Lucas a observé le 2026-08-13 : « de grosses téléportations de
+    /// plusieurs dizaines de mètres », avec du rollback et des effets fantômes.
+    ///
+    /// D'où vient l'erreur : depuis que le flux de position part en NON-FIABLE, un paquet peut
+    /// arriver dans le désordre. Le serveur applique alors une position plus ancienne, le snapshot
+    /// la relaie, et deux échantillons consécutifs se retrouvent séparés par un grand écart. La
+    /// dérivée explose. Le non-fiable est le bon choix (voir `SendPositionUpdate`), mais il EXIGE
+    /// ce garde-fou — je l'ai livré sans, et c'est la régression.
+    ///
+    /// 20 m/s : bien au-dessus du sprint (~8-9 m/s), donc jamais atteint par un joueur à pied — ce
+    /// chemin ne traite QUE des avatars bipèdes, les véhicules ont leur propre table. Assez bas
+    /// pour borner l'extrapolation à 5 m à la borne de 250 ms.
     static void PoserVitesse(PoseRendue& r, const Entree& a, const Entree& b, double duree) noexcept
     {
         if (duree <= 0.0)
@@ -386,9 +438,23 @@ private:
             return;
         }
         const float inv = static_cast<float>(1.0 / duree);
-        r.vx = (b.pose.x - a.pose.x) * inv;
-        r.vy = (b.pose.y - a.pose.y) * inv;
-        r.vz = (b.pose.z - a.pose.z) * inv;
+        float vx = (b.pose.x - a.pose.x) * inv;
+        float vy = (b.pose.y - a.pose.y) * inv;
+        float vz = (b.pose.z - a.pose.z) * inv;
+        const float norme = std::sqrt(vx * vx + vy * vy + vz * vz);
+        if (norme > kVitesseMaxMS)
+        {
+            // On garde la DIRECTION et on ramène la norme : une vitesse aberrante reste un
+            // mouvement dans un sens plausible, et l'écraser à zéro figerait un avatar qui court
+            // vraiment. Ce qu'on refuse, c'est de la CROIRE sur sa magnitude.
+            const float k = kVitesseMaxMS / norme;
+            vx *= k;
+            vy *= k;
+            vz *= k;
+        }
+        r.vx = vx;
+        r.vy = vy;
+        r.vz = vz;
     }
 
     Entree m_entrees[kProfondeurTampon]{};
