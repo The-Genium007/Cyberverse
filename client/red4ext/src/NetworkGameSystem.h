@@ -86,6 +86,26 @@ extern std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
 // seulement si une session longue le montre ; le purger serait pire que le garder, puisqu'oublier
 // qu'on a vu quelqu'un le rend à nouveau duplicable.
 extern std::set<uint64_t> g_dejaVus;
+
+/// Compteurs de santé du roster — pour qu'une régression SE VOIE sans être reproduite.
+///
+/// Un ratio « créés / refusés » qui bascule dit qu'une garde a cessé de mordre, et lequel des
+/// compteurs bouge dit LAQUELLE. Journalisés périodiquement (voir `NettoyerRemplacants`).
+struct StatsRoster
+{
+    std::uint64_t crees = 0;
+    /// Retirés parce que quelqu'un d'autre occupe la place (garde spatiale).
+    std::uint64_t retiresPlaceOccupee = 0;
+    /// Purgés parce que trop loin du joueur — le nettoyage de fond.
+    std::uint64_t purgesDistance = 0;
+    /// Oubliés parce que l'entité locale n'existait plus (le moteur l'avait déjà détruite).
+    std::uint64_t oubliesDisparus = 0;
+    /// Refusés à la création : on avait déjà vu ce PNJ présent (déchargement, pas divergence).
+    std::uint64_t refusesDejaVu = 0;
+    /// Refusés à la création : un remplaçant tient déjà cet endroit.
+    std::uint64_t refusesEndroitPris = 0;
+};
+extern StatsRoster g_statsRoster;
 // Cellules de halo deja recues du serveur. Meme decoupage que `halo.rs` cote serveur — 64 m.
 extern std::set<std::pair<int32_t, int32_t>> g_cellulesRecues;
 constexpr float kCoteCelluleM = 64.0f;
@@ -175,6 +195,12 @@ private:
 
     std::map<RED4ext::ent::EntityID, RED4ext::Handle<RED4ext::AICommand>> m_LastTeleportCommand;
     float m_TimeSinceLastPlayerPositionSync;
+    /// Horloges de la passe de nettoyage du roster et de son bilan périodique.
+    float m_tempsDepuisNettoyage = 0.0f;
+    float m_tempsDepuisBilanRoster = 0.0f;
+    /// Tourniquet : dernier remplaçant examiné, pour reprendre où l'on s'était arrêté et garder un
+    /// coût CONSTANT quelle que soit la taille de la table.
+    std::uint64_t m_dernierRemplacantExamine = 0;
 
     // --- Autorité serveur (TesseraSynth) ---
     // Dernier ShardAssignment reçu : placement autoritaire décidé par le serveur (topology.locate),
@@ -392,6 +418,12 @@ protected:
     // Complete le roster : cree un remplacant LOCAL pour un statique absent, le retire quand le
     // natif arrive. Spec 2026-08-09 (complétion asymétrique).
     void ReparerRoster();
+    /// Filet de fond : détruit les remplaçants qui n'ont plus lieu d'être (entité disparue,
+    /// joueur parti trop loin). Bornée en travail ET en fréquence — voir le corps.
+    void NettoyerRemplacants(float deltaTime);
+    /// Teardown : détruit TOUS nos remplaçants. Appelé à la déconnexion — sans ça ils survivent
+    /// à la session qui les a créés.
+    void DetruireTousLesRemplacants(const char* raison);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le

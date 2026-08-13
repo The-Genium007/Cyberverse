@@ -204,6 +204,7 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
     DrainerRapportsStatiques();
     HydraterApparencesDiscretement();
     ReparerRoster();
+    NettoyerRemplacants(frame_info.deltaTime);
 
     if (!m_hasTriedToConnect)
     {
@@ -306,7 +307,13 @@ void NetworkGameSystem::ConnectionStatusChangedCallback(SteamNetConnectionStatus
         // Notre serveur n'a pas d'ACK d'auth : connexion etablie = pret.
         system->FullyConnected = true;
     } else {
-        Red::GetGameSystem<NetworkGameSystem>()->FullyConnected = false;
+        auto* systeme = Red::GetGameSystem<NetworkGameSystem>();
+        systeme->FullyConnected = false;
+        // ⚠️ Nos remplaçants ne survivent PAS à la session qui les a créés. Sans ça, une
+        // déconnexion (serveur coupé, réseau perdu, retour au menu) laisse des PNJ fabriqués par
+        // nous debout dans un monde qui n'a plus d'autorité pour en parler — et la reconnexion en
+        // recrée par-dessus.
+        systeme->DetruireTousLesRemplacants("deconnexion");
     }
 }
 
@@ -457,6 +464,16 @@ std::map<uint64_t, InscriptionRoster> g_rosterStatiques;
 /// C'est la seule chose qu'on ait le droit de detruire — un natif ne se retire pas (F-PNJ-091).
 std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
 std::set<uint64_t> g_dejaVus;
+
+// ── COMPTEURS DE SANTÉ DU ROSTER ────────────────────────────────────────────────────────────
+//
+// Ils existent pour qu'une régression SE VOIE sans avoir à la reproduire. Trois fois en deux jours,
+// un chemin sans instrument n'a pas su distinguer « vide » de « ne s'exécute pas » (F-PNJ-149) ;
+// et la duplication signalée le 2026-08-13 a demandé une session entière d'archéologie de journaux
+// parce que rien ne comptait les refus.
+//
+// Un ratio « créés / refusés » qui bascule est le signal qu'une des gardes a cessé de mordre.
+StatsRoster g_statsRoster;
 // --- Rendu des avatars JOUEURS : l'etat, hors de la classe (cf. NetworkGameSystem.h) ---
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
@@ -1791,6 +1808,7 @@ void NetworkGameSystem::ReparerRoster()
                 SDK->logger->InfoF(PLUGIN,
                     "Roster : place de %llu occupee par un autre — notre remplacant retire", id);
                 g_remplacants.erase(id);
+                ++g_statsRoster.retiresPlaceOccupee;
                 ++faits;
             }
             continue;
@@ -1832,11 +1850,13 @@ void NetworkGameSystem::ReparerRoster()
         }
         if (g_dejaVus.contains(id))
         {
+            ++g_statsRoster.refusesDejaVu;
             continue;
         }
         // Quelqu'un tient déjà cet endroit : ce serait le 2e, le 10e, le 110e du même individu.
         if (occupees.contains(cleDePosition(inscription)))
         {
+            ++g_statsRoster.refusesEndroitPris;
             continue;
         }
         // Le redscript tranche : lui seul voit le joueur, l'entite et les distances. Une EntityID
@@ -1853,6 +1873,7 @@ void NetworkGameSystem::ReparerRoster()
             && cree.IsDefined())
         {
             g_remplacants[id] = cree;
+            ++g_statsRoster.crees;
             // Marquer l'endroit AVANT de sortir de la boucle : sans ça, les huit autres
             // identifiants du même individu, tous encore à parcourir dans CE passage, en
             // fabriqueraient chacun un de plus. `occupees` se reconstruit au passage suivant.
@@ -1861,6 +1882,129 @@ void NetworkGameSystem::ReparerRoster()
                 g_remplacants.size());
             ++faits;
         }
+    }
+}
+
+void NetworkGameSystem::DetruireTousLesRemplacants(const char* raison)
+{
+    if (g_remplacants.empty())
+    {
+        return;
+    }
+    const std::size_t combien = g_remplacants.size();
+    for (const auto& [id, entite] : g_remplacants)
+    {
+        (void)id;
+        Red::CallVirtual(this, "DestroyTransientEntity", entite);
+    }
+    g_remplacants.clear();
+    // ⚠️ `g_dejaVus` N'EST PAS vidé : ce qu'on a vu de ses yeux reste vrai après une déconnexion,
+    // et l'oublier rendrait chaque PNJ à nouveau duplicable à la reconnexion. Le roster, lui, sera
+    // renvoyé par le serveur.
+    SDK->logger->InfoF(PLUGIN, "Roster : %zu remplacants detruits (%s)", combien, raison);
+}
+
+void NetworkGameSystem::NettoyerRemplacants(float deltaTime)
+{
+    // ── LA CONTREPARTIE DE TOUTE CRÉATION ──────────────────────────────────────────────────
+    //
+    // Trois portes créent des remplaçants ; une seule les détruisait, et seulement quand quelqu'un
+    // d'autre occupait la place. Il manquait le cas le plus banal d'un jeu ouvert : le joueur
+    // s'éloigne, la cellule est oubliée côté serveur, et notre remplaçant reste debout pour le
+    // reste de la session. Rien ne l'aurait jamais retiré.
+    //
+    // Cette passe est le filet de fond. Elle ne remplace aucune garde — elle rattrape ce qu'elles
+    // laissent passer, y compris des cas qu'on n'a pas encore imaginés.
+    //
+    // ⚠️ BORNÉE EN TRAVAIL ET EN FRÉQUENCE. Un balayage complet à chaque frame sur une table qui
+    // compte des centaines d'entrées est exactement le défaut qui a coûté 428 ms/tick côté serveur
+    // (index de halo). Ici : une passe toutes les 2 s, 16 entrées au plus, reprise en tourniquet
+    // là où on s'était arrêté — donc coût constant quelle que soit la taille de la table.
+    static constexpr float kPeriodeS = 2.0f;
+    static constexpr std::size_t kParPasse = 16;
+    // 300 m et non 250 (le plafond de création) : SANS cette hystérésis, un remplaçant créé à la
+    // limite serait purgé au pas suivant, recréé, repurgé — un cycle qui clignote sous les yeux du
+    // joueur. Les 50 m d'écart sont la marge qui rend le cycle impossible.
+    static constexpr float kPurgeM = 300.0f;
+
+    m_tempsDepuisNettoyage += deltaTime;
+    if (m_tempsDepuisNettoyage < kPeriodeS)
+    {
+        return;
+    }
+    m_tempsDepuisNettoyage = 0.0f;
+    if (g_remplacants.empty())
+    {
+        return;
+    }
+
+    const auto joueur = Cyberverse::Utils::GetPlayer();
+    if (joueur == nullptr)
+    {
+        return; // pas de repère : on ne purge rien plutôt que de purger au hasard.
+    }
+    const auto pos = Cyberverse::Utils::Entity_GetWorldPosition(joueur);
+
+    // Tourniquet : on reprend après le dernier id traité, et on repart du début en fin de table.
+    auto it = g_remplacants.upper_bound(m_dernierRemplacantExamine);
+    if (it == g_remplacants.end())
+    {
+        it = g_remplacants.begin();
+    }
+    for (std::size_t faits = 0; faits < kParPasse && !g_remplacants.empty(); ++faits)
+    {
+        if (it == g_remplacants.end())
+        {
+            it = g_remplacants.begin();
+        }
+        const uint64_t id = it->first;
+        const RED4ext::ent::EntityID entite = it->second;
+        m_dernierRemplacantExamine = id;
+
+        // 1. L'entité a-t-elle disparu sans nous ? Le moteur détruit ce qu'il veut : garder une
+        //    fiche pour une entité morte fait grossir la table sans fin et fausse les compteurs.
+        if (!Cyberverse::Utils::GetDynamicEntity(entite).has_value())
+        {
+            ++g_statsRoster.oubliesDisparus;
+            it = g_remplacants.erase(it);
+            continue;
+        }
+
+        // 2. Trop loin : le joueur est parti, la cellule est oubliée côté serveur, ce remplaçant
+        //    n'a plus personne pour le regarder ni rien pour le justifier.
+        const auto inscrit = g_rosterStatiques.find(id);
+        if (inscrit != g_rosterStatiques.end())
+        {
+            const float dx = inscrit->second.x - pos.X;
+            const float dy = inscrit->second.y - pos.Y;
+            const float dz = inscrit->second.z - pos.Z;
+            if (std::sqrt(dx * dx + dy * dy + dz * dz) > kPurgeM)
+            {
+                Red::CallVirtual(this, "DestroyTransientEntity", entite);
+                ++g_statsRoster.purgesDistance;
+                it = g_remplacants.erase(it);
+                continue;
+            }
+        }
+        ++it;
+    }
+
+    // ── LE VÉRIFICATEUR ────────────────────────────────────────────────────────────────────
+    //
+    // Une ligne toutes les 30 s, qui dit d'un coup d'œil si le système se tient : combien vivent,
+    // combien ont été créés, et par quelle garde les autres ont été refusés. Un ratio qui bascule
+    // se voit ici sans avoir à reproduire quoi que ce soit.
+    m_tempsDepuisBilanRoster += kPeriodeS;
+    if (m_tempsDepuisBilanRoster >= 30.0f)
+    {
+        m_tempsDepuisBilanRoster = 0.0f;
+        SDK->logger->InfoF(PLUGIN,
+            "Roster : %zu vivants | crees %llu | retires(place) %llu purges(loin) %llu "
+            "oublies(disparus) %llu | refus dejavu %llu endroit %llu | roster %zu, dejavus %zu",
+            g_remplacants.size(), g_statsRoster.crees, g_statsRoster.retiresPlaceOccupee,
+            g_statsRoster.purgesDistance, g_statsRoster.oubliesDisparus,
+            g_statsRoster.refusesDejaVu, g_statsRoster.refusesEndroitPris,
+            g_rosterStatiques.size(), g_dejaVus.size());
     }
 }
 
