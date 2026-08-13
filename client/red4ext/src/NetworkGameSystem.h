@@ -110,6 +110,9 @@ struct StatsRoster
     /// Recalages francs d'avatar (dérive au-delà du seuil). C'est le compteur de la MALADIE :
     /// il doit rester proche de zéro. S'il monte, la boucle de suivi ne tient pas la cible.
     std::uint64_t recalagesAvatar = 0;
+    /// Passages où le moteur n'a pas su rendre l'entité de l'avatar. Piste du « délai au retour
+    /// dans le champ de vision » — hypothèse non mesurée, voir `PiloterAvatar`.
+    std::uint64_t avatarsIrresolus = 0;
 };
 extern StatsRoster g_statsRoster;
 // Cellules de halo deja recues du serveur. Meme decoupage que `halo.rs` cote serveur — 64 m.

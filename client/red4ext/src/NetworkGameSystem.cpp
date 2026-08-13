@@ -2779,6 +2779,29 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     const auto entite = Cyberverse::Utils::GetDynamicEntity(entityId);
     if (!entite.has_value())
     {
+        // ⚠️ CE SILENCE-LÀ EST PEUT-ÊTRE LE « délai beaucoup plus important » AU RETOUR DANS LE
+        // CHAMP DE VISION, signalé par Lucas le 2026-08-13. On ne le sait pas : ce chemin sortait
+        // sans rien dire, comme le recalage avant lui.
+        //
+        // L'hypothèse la mieux étayée — NON MESURÉE ICI, donc à traiter comme telle : le moteur
+        // dé-instancie l'avatar hors du champ, et `GetDynamicEntity` échoue tant qu'il n'est pas
+        // revenu. C'est la même famille que F-PNJ-088 (`FindEntityByID` rend nil sur un pantin
+        // vivant) et que la sonde `aoi_ladder`, qui n'a vu une entité se résoudre qu'après 3 s
+        // d'attente. Si c'est ça, le délai appartient au moteur et aucun réglage réseau ne le
+        // réduira — il faudra une sonde dédiée.
+        //
+        // On compte, on journalise à cadence basse, et la prochaine session tranchera par le
+        // chiffre au lieu de l'impression.
+        auto& suivi = g_suiviAvatars[networkId];
+        suivi.depuisLogS += deltaTime;
+        ++g_statsRoster.avatarsIrresolus;
+        if (suivi.depuisLogS >= 2.0f)
+        {
+            suivi.depuisLogS = 0.0f;
+            SDK->logger->InfoF(PLUGIN,
+                "[avatar %llu] entite IRRESOLUE (total %llu) — le moteur ne la rend pas",
+                networkId, g_statsRoster.avatarsIrresolus);
+        }
         return;
     }
 
@@ -2899,15 +2922,33 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     const float dz = positionVoulue.Z - position.Z;
     const float derive = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-    if (derive > kCorrectionMiniM && derive <= kSautFrancM)
+    // ⚠️ LA VERTICALE APPARTIENT AU MOTEUR, PAS À NOUS.
+    //
+    // Signalé par Lucas le 2026-08-13, juste après l'arrivée de la résorption douce : « on voit le
+    // personnage qui monte et qui descend ». C'est un artefact que J'AI créé, et le mécanisme est
+    // une bagarre à deux : le moteur pose le pantin AU SOL à chaque frame (il est contraint par la
+    // gravité et la géométrie), nous le poussons vers un Z interpolé qui n'est pas exactement le
+    // sol, le moteur le re-pose, nous re-poussons. À 60 fps, ça se voit comme une oscillation
+    // verticale — un personnage qui flotte et retombe sans arrêt.
+    //
+    // Sur l'horizontale il n'y a pas de bagarre : rien dans le moteur ne conteste un X/Y.
+    //
+    // On rend donc la verticale au moteur pour les petits écarts, et on ne la corrige que lorsque
+    // l'écart est FRANC — un étage, un escalier, une passerelle — c'est-à-dire quand il n'est plus
+    // explicable par le sol. 0,5 m : au-dessus d'une marche d'escalier et du bruit de terrain,
+    // en dessous d'un demi-étage.
+    static constexpr float kSeuilVerticalM = 0.5f;
+    const float deriveHorizontale = std::sqrt(dx * dx + dy * dy);
+    if (deriveHorizontale > kCorrectionMiniM && derive <= kSautFrancM)
     {
         // Résorption douce. On ne touche NI à la commande de marche (elle continue d'animer), ni
         // au yaw (l'orientation vient du moteur pendant qu'il marche ; l'imposer ici ferait
         // saccader le regard à chaque frame).
+        const float corrigeZ = std::fabs(dz) > kSeuilVerticalM ? dz * kFractionCorrection : 0.0f;
         const RED4ext::Vector4 pas{
             position.X + dx * kFractionCorrection,
             position.Y + dy * kFractionCorrection,
-            position.Z + dz * kFractionCorrection,
+            position.Z + corrigeZ,
             1.0f};
         SetEntityPosition(entityId, pas, pose.yaw);
     }
