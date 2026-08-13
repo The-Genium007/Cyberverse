@@ -456,6 +456,7 @@ std::map<uint64_t, InscriptionRoster> g_rosterStatiques;
 /// Nos remplacants : id du PNJ natif absent -> id de l'entite LOCALE qu'on a creee a sa place.
 /// C'est la seule chose qu'on ait le droit de detruire — un natif ne se retire pas (F-PNJ-091).
 std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
+std::set<uint64_t> g_dejaVus;
 // --- Rendu des avatars JOUEURS : l'etat, hors de la classe (cf. NetworkGameSystem.h) ---
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
@@ -1796,6 +1797,40 @@ void NetworkGameSystem::ReparerRoster()
         }
         const auto connu = g_apparenceConnueDepuis.find(id);
         if (connu == g_apparenceConnueDepuis.end() || maintenant - connu->second < kDelaiDeGrace)
+        {
+            continue;
+        }
+        // ── ON NE REMPLACE JAMAIS QUELQU'UN QU'ON A DÉJÀ VU DE SES YEUX ────────────────────
+        //
+        // Recette de Lucas, 2026-08-10 : « je m'approche d'un PNJ, il reste normal ; je tourne à
+        // 180° sur moi, il est dans mon dos ; je me retourne, je le vois normal et là il se
+        // duplique une fois. »
+        //
+        // Le journal donne le mécanisme, et ce n'est ni le champ de vision ni la garde spatiale :
+        //   [Etat] …;decharge;decharge     <- le moteur DÉCHARGE le natif passé dans le dos
+        //   [Etat] …;remplacant-cree       <- on le supplée aussitôt
+        // Au retour du regard, le natif re-streame : deux personnes, deux tenues.
+        //
+        // Le défaut est dans le délai de grâce, qui mesure la mauvaise chose : il court depuis que
+        // l'APPARENCE EST CONNUE, pas depuis la dernière fois où l'entité a été VUE. Passé dix
+        // secondes, la moindre absence — y compris un déchargement d'une seconde — déclenche un
+        // remplacement.
+        //
+        // Le bon critère est celui de la raison d'être du roster : compléter ce qui manque
+        // DURABLEMENT chez ce client (mesure du 2026-08-09 : 83 % de présence commune, PLAT sur
+        // neuf minutes — donc pas un retard de streaming). Un PNJ qu'on a vu présent au moins une
+        // fois n'est pas de cette famille : son absence est du déchargement, et il reviendra.
+        //
+        // ⚠️ Conséquence assumée : un PNJ vu une fois puis disparu pour de bon ne sera plus
+        // suppléé. C'est le bon compromis — un manque se voit moins qu'un doublon, et le doublon,
+        // lui, est certain.
+        bool presentMaintenant = false;
+        if (Red::CallVirtual(this, "TesseraEntiteExisteLocalement", presentMaintenant, cible)
+            && presentMaintenant)
+        {
+            g_dejaVus.insert(id);
+        }
+        if (g_dejaVus.contains(id))
         {
             continue;
         }

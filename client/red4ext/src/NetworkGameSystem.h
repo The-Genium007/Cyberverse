@@ -77,6 +77,15 @@ extern std::map<uint64_t, InscriptionRoster> g_rosterStatiques;
 // Nos remplacants : id du natif absent -> id de l'entite LOCALE creee a sa place. C'est la seule
 // entite qu'on ait le droit de detruire ; un PNJ de communaute ne se retire pas (F-PNJ-091).
 extern std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
+// Statiques du roster qu'on a VUS présents au moins une fois dans cette session. On ne les
+// supplée plus jamais : leur absence ultérieure est un déchargement du moteur (le PNJ passé dans
+// le dos du joueur), pas la divergence durable que le roster existe pour combler.
+//
+// ponytail: jamais purgé — un set qui grossit avec le nombre de statiques rencontrés dans la
+// session (ordre de grandeur : quelques milliers d'uint64, donc quelques dizaines de Ko). À borner
+// seulement si une session longue le montre ; le purger serait pire que le garder, puisqu'oublier
+// qu'on a vu quelqu'un le rend à nouveau duplicable.
+extern std::set<uint64_t> g_dejaVus;
 // Cellules de halo deja recues du serveur. Meme decoupage que `halo.rs` cote serveur — 64 m.
 extern std::set<std::pair<int32_t, int32_t>> g_cellulesRecues;
 constexpr float kCoteCelluleM = 64.0f;
