@@ -592,6 +592,37 @@ void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID
     SetEntityPosition(entityId, worldPosition, yaw);
 }
 
+void NetworkGameSystem::PlacerSansCommande(const RED4ext::ent::EntityID entityId,
+                                           RED4ext::Vector4 worldPosition, float yaw)
+{
+    // ── PLACEMENT PUR : AUCUNE COMMANDE D'IA ───────────────────────────────────────────────
+    //
+    // `SetEntityPosition` fait DEUX choses : il envoie un `AITeleportCommand` au contrôleur d'IA,
+    // PUIS il place l'entité. La première est ce qui rendait la résorption douce non seulement
+    // inutile mais NUISIBLE : en l'appelant à chaque frame, on empilait une commande de téléport
+    // par frame dans la file du contrôleur, et cette file est la MÊME que celle de la commande de
+    // marche. On annulait donc, soixante fois par seconde, l'ordre qui faisait marcher l'avatar.
+    //
+    // Ce que ça produit, et c'est exactement ce que Lucas décrit le 2026-08-13 : « le personnage
+    // reste statique sans animation avant de se déplacer », « ça crée du flou », « les animations
+    // ont du mal à se lancer ». Et la mesure le confirmait sans que je la lise : la dérive
+    // journalisée MONTAIT sans jamais redescendre — 6,61 puis 7,14 puis 7,86 puis 8,95 m — alors
+    // qu'une correction de 15 % par frame aurait dû la résorber en moins de 100 ms. Elle ne
+    // corrigeait rien parce qu'elle cassait le mécanisme qu'elle était censée aider.
+    //
+    // Ici : uniquement `TeleportationFacility`. L'entité bouge, la file de commandes n'est pas
+    // touchée, la marche continue. C'est ce que Q6b avait mesuré comme viable — un Teleport
+    // PENDANT une commande de marche active, pas un Teleport QUI REMPLACE la commande.
+    const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
+    if (!entity.has_value())
+    {
+        return;
+    }
+    const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yaw };
+    const auto teleportFacility = Red::GetGameSystem<RED4ext::TeleportationFacility>();
+    Red::CallVirtual(teleportFacility, "Teleport", entity.value(), worldPosition, angles);
+}
+
 void NetworkGameSystem::SetEntityPosition(const RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw)
 {
     const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
@@ -2706,8 +2737,29 @@ bool NetworkGameSystem::OnGameRestored()
 
 void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
 {
+    // ── 50 Hz, ALIGNÉ SUR LE TICK SERVEUR ──────────────────────────────────────────────────
+    //
+    // C'était 10 Hz. Le serveur tourne à 20 Hz et diffuse à 20 Hz : la moitié de ses snapshots
+    // relayait donc une position qu'il connaissait déjà. Tout ce qui se passait entre deux envois
+    // — un pas de côté, une rotation, un demi-tour — était perdu AVANT même d'atteindre le fil, et
+    // aucun tampon d'interpolation ne peut restituer ce qui n'a jamais été échantillonné.
+    //
+    // C'est la cause de fond de ce que Lucas décrit le 2026-08-13 : « les micro-déplacements, les
+    // rotations, ça crée du flou et ce n'est pas franc ». Ce sont précisément les mouvements les
+    // plus courts, donc les premiers à disparaître d'un échantillonnage trop lâche.
+    //
+    // ⚠️ CET ORDRE-LÀ N'EST PAS NÉGOCIABLE : il fallait d'abord passer le canal en NON-FIABLE.
+    // À 20 Hz sur un canal fiable, une perte aurait retenu deux fois plus de paquets, et le
+    // plafond de 40 messages/s du Gateway (`rate_limit.rs`) aurait été mangé à moitié par la
+    // position seule — alors que les rapports de statiques l'ont déjà saturé une fois
+    // (F-PNJ-131). Non fiable d'abord, cadence ensuite.
+    //
+    // On ne monte PAS au-delà : émettre plus vite que le serveur ne diffuse n'ajouterait que du
+    // trafic que personne ne lira. Cette période SUIT donc `default_tick_rate_hz()` côté serveur —
+    // 0,02 s = 50 Hz depuis le 2026-08-13.
+    static constexpr float kPeriodeEnvoiS = 0.02f;
     m_TimeSinceLastPlayerPositionSync += deltaTime;
-    if (m_TimeSinceLastPlayerPositionSync < 0.1f /* update rate*/)
+    if (m_TimeSinceLastPlayerPositionSync < kPeriodeEnvoiS)
     {
         return;
     }
@@ -2950,7 +3002,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             position.Y + dy * kFractionCorrection,
             position.Z + corrigeZ,
             1.0f};
-        SetEntityPosition(entityId, pas, pose.yaw);
+        // ⚠️ `PlacerSansCommande` et NON `SetEntityPosition` : ce dernier empile un ordre de
+        // téléport qui annule la marche en cours. Voir le corps de `PlacerSansCommande`.
+        PlacerSansCommande(entityId, pas, pose.yaw);
     }
 
     if (derive > kSautFrancM)

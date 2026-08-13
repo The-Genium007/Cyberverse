@@ -378,6 +378,10 @@ private:
     /// besoin, plus recalage si la dérive est trop grande.
     void PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
                        const Tessera::Sync::PoseRendue& pose, float deltaTime);
+    /// Place l'entité SANS toucher à sa file de commandes d'IA — voir le corps. À utiliser pour
+    /// toute correction continue ; `SetEntityPosition`, lui, envoie un ordre de téléport qui
+    /// ANNULE la commande de marche en cours.
+    void PlacerSansCommande(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
     void SetEntityPosition(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
     // Placement HYBRIDE : marche animée quand l'entité bouge et que la dérive est faible,
     // téléportation de correction sinon. Le mécanisme vient de F-PNJ-082/F-PLY-007, qui posent

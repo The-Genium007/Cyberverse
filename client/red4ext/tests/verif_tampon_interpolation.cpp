@@ -45,6 +45,17 @@ static void Proche(float obtenu, float attendu, const char* quoi, float toleranc
     }
 }
 
+// Instant d'un tick, EN SECONDES, derive de la cadence.
+//
+// ⚠️ Les instants etaient ecrits en dur (5,025 s pour le tick 100). Ca supposait 20 Hz sans le
+// dire : au passage a 50 Hz, quatorze verifications sont tombees d'un coup alors que le code
+// etait juste. Un test qui code en dur ce que le code calcule teste la constante, pas le
+// comportement.
+static double T(double tick)
+{
+    return tick * kPeriodeTickS;
+}
+
 static Pose PoseXY(float x, float y, float yaw = 0.0f, std::uint8_t loco = 1)
 {
     Pose p;
@@ -71,12 +82,12 @@ static void InterpoleExactementEntreDeuxEchantillons()
 
     PoseRendue r;
     // Tick 100 = 5,000 s ; tick 101 = 5,050 s. Milieu = 5,025 s.
-    Verifier(t.Echantillonner(5.025, r), "echantillonnage possible");
+    Verifier(t.Echantillonner(T(100.5), r), "echantillonnage possible");
     Proche(r.x, 0.05f, "x au milieu");
     Proche(r.y, 0.10f, "y au milieu");
     Verifier(!r.extrapolee, "milieu de deux echantillons = interpole, jamais extrapole");
-    Proche(r.vx, 2.0f, "vitesse x deduite", 0.01f);
-    Proche(r.vy, 4.0f, "vitesse y deduite", 0.01f);
+    Proche(r.vx, static_cast<float>(0.10 / kPeriodeTickS), "vitesse x deduite", 0.01f);
+    Proche(r.vy, static_cast<float>(0.20 / kPeriodeTickS), "vitesse y deduite", 0.01f);
 }
 
 static void LeYawPrendLePlusCourtChemin()
@@ -94,7 +105,7 @@ static void LeYawPrendLePlusCourtChemin()
     t.Pousser(10, PoseXY(0.0f, 0.0f, 350.0f));
     t.Pousser(11, PoseXY(0.0f, 0.0f, 10.0f));
     PoseRendue r;
-    Verifier(t.Echantillonner(0.525, r), "echantillonnage possible");
+    Verifier(t.Echantillonner(T(10.5), r), "echantillonnage possible");
     Proche(r.yaw, 0.0f, "yaw interpole par le tampon");
 }
 
@@ -110,25 +121,31 @@ static void UnEchantillonPerimeEstIgnore()
     Verifier(t.Nombre() == 2, "les deux intrus n'entrent pas");
     Verifier(t.DernierTick() == 101, "le dernier tick reste 101");
     PoseRendue r;
-    Verifier(t.Echantillonner(5.050, r), "echantillonnage possible");
+    Verifier(t.Echantillonner(T(101), r), "echantillonnage possible");
     Proche(r.x, 1.0f, "la pose perimee n'a rien ecrase");
 }
 
 static void ExtrapolationBorneePuisGel()
 {
     std::printf("l'extrapolation est bornee, puis l'avatar fige\n");
+    // ⚠️ Une allure REALISTE, et derivee de la cadence. Ce test poussait 1 m par tick — soit 20 m/s
+    // a 20 Hz, mais 50 m/s a 50 Hz, donc AU-DESSUS de la bride, et il tombait. Ce qu'on mesure ici
+    // est l'extrapolation, pas la bride (elle a son propre test) : on prend donc une vitesse qui
+    // reste sous le plafond quelle que soit la cadence.
+    constexpr float kVitesse = 2.0f; // m/s, une marche
+    const float pas = kVitesse * static_cast<float>(kPeriodeTickS);
     TamponPose t;
-    t.Pousser(100, PoseXY(0.0f, 0.0f)); // 5,000 s
-    t.Pousser(101, PoseXY(1.0f, 0.0f)); // 5,050 s, soit 20 m/s
+    t.Pousser(100, PoseXY(0.0f, 0.0f));
+    t.Pousser(101, PoseXY(pas, 0.0f));
 
     PoseRendue juste, borne, bienApres;
-    Verifier(t.Echantillonner(5.100, juste), "50 ms apres le dernier");
-    Verifier(t.Echantillonner(5.300, borne), "250 ms apres = la borne exacte");
-    Verifier(t.Echantillonner(9.999, bienApres), "tres au-dela de la borne");
+    Verifier(t.Echantillonner(T(101) + 0.050, juste), "50 ms apres le dernier");
+    Verifier(t.Echantillonner(T(101) + kExtrapolationMaxS, borne), "a la borne exacte");
+    Verifier(t.Echantillonner(T(101) + 5.0, bienApres), "tres au-dela de la borne");
 
     Verifier(juste.extrapolee, "au-dela du dernier echantillon = extrapole");
-    Proche(juste.x, 2.0f, "extrapolation lineaire sur 50 ms");
-    Proche(borne.x, 1.0f + 20.0f * 0.25f, "extrapolation a la borne (250 ms)");
+    Proche(juste.x, pas + kVitesse * 0.050f, "extrapolation lineaire sur 50 ms");
+    Proche(borne.x, pas + kVitesse * static_cast<float>(kExtrapolationMaxS), "extrapolation a la borne");
     Proche(bienApres.x, borne.x, "au-dela de la borne, la position ne bouge plus");
 }
 
@@ -170,7 +187,7 @@ static void LEtatDAnimationNAntipipeJamais()
     t.Pousser(101, PoseXY(1.0f, 0.0f, 0.0f, /*loco=*/3)); // sprint
 
     PoseRendue r;
-    Verifier(t.Echantillonner(5.049, r), "juste avant le second echantillon");
+    Verifier(t.Echantillonner(T(101) - 0.001, r), "juste avant le second echantillon");
     Verifier(r.locomotion == 1, "encore en marche : une posture est ce qu'elle etait");
 }
 
@@ -182,10 +199,10 @@ static void LHorlogeSAmorceRattrapeEtSaute()
 
     h.ObserverSnapshot(100); // 5,000 s - 0,100 s de delai
     Verifier(h.Amorcee(), "amorcee au premier snapshot");
-    Proche(static_cast<float>(h.TempsRendu()), 4.9f, "amorcage direct sur la cible");
+    Proche(static_cast<float>(h.TempsRendu()), static_cast<float>(T(100) - kDelaiInterpolationS), "amorcage direct sur la cible");
 
     h.Avancer(0.05);
-    Proche(static_cast<float>(h.TempsRendu()), 4.95f, "avance avec le temps local");
+    Proche(static_cast<float>(h.TempsRendu()), static_cast<float>(T(100) - kDelaiInterpolationS + 0.05), "avance avec le temps local");
 
     // Petit ecart : rattrapage DOUX, jamais un saut.
     const double avant = h.TempsRendu();
@@ -194,7 +211,7 @@ static void LHorlogeSAmorceRattrapeEtSaute()
 
     // Grosse discontinuite : saut franc.
     h.ObserverSnapshot(2000); // cible = 100,000 - 0,100
-    Proche(static_cast<float>(h.TempsRendu()), 99.9f, "saut franc au-dela du seuil", 0.01f);
+    Proche(static_cast<float>(h.TempsRendu()), static_cast<float>(T(2000) - h.DelaiCourant()), "saut franc au-dela du seuil", 0.01f);
 }
 
 static void LePointDeViseeEstDevantEtStableALArret()
@@ -274,11 +291,11 @@ static void LAgeDuDernierEchantillonDitQuandLeFilSeTait()
     TamponPose t;
     t.Pousser(100, PoseXY(0.0f, 0.0f)); // tick 100 = 5,000 s
     // On rend a 5,000 s : l'echantillon vient d'arriver.
-    Proche(static_cast<float>(t.AgeDuDernierEchantillon(5.0)), 0.0f, "frais");
+    Proche(static_cast<float>(t.AgeDuDernierEchantillon(T(100))), 0.0f, "frais");
     // On rend a 5,500 s alors que rien n'est arrive depuis : le fil est muet depuis 500 ms.
-    Proche(static_cast<float>(t.AgeDuDernierEchantillon(5.5)), 0.5f, "500 ms de silence");
+    Proche(static_cast<float>(t.AgeDuDernierEchantillon(T(100) + 0.5)), 0.5f, "500 ms de silence");
     TamponPose vide;
-    Proche(static_cast<float>(vide.AgeDuDernierEchantillon(9.0)), 0.0f,
+    Proche(static_cast<float>(vide.AgeDuDernierEchantillon(T(180))), 0.0f,
            "un tampon vide ne pretend pas avoir un age");
 }
 
@@ -292,14 +309,14 @@ static void UneVitesseAberranteEstBridee()
     t.Pousser(101, PoseXY(5.0f, 0.0f));
 
     PoseRendue r;
-    Verifier(t.Echantillonner(5.025, r), "echantillonnage possible");
+    Verifier(t.Echantillonner(T(100.5), r), "echantillonnage possible");
     const float norme = std::sqrt(r.vx * r.vx + r.vy * r.vy + r.vz * r.vz);
     Verifier(norme <= kVitesseMaxMS + 1e-3f, "la vitesse est bridee au plafond");
     Verifier(r.vx > 0.0f, "mais la DIRECTION est conservee");
 
     // Et surtout : l'extrapolation a la borne ne doit plus faire de saut de dizaines de metres.
     PoseRendue loin;
-    Verifier(t.Echantillonner(9.999, loin), "tres au-dela de la borne");
+    Verifier(t.Echantillonner(T(101) + 5.0, loin), "tres au-dela de la borne");
     const float saut = std::sqrt((loin.x - 5.0f) * (loin.x - 5.0f) + loin.y * loin.y);
     Verifier(saut <= kVitesseMaxMS * static_cast<float>(kExtrapolationMaxS) + 0.01f,
              "l'extrapolation reste bornee par la vitesse bridee");
@@ -319,7 +336,7 @@ static void UneDiscontinuiteCoupeAuLieuDeGlisser()
     Verifier(t.Nombre() == 1, "l'historique est jete : on ne glisse pas a travers la ville");
 
     PoseRendue r;
-    Verifier(t.Echantillonner(102.0 * kPeriodeTickS, r), "echantillonnage possible");
+    Verifier(t.Echantillonner(T(102), r), "echantillonnage possible");
     Proche(r.x, 500.0f, "on est NET a la nouvelle position, pas quelque part entre les deux");
     Proche(r.vx, 0.0f, "et sans vitesse heritee du saut");
 }

@@ -29,8 +29,15 @@
 
 namespace Tessera::Sync {
 
-/// Période d'un tick serveur, en secondes (`default_tick_rate_hz()` = 20 Hz côté Rust).
-inline constexpr double kPeriodeTickS = 0.05;
+/// Période d'un tick serveur, en secondes.
+///
+/// ⚠️ CONTRAT PARTAGÉ AVEC LE SERVEUR — `default_tick_rate_hz()` (`lib.rs`). Cette constante
+/// convertit un NUMÉRO DE TICK en SECONDES : si les deux côtés ne s'accordent pas dessus, le
+/// client interpole sur une timeline fausse, tout paraît en avance ou en retard, et AUCUN test ne
+/// le signale — les deux compilent, les deux tournent, et seul l'œil voit que ça glisse.
+///
+/// 0,02 s = 50 Hz depuis le 2026-08-13 (c'était 0,05 / 20 Hz).
+inline constexpr double kPeriodeTickS = 0.02;
 
 /// Délai de rendu des entités distantes. Deux intervalles de snapshot : il faut un
 /// échantillon de part et d'autre de l'instant rendu pour interpoler, et un seul
@@ -73,10 +80,17 @@ inline constexpr double kEcartRecalageFrancS = 0.5;
 /// vif pour ne pas accumuler une dérive permanente.
 inline constexpr double kRattrapageHorloge = 0.1;
 
-/// Profondeur du tampon, en échantillons. À 20 Hz, 8 échantillons = 400 ms d'historique —
-/// quatre fois le délai d'interpolation, donc de la marge pour une rafale en retard, sans
-/// garder un passé dont personne ne se sert.
-inline constexpr std::size_t kProfondeurTampon = 8;
+/// Profondeur du tampon, en ÉCHANTILLONS — donc une DURÉE qui dépend de la cadence.
+///
+/// ⚠️ CE COUPLAGE EST UN PIÈGE, et il a failli passer. La profondeur était de 8, ce qui valait
+/// 400 ms à 20 Hz. À 50 Hz les mêmes 8 échantillons ne couvrent plus que **160 ms** — moins que le
+/// délai d'interpolation adaptatif, qui peut monter à 350 ms. Le tampon se serait vidé par
+/// construction, on aurait extrapolé en permanence, et le symptôme aurait ressemblé à un problème
+/// de réseau alors qu'il n'aurait été qu'une constante oubliée.
+///
+/// 24 échantillons = 480 ms à 50 Hz : au-dessus du plafond du délai adaptatif (350 ms), avec de
+/// quoi absorber une rafale en retard. Toute modification de `kPeriodeTickS` doit repasser ici.
+inline constexpr std::size_t kProfondeurTampon = 24;
 
 /// Pose telle qu'elle arrive du serveur, déjà déquantifiée. Pas de `frame`/`slot` ici :
 /// le serveur résout tout en espace MONDE avant d'émettre (ADR 0013).
