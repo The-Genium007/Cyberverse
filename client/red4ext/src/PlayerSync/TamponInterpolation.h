@@ -41,6 +41,16 @@ inline constexpr double kPeriodeTickS = 0.05;
 /// joueur local, lui, ne subit aucun retard — il est déplacé par le moteur.
 inline constexpr double kDelaiInterpolationS = 0.100;
 
+/// Plafond du délai adaptatif. Au-delà, on cesse d'allonger : un réseau qui exige plus d'un
+/// tiers de seconde de tampon a un problème que le tampon ne réglera pas, et le retard visuel
+/// deviendrait pire que le symptôme qu'on corrige.
+inline constexpr double kDelaiInterpolationMaxS = 0.35;
+
+/// Vitesse de DESCENTE de la gigue retenue (fraction résorbée par snapshot). Volontairement lente :
+/// ~0,02 par snapshot, soit quelques secondes pour revenir au plancher après une rafale. La montée,
+/// elle, est immédiate — voir `HorlogeRendu::DelaiCourant`.
+inline constexpr double kDecrueGigue = 0.02;
+
 /// Au-delà, on cesse d'extrapoler et on FIGE. Extrapoler sans borne fabrique un avatar
 /// qui traverse les murs en ligne droite pendant une coupure réseau — un mensonge plus
 /// coûteux qu'un arrêt visible.
@@ -134,7 +144,12 @@ public:
     /// PART côté client aujourd'hui. C'est la donnée dont tout ce fichier dépend.
     void ObserverSnapshot(std::uint64_t tick) noexcept
     {
-        const double cible = static_cast<double>(tick) * kPeriodeTickS - kDelaiInterpolationS;
+        if (m_amorcee)
+        {
+            ObserverIntervalle(m_depuisDernierSnapshot);
+        }
+        m_depuisDernierSnapshot = 0.0;
+        const double cible = static_cast<double>(tick) * kPeriodeTickS - DelaiCourant();
         if (!m_amorcee)
         {
             m_tempsRendu = cible;
@@ -160,15 +175,54 @@ public:
         if (m_amorcee)
         {
             m_tempsRendu += dt;
+            m_depuisDernierSnapshot += dt;
         }
     }
 
     [[nodiscard]] double TempsRendu() const noexcept { return m_tempsRendu; }
     [[nodiscard]] bool Amorcee() const noexcept { return m_amorcee; }
 
+    /// Délai d'interpolation EFFECTIF, en secondes. Grandit avec la gigue observée.
+    ///
+    /// ── POURQUOI IL NE PEUT PAS ÊTRE FIXE ──────────────────────────────────────────────
+    ///
+    /// Un délai fixe est un pari sur la régularité du réseau. Il tient tant que les snapshots
+    /// arrivent à intervalle régulier, et il lâche exactement quand ça compte : Lucas l'a observé
+    /// le 2026-08-13 — « quand plusieurs instances chargent, il y a des micro-coupures ». Un
+    /// chargement fait hoqueter l'émission ; le tampon s'assèche ; on extrapole ; ça flotte.
+    ///
+    /// La gigue mesurée ici, c'est l'écart entre l'intervalle THÉORIQUE de deux snapshots (50 ms)
+    /// et leur intervalle RÉEL d'arrivée. On en garde le pire récent, amorti, et on s'assure que
+    /// le délai le couvre — plus une marge d'un intervalle.
+    ///
+    /// ⚠️ Il MONTE vite et DESCEND lentement, et l'asymétrie est le cœur du réglage. Monter vite,
+    /// c'est absorber la rafale dès le premier symptôme. Descendre lentement, c'est ne pas
+    /// re-tomber dans le trou au premier calme trompeur — et surtout ne pas faire varier le retard
+    /// visuel en permanence, ce qui se verrait comme un ralenti/accéléré.
+    [[nodiscard]] double DelaiCourant() const noexcept
+    {
+        const double adaptatif = m_gigue + kPeriodeTickS;
+        const double d = adaptatif > kDelaiInterpolationS ? adaptatif : kDelaiInterpolationS;
+        return d > kDelaiInterpolationMaxS ? kDelaiInterpolationMaxS : d;
+    }
+
+    /// Gigue courante retenue, en secondes — exposée pour le diagnostic.
+    [[nodiscard]] double Gigue() const noexcept { return m_gigue; }
+
 private:
+    /// Met à jour la gigue depuis l'intervalle réel d'arrivée de deux snapshots.
+    void ObserverIntervalle(double intervalleReel) noexcept
+    {
+        const double ecart = intervalleReel - kPeriodeTickS;
+        const double retard = ecart > 0.0 ? ecart : 0.0;
+        // Montée immédiate, descente amortie : voir `DelaiCourant`.
+        m_gigue = retard > m_gigue ? retard : m_gigue + (retard - m_gigue) * kDecrueGigue;
+    }
+
     double m_tempsRendu = 0.0;
     bool m_amorcee = false;
+    double m_gigue = 0.0;
+    double m_depuisDernierSnapshot = 0.0;
 };
 
 /// Historique récent d'UNE entité réseau, et l'échantillonnage qui en tire une pose.
@@ -247,6 +301,21 @@ public:
     }
 
     [[nodiscard]] std::size_t Nombre() const noexcept { return m_nombre; }
+
+    /// Âge du dernier échantillon reçu, en secondes, à l'instant `tempsRendu`.
+    ///
+    /// C'est la mesure de SANTÉ DU FIL pour cette entité, et elle est distincte de
+    /// `PoseRendue::extrapolee` : extrapoler 50 ms est normal (un paquet perdu sur un canal
+    /// délibérément non fiable), un fil muet depuis une demi-seconde ne l'est pas. Confondre les
+    /// deux fait soit figer un avatar qui va bien, soit laisser courir un avatar dont plus
+    /// personne ne donne de nouvelles.
+    ///
+    /// Négatif si l'instant demandé précède le dernier échantillon — c'est le cas NOMINAL, puisque
+    /// l'on rend volontairement en retard de `kDelaiInterpolationS`.
+    [[nodiscard]] double AgeDuDernierEchantillon(double tempsRendu) const noexcept
+    {
+        return m_nombre == 0 ? 0.0 : tempsRendu - Temps(DernierTick());
+    }
 
     [[nodiscard]] std::uint64_t DernierTick() const noexcept
     {

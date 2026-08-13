@@ -104,6 +104,9 @@ struct StatsRoster
     std::uint64_t refusesDejaVu = 0;
     /// Refusés à la création : un remplaçant tient déjà cet endroit.
     std::uint64_t refusesEndroitPris = 0;
+    /// Avatars figés parce que leur fil s'est tu (micro-coupure) — voir `PiloterAvatar`.
+    /// Un compteur qui monte sans arrêt dit que le réseau souffre, pas que le code est faux.
+    std::uint64_t avatarsFiges = 0;
 };
 extern StatsRoster g_statsRoster;
 // Cellules de halo deja recues du serveur. Meme decoupage que `halo.rs` cote serveur — 64 m.
@@ -137,6 +140,10 @@ struct SuiviAvatar
     /// Temps écoulé depuis la dernière ligne de diagnostic — voir `PiloterAvatar`.
     float depuisLogS = 0.0f;
     bool commande = false;
+    /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
+    /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai
+    /// avant que ça se déclenche » signalé le 2026-08-13.
+    std::uint8_t derniereLocomotion = 0;
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 

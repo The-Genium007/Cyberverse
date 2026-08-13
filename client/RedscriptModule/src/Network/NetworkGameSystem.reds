@@ -1068,6 +1068,41 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // FIGE un avatar sur place : annule sa marche en cours et le tient immobile.
+    //
+    // ── POURQUOI CETTE FONCTION EXISTE ─────────────────────────────────────────────────────
+    //
+    // Observé par Lucas le 2026-08-13, quand plusieurs instances chargent en même temps : « il y a
+    // des micro-coupures et le PNJ reprend la main sur le joueur » — l'avatar se met à marcher tout
+    // seul, comme un passant.
+    //
+    // Ce n'est pas le moteur qui reprend la main, c'est NOUS qui ne la lâchons pas. La commande de
+    // marche est CONTINUE et NON TERMINANTE par conception (c'est ce qui produit une locomotion
+    // fluide). Quand le fil se tait, plus rien ne la remplace : le moteur continue d'exécuter le
+    // dernier ordre reçu, c'est-à-dire de marcher vers un point de visée périmé.
+    //
+    // Un avatar figé est un défaut VISIBLE et honnête — le joueur d'en face comprend que quelqu'un
+    // a lagué. Un avatar qui part en promenade est un défaut MENSONGER : il raconte une action que
+    // personne n'a faite, et en RP c'est bien pire.
+    //
+    // `AIHoldPositionCommand` avec une durée courte, réémise tant que le fil se tait : elle
+    // remplace la commande de marche dans la file, donc elle l'annule de fait.
+    public func TesseraFigerAvatar(entityId: EntityID) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let controller = puppet.GetAIControllerComponent();
+        if !IsDefined(controller) {
+            return false;
+        }
+        let cmd = new AIHoldPositionCommand();
+        cmd.duration = 1.0;
+        controller.SendCommand(cmd);
+        return true;
+    }
+
     public func StopAICommand(puppet: ref<ScriptedPuppet>, command: ref<AICommand>) {
         let component = puppet.GetAIControllerComponent();
         if (EnumInt(component.GetCommandState(command)) != EnumInt(AICommandState.Success)) {

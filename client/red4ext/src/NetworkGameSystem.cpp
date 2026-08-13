@@ -464,6 +464,9 @@ std::map<uint64_t, InscriptionRoster> g_rosterStatiques;
 /// C'est la seule chose qu'on ait le droit de detruire — un natif ne se retire pas (F-PNJ-091).
 std::map<uint64_t, RED4ext::ent::EntityID> g_remplacants;
 std::set<uint64_t> g_dejaVus;
+/// Depuis quand un id reseau est absent des snapshots — l'echeance du delai de grace avant
+/// despawn. Vide en regime nominal : une entree n'y vit que le temps d'une absence.
+std::map<uint64_t, std::chrono::steady_clock::time_point> g_absentsDepuis;
 
 // ── COMPTEURS DE SANTÉ DU ROSTER ────────────────────────────────────────────────────────────
 //
@@ -782,9 +785,40 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_PositionUpdate, pu.Union());
     builder.Finish(env);
+    // ── LE SEUL FLUX QUI PART EN NON-FIABLE, ET C'EST DÉLIBÉRÉ ─────────────────────────────
+    //
+    // Dette relevée à l'audit du **2026-07-02** et jamais payée : « envois client toujours en
+    // Reliable alors que le serveur est déjà en unreliable pour les snapshots — il manque le
+    // pendant client ».
+    //
+    // Pourquoi ça coûte cher. Un canal fiable garantit l'ORDRE : un paquet perdu RETIENT tous les
+    // suivants jusqu'à sa retransmission. Le serveur voit donc le joueur FIGÉ pendant un RTT, puis
+    // reçoit d'un coup une rafale de positions périmées dont il ne garde que la dernière. Vu d'en
+    // face : un gel, puis un saut. C'est le pire des deux mondes pour une donnée dont seule la
+    // PLUS RÉCENTE compte.
+    //
+    // Le protocole énonce déjà la règle pour `VehicleInput` : « canal NON-FIABLE — un paquet d'état
+    // périmé se jette, ne s'attend pas ». Une position est exactement de cette famille.
+    //
+    // `NoNagle` en plus : Nagle regroupe les petits paquets pour économiser des en-têtes, au prix
+    // de quelques millisecondes d'attente. Sur un flux de position à cadence fixe, ces
+    // millisecondes sont de la latence pure et l'économie est nulle — les paquets partent déjà
+    // espacés.
+    //
+    // ⚠️ CE QUE ÇA INTRODUIT, ET POURQUOI ON L'ACCEPTE. Le non-fiable autorise le DÉSORDRE : un
+    // paquet en retard peut appliquer côté serveur une position plus ancienne que la courante. Le
+    // dégât est borné à UNE période d'envoi et corrigé par le paquet suivant. Surtout il est
+    // INVISIBLE en aval : les autres clients rendent avec un tampon d'interpolation qui lisse
+    // précisément ce transitoire, et qui rejette déjà les ticks périmés (`TamponPose::Pousser`).
+    // Un gel d'un RTT, lui, ne se lisse pas.
+    //
+    // Un numéro de séquence sur `PositionUpdate` rendrait le rejet explicite côté serveur — c'est
+    // ce que le schéma a fait pour `VehicleInput` (« `tick` est OBLIGATOIRE et c'est le champ le
+    // plus important »). Il n'est pas ajouté ici : ce serait toucher un protocole gelé pour un
+    // défaut dont on n'a pas mesuré qu'il se voit. À faire si une mesure le montre.
     m_pInterface->SendMessageToConnection(
         m_hConnection, builder.GetBufferPointer(), builder.GetSize(),
-        k_nSteamNetworkingSend_Reliable, nullptr);
+        k_nSteamNetworkingSend_UnreliableNoNagle, nullptr);
 }
 
 void NetworkGameSystem::SendClientTimeReport()
@@ -1045,11 +1079,53 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         }
     }
 
-    // Ids disparus du snapshot -> despawn.
+    // Ids disparus du snapshot -> despawn, APRÈS UN DÉLAI DE GRÂCE.
+    //
+    // ── POURQUOI ON N'EFFACE PLUS TOUT DE SUITE ────────────────────────────────────────────
+    //
+    // Signalé par Lucas le 2026-08-13 : quand plusieurs instances chargent, il y a des
+    // micro-coupures. Côté serveur, une déconnexion retire le joueur du monde IMMÉDIATEMENT
+    // (`world.remove_player`) : le snapshot suivant ne le contient plus, et on détruisait son
+    // avatar dans la foulée. Une coupure d'une seconde produisait donc une disparition franche
+    // suivie d'une réapparition — le pire des deux, parce qu'un avatar qui clignote est plus
+    // troublant qu'un avatar figé.
+    //
+    // On garde donc le corps quelques secondes. Il ne bouge pas — `PiloterAvatar` le fige dès que
+    // son fil se tait depuis 400 ms — et il repart tout seul si le joueur revient sous le même id.
+    //
+    // ⚠️ POURQUOI CE DÉLAI VIT ICI ET PAS SUR LE SERVEUR. Le faire côté serveur serait plus propre
+    // en apparence, et c'est un piège : à la reconnexion, GNS attribue un NOUVEL identifiant de
+    // connexion. Retenir l'ancien pendant la grâce ferait coexister deux entrées pour la même
+    // personne — un jumeau fantôme, exactement la classe de défaut qu'on vient de corriger sur les
+    // statiques. Un délai de grâce serveur exige une continuité d'IDENTITÉ entre deux connexions,
+    // qui n'est pas mesurée ici. Côté client, la question ne se pose pas : si l'id change, l'ancien
+    // avatar s'éteint à l'échéance et le nouveau naît — le comportement d'avant, sans le
+    // clignotement pour les coupures qui ne changent pas l'id.
+    //
+    // 3 s : au-dessus d'une micro-coupure, bien en dessous d'une absence réelle. Un joueur qui sort
+    // de l'AoI en marchant met plus longtemps que ça à revenir.
+    static constexpr auto kGraceDisparitionS = std::chrono::seconds(3);
+    const auto maintenant = std::chrono::steady_clock::now();
+    for (const auto& [id, _] : m_networkedEntitiesLookup)
+    {
+        if (present.contains(id))
+        {
+            g_absentsDepuis.erase(id); // revenu (ou jamais parti) : l'échéance est annulée.
+        }
+        else
+        {
+            g_absentsDepuis.try_emplace(id, maintenant);
+        }
+    }
+
     for (auto it = m_networkedEntitiesLookup.begin(); it != m_networkedEntitiesLookup.end();)
     {
-        if (!present.contains(it->first))
+        const auto absent = g_absentsDepuis.find(it->first);
+        const bool echu = absent != g_absentsDepuis.end()
+            && maintenant - absent->second >= kGraceDisparitionS;
+        if (echu)
         {
+            g_absentsDepuis.erase(it->first);
             if (!Red::CallVirtual(this, "DestroyTransientEntity", it->second))
             {
                 SDK->logger->Warn(PLUGIN, "Echec despawn avatar reseau");
@@ -1068,6 +1144,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // sortie d'AoI ferait interpoler le respawn depuis une position vieille de plusieurs
             // secondes — l'avatar traverserait la rue pour rejoindre son propre passe.
             g_tamponsJoueurs.erase(it->first);
+            g_absentsDepuis.erase(it->first);
             g_suiviAvatars.erase(it->first);
             it = m_networkedEntitiesLookup.erase(it);
         }
@@ -1842,14 +1919,25 @@ void NetworkGameSystem::ReparerRoster()
         // ⚠️ Conséquence assumée : un PNJ vu une fois puis disparu pour de bon ne sera plus
         // suppléé. C'est le bon compromis — un manque se voit moins qu'un doublon, et le doublon,
         // lui, est certain.
+        // ⚠️ LE TEST MÉMOIRE D'ABORD, L'APPEL SCRIPT ENSUITE — l'ordre inverse était un chemin
+        // chaud, et le compteur l'a révélé : **2 208 063 refus** sur une session. Le garde était
+        // évalué APRÈS l'appel de présence, donc on payait un `CallVirtual` → `FindEntityByID` pour
+        // CHAQUE entrée du roster, à CHAQUE frame — ~173 entrées × 60 fps ≈ 10 000 appels script
+        // par seconde, pour reconfirmer 173 fois par frame ce qu'on savait déjà.
+        //
+        // « Déjà vu » est définitif par construction : une fois l'entité aperçue, aucune mesure ne
+        // peut l'infirmer. Le relire coûte, n'apprend rien, et le coût tombe pile dans la boucle de
+        // rendu — donc en micro-saccades.
+        if (g_dejaVus.contains(id))
+        {
+            ++g_statsRoster.refusesDejaVu;
+            continue;
+        }
         bool presentMaintenant = false;
         if (Red::CallVirtual(this, "TesseraEntiteExisteLocalement", presentMaintenant, cible)
             && presentMaintenant)
         {
             g_dejaVus.insert(id);
-        }
-        if (g_dejaVus.contains(id))
-        {
             ++g_statsRoster.refusesDejaVu;
             continue;
         }
@@ -2694,6 +2782,45 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         return;
     }
 
+    // ── FIL MUET : ON FIGE, ON NE LAISSE PAS COURIR ────────────────────────────────────────
+    //
+    // Observé par Lucas le 2026-08-13, plusieurs instances chargeant en meme temps : « il y a des
+    // micro-coupures et le PNJ reprend la main sur le joueur ». L'avatar se met a marcher seul.
+    //
+    // Ce n'est pas le moteur qui reprend la main, c'est NOUS qui ne la lachons pas. Notre commande
+    // de marche est CONTINUE et NON TERMINANTE — c'est ce qui produit une locomotion fluide. Quand
+    // le fil se tait, rien ne la remplace : le moteur continue d'executer le dernier ordre recu,
+    // c'est-a-dire de marcher vers un point de visee perime.
+    //
+    // ⚠️ Le seuil ne se confond PAS avec `pose.extrapolee`. Extrapoler 50 ms est NORMAL — le canal
+    // est delibrement non fiable, un paquet se perd. Un fil muet depuis 400 ms ne l'est pas.
+    // Figer sur `extrapolee` ferait clignoter tous les avatars a la moindre perte ; ne jamais figer
+    // les envoie se promener.
+    //
+    // 400 ms = huit intervalles de snapshot a 20 Hz. Assez long pour qu'une perte ordinaire, meme
+    // en rafale, ne declenche rien ; assez court pour qu'une micro-coupure ne devienne jamais une
+    // promenade.
+    //
+    // Un avatar fige est un defaut VISIBLE et honnete : le joueur d'en face comprend que quelqu'un
+    // a lague. Un avatar qui part en promenade est un defaut MENSONGER — il raconte une action que
+    // personne n'a faite, et en RP c'est bien pire.
+    static constexpr double kFilMuetS = 0.4;
+    const auto tampon = g_tamponsJoueurs.find(networkId);
+    if (tampon != g_tamponsJoueurs.end()
+        && tampon->second.AgeDuDernierEchantillon(g_horlogeRendu.TempsRendu()) > kFilMuetS)
+    {
+        auto& suivi = g_suiviAvatars[networkId];
+        if (suivi.commande)
+        {
+            bool fige = false;
+            Red::CallVirtual(this, "TesseraFigerAvatar", fige, entityId);
+            suivi.commande = false;
+            ++g_statsRoster.avatarsFiges;
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] fil muet — fige sur place", networkId);
+        }
+        return; // on ne corrige pas non plus la position : sans nouvelles, on n'invente rien.
+    }
+
     // ── IMMOBILE : rien a animer ───────────────────────────────────────────────────────────
     //
     // Une commande de marche vers un point ou l'on est deja produit un pietinement. On place, et
@@ -2764,7 +2891,32 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     const float vy = cy - suivi.cibleY;
     const float vz = cz - suivi.cibleZ;
     const bool cibleABouge = std::sqrt(vx * vx + vy * vy + vz * vz) > kEcartVisee;
-    if (suivi.commande && !cibleABouge && suivi.depuisS < kReemissionMaxS)
+
+    // ── L'ALLURE CHANGE : ON N'ATTEND PAS LE PROCHAIN CRÉNEAU ──────────────────────────────
+    //
+    // Signalé par Lucas le 2026-08-13 : « il y a un petit délai avant que ça se déclenche ».
+    //
+    // La cause était une cadence, pas une animation. La commande de marche n'était réémise qu'au
+    // plus tous les 250 ms ou quand le point de visée avait bougé d'un mètre et demi. Un joueur qui
+    // s'élance depuis l'arrêt pouvait donc attendre un quart de seconde AVANT que le premier ordre
+    // ne parte — et l'animation ne commence qu'à cet ordre. S'ajoutaient les 100 ms du tampon : le
+    // départ paraissait mou.
+    //
+    // Un changement d'allure est un ÉVÉNEMENT, pas une valeur qu'on échantillonne : il déclenche
+    // immédiatement. On économise jusqu'à 250 ms sur le démarrage, l'arrêt et chaque changement de
+    // rythme — sans toucher à la cadence de croisière, donc sans réintroduire le déluge d'ordres
+    // qui a fait tomber le jeu le 2026-08-06.
+    //
+    // ⚠️ CE QUE ÇA NE FAIT PAS. Le reste du délai appartient au moteur : le temps que son graphe
+    // d'animation fonde l'arrêt vers la marche. Le supprimer demanderait de piloter le graphe
+    // directement (`AnimationControllerComponent::ApplyFeature`), ce qui exige de connaître le NOM
+    // d'entrée du graphe pour la locomotion. Ce nom n'apparaît dans AUCUN script décompilé — c'est
+    // de la donnée, dans le graphe. Le deviner serait le piège du symbole inventé (F-SCR-019).
+    // Non mesuré, donc non fait : voir la sonde proposée au backlog.
+    const bool allureAChange = suivi.commande && suivi.derniereLocomotion != pose.locomotion;
+    suivi.derniereLocomotion = pose.locomotion;
+
+    if (suivi.commande && !cibleABouge && !allureAChange && suivi.depuisS < kReemissionMaxS)
     {
         return; // il est deja en route, dans la bonne direction : on le laisse marcher.
     }

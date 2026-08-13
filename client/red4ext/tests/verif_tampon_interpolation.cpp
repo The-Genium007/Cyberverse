@@ -214,6 +214,70 @@ static void LePointDeViseeEstDevantEtStableALArret()
     Proche(y, 5.0f, "a l'arret, on vise sa propre position");
 }
 
+static void LeDelaiSAdapteALaGigueEtRedescendLentement()
+{
+    std::printf("le delai grandit avec la gigue, et redescend lentement\n");
+    HorlogeRendu h;
+    h.ObserverSnapshot(100);
+    Proche(static_cast<float>(h.DelaiCourant()), 0.100f, "au repos : le plancher");
+
+    // Regime NOMINAL : un snapshot toutes les 50 ms, aucune gigue.
+    for (std::uint64_t t = 101; t < 110; ++t)
+    {
+        h.Avancer(kPeriodeTickS);
+        h.ObserverSnapshot(t);
+    }
+    Proche(static_cast<float>(h.DelaiCourant()), 0.100f, "flux regulier : le delai ne bouge pas");
+
+    // RAFALE : un snapshot arrive 200 ms en retard (chargement d'une autre instance).
+    h.Avancer(0.25);
+    h.ObserverSnapshot(110);
+    Verifier(h.DelaiCourant() > 0.100, "apres une rafale, le delai a GRANDI");
+    Verifier(h.Gigue() > 0.15, "la gigue retenue reflete le retard observe");
+    const double apresRafale = h.DelaiCourant();
+
+    // Le calme revient : la descente doit etre LENTE, pas immediate.
+    h.Avancer(kPeriodeTickS);
+    h.ObserverSnapshot(111);
+    Verifier(h.DelaiCourant() > apresRafale * 0.9,
+             "un seul snapshot calme ne doit PAS effacer la gigue — sinon on retombe dans le trou");
+
+    // Mais elle finit par revenir au plancher.
+    for (std::uint64_t t = 112; t < 900; ++t)
+    {
+        h.Avancer(kPeriodeTickS);
+        h.ObserverSnapshot(t);
+    }
+    Proche(static_cast<float>(h.DelaiCourant()), 0.100f, "apres un long calme : retour au plancher", 0.01f);
+}
+
+static void LeDelaiEstPlafonne()
+{
+    std::printf("le delai adaptatif est plafonne — un reseau casse ne se repare pas au tampon\n");
+    HorlogeRendu h;
+    h.ObserverSnapshot(100);
+    h.Avancer(5.0); // cinq secondes sans rien : une vraie coupure
+    h.ObserverSnapshot(101);
+    Verifier(h.DelaiCourant() <= kDelaiInterpolationMaxS + 1e-9,
+             "le delai ne depasse jamais son plafond");
+    Proche(static_cast<float>(h.DelaiCourant()), static_cast<float>(kDelaiInterpolationMaxS),
+           "et il s'y colle");
+}
+
+static void LAgeDuDernierEchantillonDitQuandLeFilSeTait()
+{
+    std::printf("l'age du dernier echantillon distingue une perte d'un fil muet\n");
+    TamponPose t;
+    t.Pousser(100, PoseXY(0.0f, 0.0f)); // tick 100 = 5,000 s
+    // On rend a 5,000 s : l'echantillon vient d'arriver.
+    Proche(static_cast<float>(t.AgeDuDernierEchantillon(5.0)), 0.0f, "frais");
+    // On rend a 5,500 s alors que rien n'est arrive depuis : le fil est muet depuis 500 ms.
+    Proche(static_cast<float>(t.AgeDuDernierEchantillon(5.5)), 0.5f, "500 ms de silence");
+    TamponPose vide;
+    Proche(static_cast<float>(vide.AgeDuDernierEchantillon(9.0)), 0.0f,
+           "un tampon vide ne pretend pas avoir un age");
+}
+
 static void UnTamponVideNeRendRien()
 {
     std::printf("un tampon vide ne rend rien — l'appelant ne doit rien afficher\n");
@@ -234,6 +298,9 @@ int main()
     LEtatDAnimationNAntipipeJamais();
     LHorlogeSAmorceRattrapeEtSaute();
     LePointDeViseeEstDevantEtStableALArret();
+    LeDelaiSAdapteALaGigueEtRedescendLentement();
+    LeDelaiEstPlafonne();
+    LAgeDuDernierEchantillonDitQuandLeFilSeTait();
     UnTamponVideNeRendRien();
 
     std::printf("\n%d verifications, %d echec(s)\n", g_verifs, g_echecs);
