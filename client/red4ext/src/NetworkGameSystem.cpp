@@ -2827,8 +2827,28 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // c'est tout — c'est aussi ce que fait le chemin PNJ pour `locomotion == 0`.
     if (pose.locomotion == 0)
     {
+        // ⚠️ IL FAUT ANNULER L'ORDRE, PAS SEULEMENT CESSER D'EN DONNER.
+        //
+        // Signalé par Lucas le 2026-08-13, et c'est le MÊME défaut que le fil muet sous une autre
+        // forme : « quand on arrête de marcher, après quelques mètres le PNJ reprend ses droits et
+        // se met à marcher tout seul ».
+        //
+        // Ici le fil va très bien : le joueur s'est simplement arrêté, `locomotion` passe à 0. On
+        // posait alors `commande = false` — ce qui ne dit RIEN au moteur, c'est juste notre
+        // comptabilité — et on replaçait l'avatar. Mais la commande de marche, CONTINUE et NON
+        // TERMINANTE, tournait toujours dans le contrôleur d'IA : le pantin continuait vers son
+        // dernier point de visée, à trois mètres devant. D'où un avatar qui marche encore alors
+        // que le joueur est à l'arrêt.
+        //
+        // `commande = false` empêche de RÉÉMETTRE ; seul `TesseraFigerAvatar` ANNULE.
         auto& suivi = g_suiviAvatars[networkId];
-        suivi.commande = false;
+        if (suivi.commande)
+        {
+            bool fige = false;
+            Red::CallVirtual(this, "TesseraFigerAvatar", fige, entityId);
+            suivi.commande = false;
+        }
+        suivi.derniereLocomotion = 0;
         SetEntityPosition(entityId, positionVoulue, pose.yaw);
         return;
     }
@@ -2846,13 +2866,53 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     //
     // ponytail: seuil et cadence de reemission non calibres en jeu — ce sont les deux boutons a
     // tourner si l'avatar sautille (baisser la reemission) ou s'il traine (baisser le seuil).
-    static constexpr float kRecalageM = 2.5f;
+    // ── L'ERREUR SE RÉSORBE, ELLE NE SE PURGE PAS D'UN COUP ────────────────────────────────
+    //
+    // Signalé par Lucas le 2026-08-13 : « on se téléporte encore de deux à trois mètres à chaque
+    // fois ». Ces sauts-là ne sont pas un défaut du réseau : ils SONT le seuil de recalage, qui se
+    // déclenchait en boucle.
+    //
+    // Le mécanisme, et il était inévitable par conception : le moteur marche à l'allure d'un
+    // PALIER fixe (Walk/Run/Sprint) pendant que la cible avance à une vitesse CONTINUE. Les deux
+    // ne peuvent pas coïncider. L'écart grandit donc jusqu'au seuil, on téléportait, il
+    // regrandissait — un saut de 2,5 m toutes les quelques secondes, indéfiniment. C'est aussi ce
+    // que disait la mesure : une dérive qui OSCILLE entre 0,29 et 2,02 m, jamais stable.
+    //
+    // On cesse d'attendre le seuil. À chaque passage, on résorbe une FRACTION de l'écart : la
+    // correction devient continue et invisible au lieu d'être rare et brutale. C'est le
+    // « position smoothing » classique, et c'est possible ici parce que `Teleport` préserve
+    // l'animation (F-PLY-008) — l'avatar continue de marcher pendant qu'on le recale.
+    //
+    // Le saut FRANC ne disparaît pas pour autant : il reste pour les vraies discontinuités
+    // (téléportation, ascenseur, retour d'AoI), au même seuil que le tampon utilise pour couper
+    // son historique — les deux doivent parler de la même chose, sinon l'un lisse ce que l'autre
+    // vient de déclarer discontinu.
+    static constexpr float kSautFrancM = 15.0f;
+    static constexpr float kCorrectionMiniM = 0.25f;
+    // 0,15 par passage : à 60 fps l'écart est divisé par deux en ~70 ms. Assez vif pour que la
+    // dérive ne s'installe pas, assez doux pour qu'aucun pas ne se voie.
+    static constexpr float kFractionCorrection = 0.15f;
+
     const auto position = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
     const float dx = positionVoulue.X - position.X;
     const float dy = positionVoulue.Y - position.Y;
     const float dz = positionVoulue.Z - position.Z;
     const float derive = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (derive > kRecalageM)
+
+    if (derive > kCorrectionMiniM && derive <= kSautFrancM)
+    {
+        // Résorption douce. On ne touche NI à la commande de marche (elle continue d'animer), ni
+        // au yaw (l'orientation vient du moteur pendant qu'il marche ; l'imposer ici ferait
+        // saccader le regard à chaque frame).
+        const RED4ext::Vector4 pas{
+            position.X + dx * kFractionCorrection,
+            position.Y + dy * kFractionCorrection,
+            position.Z + dz * kFractionCorrection,
+            1.0f};
+        SetEntityPosition(entityId, pas, pose.yaw);
+    }
+
+    if (derive > kSautFrancM)
     {
         // ⚠️ CE CHEMIN EST LE PLUS IMPORTANT À JOURNALISER, et il ne l'était pas.
         //
