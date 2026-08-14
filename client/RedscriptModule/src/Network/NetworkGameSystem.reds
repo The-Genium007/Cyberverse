@@ -1022,7 +1022,38 @@ public native class NetworkGameSystem extends IGameSystem {
     //
     // `desiredDistanceFromTarget = 0.0` : on vise un point DEVANT l'avatar (dérivé de sa vitesse),
     // pas sa position courante. Y tolérer un rayon d'arrivée le ferait s'arrêter en chemin.
-    public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32) -> Bool {
+    // ── LA DIRECTION DU REGARD, SÉPARÉE DE LA DIRECTION DU DÉPLACEMENT ─────────────────────
+    //
+    // Demandé par Lucas le 2026-08-13 : « si on regarde une personne et qu'on recule, il faut
+    // qu'on ait l'animation de je marche en arrière. Ou déplacement latéral. Toutes les formes de
+    // déplacement n'ont pas été prises en compte. »
+    //
+    // Il a raison, et le manque était structurel : `AIMoveToCommand` fait marcher un pantin VERS
+    // un point, et un pantin qui marche vers un point le REGARDE. Tant que la seule chose qu'on
+    // commandait était une destination, l'avatar ne pouvait qu'avancer face à sa marche — jamais
+    // reculer, jamais faire un pas de côté. Le `move_dir` du protocole, qui porte exactement cette
+    // information depuis le gel du palier 2, n'était lu nulle part.
+    //
+    // Le moteur sait pourtant faire, et c'est prévu dans la commande elle-même : `facingTarget` +
+    // `rotateEntityTowardsFacingTarget` dissocient l'orientation de la trajectoire
+    // (`aiCommand.script:83-84`). On donne donc DEUX points — où il va, et ce qu'il regarde — et
+    // c'est le graphe d'animation qui choisit tout seul marche avant, arrière ou latérale.
+    //
+    // Le point de regard se construit depuis le `yaw` du joueur, à cinq mètres devant : assez loin
+    // pour que la direction soit stable, assez près pour rester dans le même secteur.
+    //
+    // ⚠️ L'origine est la position RÉELLE du pantin, jamais le point de visée. Le point de visée est
+    // déjà à trois mètres devant, dans la direction du DÉPLACEMENT : partir de lui mélangerait les
+    // deux directions au lieu de les séparer. Un pas de côté franc — 90° entre marche et regard —
+    // se serait retrouvé à 59° (`atan(3/5)`), et l'animation latérale n'aurait été qu'à moitié
+    // jouée, pour une raison invisible à la lecture.
+    private func PointDeRegard(depuis: Vector4, yaw: Float) -> Vector4 {
+        // Un yaw de 0 regarde +Y dans ce moteur ; `RotByAngleXY` applique la rotation autour de Z.
+        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
+        return new Vector4(depuis.X + avant.X * 5.0, depuis.Y + avant.Y * 5.0, depuis.Z, 1.0);
+    }
+
+    public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -1032,6 +1063,24 @@ public native class NetworkGameSystem extends IGameSystem {
         if !IsDefined(controller) {
             return false;
         }
+
+        // ── ANNULER LE GEL AVANT DE REPARTIR — SINON ON ATTEND QU'IL EXPIRE ────────────────
+        //
+        // Signalé par Lucas le 2026-08-14 : « un délai très important entre le moment où je fais
+        // mes actions et le moment où c'est répercuté chez l'autre joueur ».
+        //
+        // `TesseraFigerAvatar` envoie un `AIHoldPositionCommand` de **1 seconde** quand le joueur
+        // s'arrête. Une commande d'IA ne se REMPLACE pas : elle s'exécute. Le `AIMoveToCommand`
+        // envoyé au redémarrage se mettait donc EN FILE derrière le gel, et le pantin ne bougeait
+        // qu'à l'expiration de celui-ci. Un joueur qui s'arrête puis repart dans la seconde —
+        // c'est-à-dire le régime NORMAL du déplacement humain — payait jusqu'à une seconde pleine
+        // de retard, par-dessus tout le reste de la chaîne.
+        //
+        // `CancelOrInterruptCommand` annule par NOM DE CLASSE (`aiComponent.script:14`), ce qui
+        // évite de retenir un identifiant de commande de notre côté. `useInheritance = true`
+        // couvre les sous-classes ; `success = false` dit que le gel n'a pas abouti — c'est exact,
+        // on l'interrompt.
+        controller.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
 
         let cmd = new AIMoveToCommand();
         let cible: AIPositionSpec;
@@ -1057,6 +1106,15 @@ public native class NetworkGameSystem extends IGameSystem {
         } else {
             cmd.movementType = moveMovementType.Walk;
         }
+
+        // Où il REGARDE, distinct de où il VA. C'est ce qui donne la marche arrière et le pas de
+        // côté : le graphe d'animation compare les deux et choisit l'allure lui-même.
+        let regard: AIPositionSpec;
+        let wpRegard: WorldPosition;
+        WorldPosition.SetVector4(wpRegard, this.PointDeRegard(puppet.GetWorldPosition(), yaw));
+        AIPositionSpec.SetWorldPosition(regard, wpRegard);
+        cmd.facingTarget = regard;
+        cmd.rotateEntityTowardsFacingTarget = true;
 
         cmd.ignoreNavigation = true;
         cmd.finishWhenDestinationReached = false;

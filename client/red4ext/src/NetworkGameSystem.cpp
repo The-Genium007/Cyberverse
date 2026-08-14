@@ -1,5 +1,20 @@
 #include "NetworkGameSystem.h"
 
+#include "PlayerSync/Robot.h"
+#include "PlayerSync/Telemetrie.h"
+
+/// Journal de mesure — inerte tant que `--tessera-telemetrie` n'est pas passe (voir Telemetrie.h).
+/// Déclaré ICI, tout en haut : il est utilisé dès le premier tick (démarrage), bien avant le bloc
+/// d'état de rendu où vivent ses voisins logiques.
+Tessera::Sync::Telemetrie g_telemetrie;
+
+// --- Mode robot : l'etat du scenario, hors de la classe (cf. NetworkGameSystem.h) ---
+bool g_robotActif = false;
+bool g_robotOrigineConnue = false;
+float g_robotOrigineX = 0.0f, g_robotOrigineY = 0.0f, g_robotOrigineZ = 0.0f;
+std::chrono::steady_clock::time_point g_robotDebut;
+int g_robotPhase = -1;
+
 #include "CommandLine.h"
 #include "Main.h"
 #include "Utils.h"
@@ -213,6 +228,24 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
         const auto commandLine = GetCommandLineA();
         // DIAGNOSTIC TesseraSynth : tracer ce que voit réellement le tick réseau au 1er passage.
         SDK->logger->InfoF(PLUGIN, "[net] 1er tick — GetCommandLineA = %s", commandLine ? commandLine : "(null)");
+        g_robotActif = RobotDemande(commandLine);
+        if (g_robotActif)
+        {
+            SDK->logger->Info(PLUGIN, "[robot] MODE ROBOT — la position emise est un SCENARIO, "
+                                      "pas celle du joueur");
+        }
+        if (TelemetrieDemandee(commandLine))
+        {
+            // Le dossier des journaux RED4ext existe forcément — c'est celui où le plugin écrit
+            // déjà. Un dossier à créer serait un mode d'échec de plus, pour rien.
+            g_telemetrie.Demarrer("red4ext/logs", static_cast<std::uint32_t>(GetCurrentProcessId()));
+            SDK->logger->InfoF(PLUGIN, "[mesure] telemetrie %s (pid %u) -> %s",
+                               g_telemetrie.Active() ? "ACTIVE" : "REFUSEE (fichier non ouvert)",
+                               GetCurrentProcessId(),
+                               g_telemetrie.CheminUtilise().empty()
+                                   ? "(aucun chemin ouvert)"
+                                   : g_telemetrie.CheminUtilise().c_str());
+        }
         const auto host = ParseHostFromCommandLine(commandLine);
         const auto port = ParsePortFromCommandLine(commandLine);
         if (host.has_value() && port.has_value())
@@ -778,7 +811,8 @@ void NetworkGameSystem::SendJoin(const std::string& displayName)
         k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
-void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
+void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
+                                          int locomotionForcee)
 {
     if (m_pInterface == nullptr)
     {
@@ -806,7 +840,12 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw)
     {
         packedLocomotion = 0;
     }
-    const auto locomotion = static_cast<uint8_t>(packedLocomotion & 0xFF);
+    const auto locomotion = locomotionForcee >= 0
+                                ? static_cast<uint8_t>(locomotionForcee)
+                                : static_cast<uint8_t>(packedLocomotion & 0xFF);
+    // La pose EXACTE qui part sur le fil, horodatée sur l'horloge murale — c'est la moitié
+    // « émission » de la mesure de latence bout-en-bout (voir Telemetrie.h).
+    g_telemetrie.Emission(x, y, z, yaw, locomotion);
     const auto moveDir = static_cast<uint8_t>((packedLocomotion >> 8) & 0xFF);
 
     const cyberpunk_rp::protocol::QVec3 pos(QuantPos(x), QuantPos(y), QuantPos(z));
@@ -2781,6 +2820,35 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     const auto orientation = Cyberverse::Utils::Entity_GetWorldOrientation(player);
     const auto [Roll, Pitch, Yaw] = Cyberverse::Utils::Quaternion_ToEulerAngles(orientation);
 
+    // ── MODE ROBOT : on annonce le scénario, pas la position réelle ────────────────────────
+    //
+    // L'origine est la position du joueur au PREMIER passage, jamais une constante : le scénario
+    // doit se dérouler là où l'instance a chargé, quel que soit le point d'apparition.
+    if (g_robotActif)
+    {
+        if (!g_robotOrigineConnue)
+        {
+            g_robotOrigineX = X;
+            g_robotOrigineY = Y;
+            g_robotOrigineZ = Z;
+            g_robotOrigineConnue = true;
+            g_robotDebut = std::chrono::steady_clock::now();
+            SDK->logger->InfoF(PLUGIN, "[robot] scenario demarre en (%.1f, %.1f, %.1f)", X, Y, Z);
+        }
+        const double t = std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - g_robotDebut)
+                             .count();
+        const auto pose = Tessera::Sync::PoseDuRobot(t);
+        if (pose.phase != g_robotPhase)
+        {
+            g_robotPhase = pose.phase;
+            g_telemetrie.Evenement("robot_phase", static_cast<std::uint64_t>(pose.phase), "");
+        }
+        this->SendPositionUpdate(g_robotOrigineX + pose.dx, g_robotOrigineY + pose.dy,
+                                 g_robotOrigineZ + pose.dz, pose.yaw, pose.locomotion);
+        return;
+    }
+
     this->SendPositionUpdate(X, Y, Z, Yaw);
 }
 
@@ -2793,12 +2861,53 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
     g_horlogeRendu.Avancer(deltaTime);
     const double instant = g_horlogeRendu.TempsRendu();
 
+    // ── UN INSTRUMENT DOIT DISTINGUER L'ABSENCE DU SILENCE ─────────────────────────────────
+    //
+    // Le 2026-08-14, la première session instrumentée a produit **zéro** pose rendue — et rien
+    // n'a permis de dire laquelle des trois causes c'était : aucun joueur voisin connu, un corps
+    // jamais né, ou un rendu qui va bien mais n'a rien à faire. Les trois se ressemblaient
+    // exactement : un fichier sans lignes `rx`.
+    //
+    // C'est le mode d'échec que la doctrine nomme (« pas d'entrée = pas fait ») appliqué à
+    // l'outil lui-même. Deux nombres toutes les deux secondes le lèvent : combien de voisins on
+    // CONNAÎT (un tampon existe), et pour combien on a un CORPS. `connus=0` accuse le serveur ou
+    // l'appariement de compte ; `connus>0, corps=0` accuse la naissance côté moteur.
+    static double s_depuisRecensement = 0.0;
+    s_depuisRecensement += deltaTime;
+    if (g_telemetrie.Active() && s_depuisRecensement >= 2.0)
+    {
+        s_depuisRecensement = 0.0;
+        std::size_t avecCorps = 0;
+        for (const auto& [networkId, tampon] : g_tamponsJoueurs)
+        {
+            if (m_networkedEntitiesLookup.find(networkId) != m_networkedEntitiesLookup.end())
+            {
+                ++avecCorps;
+            }
+        }
+        char detail[64];
+        std::snprintf(detail, sizeof(detail), "connus=%zu,corps=%zu", g_tamponsJoueurs.size(),
+                      avecCorps);
+        g_telemetrie.Evenement("voisins", 0, detail);
+    }
+
     for (auto& [networkId, tampon] : g_tamponsJoueurs)
     {
         const auto entite = m_networkedEntitiesLookup.find(networkId);
         if (entite == m_networkedEntitiesLookup.end())
         {
-            continue; // corps pas encore ne (ou deja detruit) : le tampon attend.
+            continue; // corps pas encore ne (ou deja detruit) : le tampon attend (voir recensement).
+        }
+        // ── UN AVATAR ASSIS APPARTIENT AU MOTEUR, PLUS A NOUS ──────────────────────────────
+        //
+        // MESURE le 2026-08-14 (F-VEH-031) : le mounting natif PORTE le corps — « il est synchro
+        // quand je roule ». Continuer a le teleporter sur la pose serveur le ferait lutter contre
+        // le vehicule a chaque frame, et produirait le tremblement deja vu sur les fantomes
+        // glissants. On laisse donc le tampon se remplir (il servira a la descente) et on ne
+        // pilote pas.
+        if (AvatarMonte(networkId))
+        {
+            continue;
         }
         Tessera::Sync::PoseRendue pose;
         if (!tampon.Echantillonner(instant, pose))
@@ -2853,6 +2962,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             SDK->logger->InfoF(PLUGIN,
                 "[avatar %llu] entite IRRESOLUE (total %llu) — le moteur ne la rend pas",
                 networkId, g_statsRoster.avatarsIrresolus);
+            g_telemetrie.Evenement("irresolue", networkId, "");
         }
         return;
     }
@@ -2892,6 +3002,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suivi.commande = false;
             ++g_statsRoster.avatarsFiges;
             SDK->logger->InfoF(PLUGIN, "[avatar %llu] fil muet — fige sur place", networkId);
+            g_telemetrie.Evenement("fil_muet", networkId, "fige");
         }
         return; // on ne corrige pas non plus la position : sans nouvelles, on n'invente rien.
     }
@@ -2974,6 +3085,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     const float dz = positionVoulue.Z - position.Z;
     const float derive = std::sqrt(dx * dx + dy * dy + dz * dz);
 
+    // ── LA MOITIÉ « RÉCEPTION » DE LA MESURE ──────────────────────────────────────────────
+    //
+    // On journalise la position RÉELLE du pantin (`position`), pas la pose autoritaire visée :
+    // c'est celle-là qui est à l'écran, donc celle que Lucas commente. L'écart entre les deux est
+    // `derive`, journalisé à côté — ensemble, ils distinguent « le réseau est en retard » de
+    // « le moteur traîne derrière une pose pourtant à jour », deux pannes qui se ressemblent
+    // exactement vues de face.
+    g_telemetrie.Rendu(networkId, position.X, position.Y, position.Z, pose.locomotion, derive,
+                       tampon != g_tamponsJoueurs.end() ? tampon->second.Nombre() : 0u,
+                       pose.extrapolee, g_horlogeRendu.DelaiCourant(), g_horlogeRendu.Gigue(),
+                       derive > kSautFrancM);
+
     // ⚠️ LA VERTICALE APPARTIENT AU MOTEUR, PAS À NOUS.
     //
     // Signalé par Lucas le 2026-08-13, juste après l'arrivée de la résorption douce : « on voit le
@@ -2989,9 +3112,37 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // l'écart est FRANC — un étage, un escalier, une passerelle — c'est-à-dire quand il n'est plus
     // explicable par le sol. 0,5 m : au-dessus d'une marche d'escalier et du bruit de terrain,
     // en dessous d'un demi-étage.
+    // ⚠️ SAUF EN L'AIR — ET C'EST MOI QUI AI CASSÉ LE SAUT EN L'OUBLIANT.
+    //
+    // Signalé par Lucas le 2026-08-13, juste après que j'aie rendu la verticale au moteur : « le
+    // saut en hauteur ne se fait plus du tout, il n'y en a même pas l'animation ».
+    //
+    // Le raisonnement « le sol appartient au moteur » est juste — TANT QUE l'avatar est au sol. Un
+    // joueur en l'air n'a plus de sol : le moteur le repose par gravité, et notre correction
+    // verticale, bridée à 15 % et seulement au-dessus d'un demi-mètre, ne pouvait pas gagner. Le
+    // pantin restait collé au sol pendant que le joueur sautait.
+    //
+    // `locomotion == 6` (InAir/Jump) dit exactement cela, et le champ voyage sur le fil depuis le
+    // gel du palier 2. En l'air, la verticale redevient NÔTRE et à pleine amplitude : c'est la
+    // seule information qui décrive un saut, et rien dans le moteur ne la conteste puisqu'il n'y a
+    // pas de sol sous les pieds.
+    static constexpr std::uint8_t kLocomotionEnLair = 6;
+    const bool enLair = pose.locomotion == kLocomotionEnLair;
+
     static constexpr float kSeuilVerticalM = 0.5f;
     const float deriveHorizontale = std::sqrt(dx * dx + dy * dy);
-    if (deriveHorizontale > kCorrectionMiniM && derive <= kSautFrancM)
+    if (enLair && derive <= kSautFrancM)
+    {
+        // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On suit
+        // donc la verticale SANS lissage, et on garde l'amortissement sur l'horizontale.
+        const RED4ext::Vector4 vol{
+            position.X + dx * kFractionCorrection,
+            position.Y + dy * kFractionCorrection,
+            positionVoulue.Z,
+            1.0f};
+        PlacerSansCommande(entityId, vol, pose.yaw);
+    }
+    else if (deriveHorizontale > kCorrectionMiniM && derive <= kSautFrancM)
     {
         // Résorption douce. On ne touche NI à la commande de marche (elle continue d'animer), ni
         // au yaw (l'orientation vient du moteur pendant qu'il marche ; l'imposer ici ferait
@@ -3049,8 +3200,19 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // TERMINANTE, elle n'a pas besoin d'etre rejouee : on la rafraichit seulement quand le point de
     // visee a franchement bouge, ou apres un delai plafond. 4 Hz au pire, et pour une poignee de
     // joueurs — pas pour 156 pantins.
-    static constexpr float kReemissionMaxS = 0.25f;
-    static constexpr float kEcartVisee = 1.5f;
+    // ⚠️ CES DEUX SEUILS SONT DE LA LATENCE QUE NOUS AJOUTONS NOUS-MÊMES.
+    //
+    // Le plafond de 0,25 s et l'écart de 1,5 m ont été dimensionnés le 2026-08-06 pour **156
+    // pantins de foule**, après qu'un ordre par tick eut fait tomber le jeu. Ils ont été repris
+    // tels quels pour les avatars de JOUEURS — et le raisonnement ne se transporte pas : on en a
+    // une poignée, pas 156, et c'est précisément sur eux que le retard se voit.
+    //
+    // 0,10 s / 0,75 m : au pire 10 ordres par seconde et par avatar. À dix joueurs visibles, cent
+    // ordres par seconde — un ordre de grandeur en dessous des 3 120/s qui avaient fait tomber le
+    // jeu. Le changement d'allure, lui, continue de court-circuiter le plafond : un démarrage ne
+    // paie aucun de ces deux seuils.
+    static constexpr float kReemissionMaxS = 0.10f;
+    static constexpr float kEcartVisee = 0.75f;
     auto& suivi = g_suiviAvatars[networkId];
     suivi.depuisS += deltaTime;
     suivi.depuisLogS += deltaTime;

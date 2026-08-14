@@ -88,9 +88,17 @@ inline constexpr double kRattrapageHorloge = 0.1;
 /// construction, on aurait extrapolé en permanence, et le symptôme aurait ressemblé à un problème
 /// de réseau alors qu'il n'aurait été qu'une constante oubliée.
 ///
-/// 24 échantillons = 480 ms à 50 Hz : au-dessus du plafond du délai adaptatif (350 ms), avec de
-/// quoi absorber une rafale en retard. Toute modification de `kPeriodeTickS` doit repasser ici.
-inline constexpr std::size_t kProfondeurTampon = 24;
+/// 48 échantillons = **960 ms à 50 Hz**, près de trois fois le plafond du délai adaptatif (350 ms).
+/// Toute modification de `kPeriodeTickS` doit repasser ici.
+///
+/// Porté de 24 à 48 le 2026-08-13 à la demande de Lucas (« augmenter le tampon, pour avoir plus
+/// d'échantillonnage »). 480 ms suffisaient au régime permanent ; ce qui débordait, c'était la
+/// RAFALE — sortir du champ de vision puis revenir fait arriver d'un coup ce que le réseau avait
+/// retenu, et un tampon trop court jette la moitié de ce qu'il vient de recevoir. Le coût est
+/// négligeable (une `Entree` par échantillon et par avatar, jamais d'allocation : le tableau est
+/// en place), et un tampon plus profond n'ajoute AUCUNE latence — l'échantillonnage vise toujours
+/// `maintenant - délai`, la profondeur ne décide que de ce qu'on a le droit d'oublier.
+inline constexpr std::size_t kProfondeurTampon = 48;
 
 /// Pose telle qu'elle arrive du serveur, déjà déquantifiée. Pas de `frame`/`slot` ici :
 /// le serveur résout tout en espace MONDE avant d'émettre (ADR 0013).

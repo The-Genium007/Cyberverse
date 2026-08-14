@@ -49,3 +49,22 @@ inline bool ModeDeveloppementDemande(char* commandLine)
     if (commandLine == nullptr) { return false; }
     return std::string(commandLine).find("--tessera-dev") != std::string::npos;
 }
+
+// `--tessera-telemetrie` — écrit un journal JSONL de tout ce qu'on émet et de tout ce qu'on rend
+// (`PlayerSync/Telemetrie.h`). Séparé de `--tessera-dev` À DESSEIN : on veut pouvoir mesurer un
+// parcours JOUEUR normal, lobby compris, sans la dérogation qui saute l'écran d'entrée. Confondre
+// les deux ferait qu'on ne mesurerait jamais que le chemin de développement.
+// `--tessera-robot` — cette instance n'envoie plus sa vraie position mais celle d'un SCÉNARIO
+// reproductible (`PlayerSync/Robot.h`). Sert de partenaire de mesure : l'autre instance observe et
+// journalise, et deux sessions deviennent comparables. Jamais dans un lancement joueur.
+inline bool RobotDemande(char* commandLine)
+{
+    if (commandLine == nullptr) { return false; }
+    return std::string(commandLine).find("--tessera-robot") != std::string::npos;
+}
+
+inline bool TelemetrieDemandee(char* commandLine)
+{
+    if (commandLine == nullptr) { return false; }
+    return std::string(commandLine).find("--tessera-telemetrie") != std::string::npos;
+}

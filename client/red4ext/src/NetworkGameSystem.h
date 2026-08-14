@@ -399,7 +399,10 @@ protected:
     // --- Couture protocole TesseraSynth (FlatBuffers) ---
     // Envoient un ClientEnvelope (Join / PositionUpdate) au serveur Rust autoritaire.
     void SendJoin(const std::string& displayName);
-    void SendPositionUpdate(float x, float y, float z, float yaw);
+    // `locomotionForcee` >= 0 remplace la lecture du blackboard — voir le mode robot
+    // (`PlayerSync/Robot.h`). -1 = comportement normal.
+    void SendPositionUpdate(float x, float y, float z, float yaw,
+                            int locomotionForcee = -1);
     // Remonte l'heure que CE client observe localement, pour que le serveur mesure l'ecart avec
     // son horloge autoritaire (`ClientTimeReport` -> `world_clock.rs`). Diagnostic pur : le
     // serveur journalise, il ne corrige rien avec — la correction descend, elle, par `WorldState`.
