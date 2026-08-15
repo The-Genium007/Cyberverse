@@ -121,8 +121,30 @@ public:
             return;
         }
         const std::string suffixe = "/tessera-telemetrie-" + std::to_string(pid) + ".jsonl";
-        // 1. répertoire courant = racine du jeu ; 2. répertoire courant = bin/x64.
-        for (const char* prefixe : {"", "../../"})
+        // ── LE REPLI NE MARCHE QUE SI LA PREMIÈRE BRANCHE PEUT ÉCHOUER ────────────────────
+        //
+        // ⚠️ DÉFAUT MESURÉ LE 2026-08-15, première session réelle : les journaux atterrissaient
+        // dans `bin/x64/TesseraLogs` au lieu de la racine du jeu.
+        //
+        // Le mécanisme d'origine essayait deux emplacements et gardait le premier qui s'ouvrait.
+        // C'était correct tant que le premier POUVAIT échouer : avec `red4ext/logs`, le dossier
+        // n'existait pas sous `bin/x64`, donc `fopen` rendait `nullptr` et le repli `../../`
+        // s'exécutait. En ajoutant la création du dossier — nécessaire, puisque celui-ci est neuf
+        // et que personne d'autre ne le crée — le premier candidat réussit **toujours**, et le
+        // repli est devenu du code mort.
+        //
+        // *Un correctif qui rend infaillible la première branche d'un test supprime la seconde.*
+        //
+        // Le launcher, lui, ramasse à la RACINE du jeu (`journaux_playtest.rs`). Un journal écrit
+        // deux dossiers plus bas n'aurait jamais été collecté, et rien ne l'aurait signalé : la
+        // collecte aurait simplement rendu « aucun journal », ce qui est exactement ce que dit une
+        // machine où personne n'a joué.
+        //
+        // On ne DEVINE donc plus l'emplacement : on essaie d'abord la racine du jeu explicitement
+        // (`../../` depuis `bin/x64`, le répertoire de travail imposé au lancement), et on ne
+        // retombe sur le chemin nu que si celui-là échoue — c'est-à-dire si le jeu a été lancé
+        // depuis sa racine.
+        for (const char* prefixe : {"../../", ""})
         {
             const std::string racine = std::string(prefixe) + dossier;
             // ⚠️ CRÉER LE DOSSIER, ET NE PAS SUPPOSER QU'IL EXISTE. C'est la différence avec

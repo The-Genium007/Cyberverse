@@ -3806,9 +3806,24 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
                 ++avecCorps;
             }
         }
-        char detail[64];
-        std::snprintf(detail, sizeof(detail), "connus=%zu,corps=%zu", g_tamponsJoueurs.size(),
-                      avecCorps);
+        // ── LE COMPTEUR DE RÉGRESSIONS DOIT SORTIR D'ICI, ET IL NE SORTAIT PAS ────────────
+        //
+        // `TamponPose::Regressions()` compte les fois où la timeline serveur a reculé franchement
+        // pour une entité — l'unique symptôme d'un shard qui a redémarré sous les pieds des
+        // joueurs. Son doc-comment disait « doit finir dans un journal » ; rien ne l'y mettait.
+        //
+        // C'est l'instrument qui aurait nommé la panne du 2026-08-15 tout seul, au lieu qu'il
+        // faille comparer des profondeurs de tampon avant/après à la main. Le voir à 0 sur toute
+        // une soirée est une information ; le voir grimper explique d'un coup une salve de
+        // plaintes qui, sans lui, ressemblent à n'importe quoi d'autre.
+        std::uint32_t regressions = 0;
+        for (const auto& [networkId, tampon] : g_tamponsJoueurs)
+        {
+            regressions += tampon.Regressions();
+        }
+        char detail[96];
+        std::snprintf(detail, sizeof(detail), "connus=%zu,corps=%zu,regressions=%u",
+                      g_tamponsJoueurs.size(), avecCorps, regressions);
         g_telemetrie.Evenement("voisins", 0, detail);
 
         // ── SONDE T7 ───────────────────────────────────────────────────────────────────────
