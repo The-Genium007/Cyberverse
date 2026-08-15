@@ -34,6 +34,9 @@ struct PlayerStateBuilder;
 struct NpcState;
 struct NpcStateBuilder;
 
+struct VehicleOccupant;
+struct VehicleOccupantBuilder;
+
 struct VehicleState;
 struct VehicleStateBuilder;
 
@@ -156,6 +159,24 @@ struct CellAppearancesBuilder;
 
 struct HealthSync;
 struct HealthSyncBuilder;
+
+struct ActionDef;
+struct ActionDefBuilder;
+
+struct ActionCatalog;
+struct ActionCatalogBuilder;
+
+struct IdentiteConnue;
+struct IdentiteConnueBuilder;
+
+struct IdentitesConnues;
+struct IdentitesConnuesBuilder;
+
+struct ItemPossede;
+struct ItemPossedeBuilder;
+
+struct InventaireAutoritaire;
+struct InventaireAutoritaireBuilder;
 
 struct RespawnRequest;
 struct RespawnRequestBuilder;
@@ -366,11 +387,14 @@ enum ServerMsg : uint8_t {
   ServerMsg_StaticAppearance = 17,
   ServerMsg_HealthSync = 18,
   ServerMsg_CellAppearances = 19,
+  ServerMsg_ActionCatalog = 20,
+  ServerMsg_IdentitesConnues = 21,
+  ServerMsg_InventaireAutoritaire = 22,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_CellAppearances
+  ServerMsg_MAX = ServerMsg_InventaireAutoritaire
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[20] {
+inline const ServerMsg (&EnumValuesServerMsg())[23] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -391,13 +415,16 @@ inline const ServerMsg (&EnumValuesServerMsg())[20] {
     ServerMsg_ConfigSync,
     ServerMsg_StaticAppearance,
     ServerMsg_HealthSync,
-    ServerMsg_CellAppearances
+    ServerMsg_CellAppearances,
+    ServerMsg_ActionCatalog,
+    ServerMsg_IdentitesConnues,
+    ServerMsg_InventaireAutoritaire
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[21] = {
+  static const char * const names[24] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -418,13 +445,16 @@ inline const char * const *EnumNamesServerMsg() {
     "StaticAppearance",
     "HealthSync",
     "CellAppearances",
+    "ActionCatalog",
+    "IdentitesConnues",
+    "InventaireAutoritaire",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_CellAppearances)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_InventaireAutoritaire)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -507,6 +537,18 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::HealthSync> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CellAppearances> {
   static const ServerMsg enum_value = ServerMsg_CellAppearances;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ActionCatalog> {
+  static const ServerMsg enum_value = ServerMsg_ActionCatalog;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::IdentitesConnues> {
+  static const ServerMsg enum_value = ServerMsg_IdentitesConnues;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::InventaireAutoritaire> {
+  static const ServerMsg enum_value = ServerMsg_InventaireAutoritaire;
 };
 
 template <bool B = false>
@@ -1153,6 +1195,58 @@ inline ::flatbuffers::Offset<NpcState> CreateNpcStateDirect(
       move_seq);
 }
 
+struct VehicleOccupant FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef VehicleOccupantBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SEAT = 4,
+    VT_CLIENT = 6
+  };
+  uint8_t seat() const {
+    return GetField<uint8_t>(VT_SEAT, 0);
+  }
+  uint64_t client() const {
+    return GetField<uint64_t>(VT_CLIENT, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_SEAT, 1) &&
+           VerifyField<uint64_t>(verifier, VT_CLIENT, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct VehicleOccupantBuilder {
+  typedef VehicleOccupant Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_seat(uint8_t seat) {
+    fbb_.AddElement<uint8_t>(VehicleOccupant::VT_SEAT, seat, 0);
+  }
+  void add_client(uint64_t client) {
+    fbb_.AddElement<uint64_t>(VehicleOccupant::VT_CLIENT, client, 0);
+  }
+  explicit VehicleOccupantBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<VehicleOccupant> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<VehicleOccupant>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<VehicleOccupant> CreateVehicleOccupant(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t seat = 0,
+    uint64_t client = 0) {
+  VehicleOccupantBuilder builder_(_fbb);
+  builder_.add_client(client);
+  builder_.add_seat(seat);
+  return builder_.Finish();
+}
+
 struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef VehicleStateBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -1162,7 +1256,12 @@ struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_YAW = 10,
     VT_SPEED = 12,
     VT_PASSENGER = 14,
-    VT_SPACE_ID = 16
+    VT_SPACE_ID = 16,
+    VT_OCCUPANTS = 18,
+    VT_PROPRIETAIRE = 20,
+    VT_VERROUILLE = 22,
+    VT_DEGATS = 24,
+    VT_RADIO_STATION = 26
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -1185,6 +1284,21 @@ struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t space_id() const {
     return GetField<uint32_t>(VT_SPACE_ID, 0);
   }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleOccupant>> *occupants() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleOccupant>> *>(VT_OCCUPANTS);
+  }
+  uint64_t proprietaire() const {
+    return GetField<uint64_t>(VT_PROPRIETAIRE, 0);
+  }
+  bool verrouille() const {
+    return GetField<uint8_t>(VT_VERROUILLE, 0) != 0;
+  }
+  uint8_t degats() const {
+    return GetField<uint8_t>(VT_DEGATS, 0);
+  }
+  uint8_t radio_station() const {
+    return GetField<uint8_t>(VT_RADIO_STATION, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1195,6 +1309,13 @@ struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint16_t>(verifier, VT_SPEED, 2) &&
            VerifyField<uint64_t>(verifier, VT_PASSENGER, 8) &&
            VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
+           VerifyOffset(verifier, VT_OCCUPANTS) &&
+           verifier.VerifyVector(occupants()) &&
+           verifier.VerifyVectorOfTables(occupants()) &&
+           VerifyField<uint64_t>(verifier, VT_PROPRIETAIRE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_VERROUILLE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_DEGATS, 1) &&
+           VerifyField<uint8_t>(verifier, VT_RADIO_STATION, 1) &&
            verifier.EndTable();
   }
 };
@@ -1224,6 +1345,21 @@ struct VehicleStateBuilder {
   void add_space_id(uint32_t space_id) {
     fbb_.AddElement<uint32_t>(VehicleState::VT_SPACE_ID, space_id, 0);
   }
+  void add_occupants(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleOccupant>>> occupants) {
+    fbb_.AddOffset(VehicleState::VT_OCCUPANTS, occupants);
+  }
+  void add_proprietaire(uint64_t proprietaire) {
+    fbb_.AddElement<uint64_t>(VehicleState::VT_PROPRIETAIRE, proprietaire, 0);
+  }
+  void add_verrouille(bool verrouille) {
+    fbb_.AddElement<uint8_t>(VehicleState::VT_VERROUILLE, static_cast<uint8_t>(verrouille), 0);
+  }
+  void add_degats(uint8_t degats) {
+    fbb_.AddElement<uint8_t>(VehicleState::VT_DEGATS, degats, 0);
+  }
+  void add_radio_station(uint8_t radio_station) {
+    fbb_.AddElement<uint8_t>(VehicleState::VT_RADIO_STATION, radio_station, 0);
+  }
   explicit VehicleStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1243,16 +1379,57 @@ inline ::flatbuffers::Offset<VehicleState> CreateVehicleState(
     uint16_t yaw = 0,
     uint16_t speed = 0,
     uint64_t passenger = 0,
-    uint32_t space_id = 0) {
+    uint32_t space_id = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleOccupant>>> occupants = 0,
+    uint64_t proprietaire = 0,
+    bool verrouille = false,
+    uint8_t degats = 0,
+    uint8_t radio_station = 0) {
   VehicleStateBuilder builder_(_fbb);
+  builder_.add_proprietaire(proprietaire);
   builder_.add_passenger(passenger);
   builder_.add_id(id);
+  builder_.add_occupants(occupants);
   builder_.add_space_id(space_id);
   builder_.add_position(position);
   builder_.add_archetype(archetype);
   builder_.add_speed(speed);
   builder_.add_yaw(yaw);
+  builder_.add_radio_station(radio_station);
+  builder_.add_degats(degats);
+  builder_.add_verrouille(verrouille);
   return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<VehicleState> CreateVehicleStateDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    uint32_t archetype = 0,
+    const cyberpunk_rp::protocol::QVec3 *position = nullptr,
+    uint16_t yaw = 0,
+    uint16_t speed = 0,
+    uint64_t passenger = 0,
+    uint32_t space_id = 0,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleOccupant>> *occupants = nullptr,
+    uint64_t proprietaire = 0,
+    bool verrouille = false,
+    uint8_t degats = 0,
+    uint8_t radio_station = 0) {
+  auto occupants__ = occupants ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleOccupant>>(*occupants) : 0;
+  return cyberpunk_rp::protocol::CreateVehicleState(
+      _fbb,
+      id,
+      archetype,
+      position,
+      yaw,
+      speed,
+      passenger,
+      space_id,
+      occupants__,
+      proprietaire,
+      verrouille,
+      degats,
+      radio_station);
 }
 
 struct VehicleInput FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -1750,7 +1927,8 @@ struct Snapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_PLAYERS = 6,
     VT_NPCS = 8,
     VT_VEHICLES = 10,
-    VT_VEHICLES_PLAYER = 12
+    VT_VEHICLES_PLAYER = 12,
+    VT_TS_MS = 14
   };
   uint64_t tick() const {
     return GetField<uint64_t>(VT_TICK, 0);
@@ -1766,6 +1944,9 @@ struct Snapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>> *vehicles_player() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>> *>(VT_VEHICLES_PLAYER);
+  }
+  uint64_t ts_ms() const {
+    return GetField<uint64_t>(VT_TS_MS, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -1783,6 +1964,7 @@ struct Snapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_VEHICLES_PLAYER) &&
            verifier.VerifyVector(vehicles_player()) &&
            verifier.VerifyVectorOfTables(vehicles_player()) &&
+           VerifyField<uint64_t>(verifier, VT_TS_MS, 8) &&
            verifier.EndTable();
   }
 };
@@ -1806,6 +1988,9 @@ struct SnapshotBuilder {
   void add_vehicles_player(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>>> vehicles_player) {
     fbb_.AddOffset(Snapshot::VT_VEHICLES_PLAYER, vehicles_player);
   }
+  void add_ts_ms(uint64_t ts_ms) {
+    fbb_.AddElement<uint64_t>(Snapshot::VT_TS_MS, ts_ms, 0);
+  }
   explicit SnapshotBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1823,8 +2008,10 @@ inline ::flatbuffers::Offset<Snapshot> CreateSnapshot(
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>>> players = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>>> npcs = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>>> vehicles = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>>> vehicles_player = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>>> vehicles_player = 0,
+    uint64_t ts_ms = 0) {
   SnapshotBuilder builder_(_fbb);
+  builder_.add_ts_ms(ts_ms);
   builder_.add_tick(tick);
   builder_.add_vehicles_player(vehicles_player);
   builder_.add_vehicles(vehicles);
@@ -1839,7 +2026,8 @@ inline ::flatbuffers::Offset<Snapshot> CreateSnapshotDirect(
     const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>> *players = nullptr,
     const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>> *npcs = nullptr,
     const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>> *vehicles = nullptr,
-    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>> *vehicles_player = nullptr) {
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehiclePlayerState>> *vehicles_player = nullptr,
+    uint64_t ts_ms = 0) {
   auto players__ = players ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::PlayerState>>(*players) : 0;
   auto npcs__ = npcs ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::NpcState>>(*npcs) : 0;
   auto vehicles__ = vehicles ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleState>>(*vehicles) : 0;
@@ -1850,7 +2038,8 @@ inline ::flatbuffers::Offset<Snapshot> CreateSnapshotDirect(
       players__,
       npcs__,
       vehicles__,
-      vehicles_player__);
+      vehicles_player__,
+      ts_ms);
 }
 
 struct PlayerActionReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2463,7 +2652,8 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_PSEUDONYM = 4,
     VT_BASE_RECORD = 6,
-    VT_APPEARANCE = 8
+    VT_APPEARANCE = 8,
+    VT_ORIGINE = 10
   };
   const ::flatbuffers::String *pseudonym() const {
     return GetPointer<const ::flatbuffers::String *>(VT_PSEUDONYM);
@@ -2474,6 +2664,9 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t appearance() const {
     return GetField<uint64_t>(VT_APPEARANCE, 0);
   }
+  const ::flatbuffers::String *origine() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_ORIGINE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -2481,6 +2674,8 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(pseudonym()) &&
            VerifyField<uint64_t>(verifier, VT_BASE_RECORD, 8) &&
            VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
+           VerifyOffset(verifier, VT_ORIGINE) &&
+           verifier.VerifyString(origine()) &&
            verifier.EndTable();
   }
 };
@@ -2498,6 +2693,9 @@ struct CreateCharacterBuilder {
   void add_appearance(uint64_t appearance) {
     fbb_.AddElement<uint64_t>(CreateCharacter::VT_APPEARANCE, appearance, 0);
   }
+  void add_origine(::flatbuffers::Offset<::flatbuffers::String> origine) {
+    fbb_.AddOffset(CreateCharacter::VT_ORIGINE, origine);
+  }
   explicit CreateCharacterBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2513,10 +2711,12 @@ inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacter(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0,
     uint64_t base_record = 0,
-    uint64_t appearance = 0) {
+    uint64_t appearance = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> origine = 0) {
   CreateCharacterBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
+  builder_.add_origine(origine);
   builder_.add_pseudonym(pseudonym);
   return builder_.Finish();
 }
@@ -2525,13 +2725,16 @@ inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacterDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     const char *pseudonym = nullptr,
     uint64_t base_record = 0,
-    uint64_t appearance = 0) {
+    uint64_t appearance = 0,
+    const char *origine = nullptr) {
   auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
+  auto origine__ = origine ? _fbb.CreateString(origine) : 0;
   return cyberpunk_rp::protocol::CreateCreateCharacter(
       _fbb,
       pseudonym__,
       base_record,
-      appearance);
+      appearance,
+      origine__);
 }
 
 struct SelectCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -4044,6 +4247,384 @@ inline ::flatbuffers::Offset<HealthSync> CreateHealthSync(
   return builder_.Finish();
 }
 
+struct ActionDef FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ActionDefBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_LIBELLE = 6,
+    VT_PORTEE_DM = 8
+  };
+  uint32_t id() const {
+    return GetField<uint32_t>(VT_ID, 0);
+  }
+  const ::flatbuffers::String *libelle() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_LIBELLE);
+  }
+  uint16_t portee_dm() const {
+    return GetField<uint16_t>(VT_PORTEE_DM, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint32_t>(verifier, VT_ID, 4) &&
+           VerifyOffset(verifier, VT_LIBELLE) &&
+           verifier.VerifyString(libelle()) &&
+           VerifyField<uint16_t>(verifier, VT_PORTEE_DM, 2) &&
+           verifier.EndTable();
+  }
+};
+
+struct ActionDefBuilder {
+  typedef ActionDef Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint32_t id) {
+    fbb_.AddElement<uint32_t>(ActionDef::VT_ID, id, 0);
+  }
+  void add_libelle(::flatbuffers::Offset<::flatbuffers::String> libelle) {
+    fbb_.AddOffset(ActionDef::VT_LIBELLE, libelle);
+  }
+  void add_portee_dm(uint16_t portee_dm) {
+    fbb_.AddElement<uint16_t>(ActionDef::VT_PORTEE_DM, portee_dm, 0);
+  }
+  explicit ActionDefBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ActionDef> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ActionDef>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ActionDef> CreateActionDef(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint32_t id = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> libelle = 0,
+    uint16_t portee_dm = 0) {
+  ActionDefBuilder builder_(_fbb);
+  builder_.add_libelle(libelle);
+  builder_.add_id(id);
+  builder_.add_portee_dm(portee_dm);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ActionDef> CreateActionDefDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint32_t id = 0,
+    const char *libelle = nullptr,
+    uint16_t portee_dm = 0) {
+  auto libelle__ = libelle ? _fbb.CreateString(libelle) : 0;
+  return cyberpunk_rp::protocol::CreateActionDef(
+      _fbb,
+      id,
+      libelle__,
+      portee_dm);
+}
+
+struct ActionCatalog FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ActionCatalogBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ACTIONS = 4
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ActionDef>> *actions() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ActionDef>> *>(VT_ACTIONS);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_ACTIONS) &&
+           verifier.VerifyVector(actions()) &&
+           verifier.VerifyVectorOfTables(actions()) &&
+           verifier.EndTable();
+  }
+};
+
+struct ActionCatalogBuilder {
+  typedef ActionCatalog Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_actions(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ActionDef>>> actions) {
+    fbb_.AddOffset(ActionCatalog::VT_ACTIONS, actions);
+  }
+  explicit ActionCatalogBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ActionCatalog> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ActionCatalog>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ActionCatalog> CreateActionCatalog(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ActionDef>>> actions = 0) {
+  ActionCatalogBuilder builder_(_fbb);
+  builder_.add_actions(actions);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ActionCatalog> CreateActionCatalogDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ActionDef>> *actions = nullptr) {
+  auto actions__ = actions ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::ActionDef>>(*actions) : 0;
+  return cyberpunk_rp::protocol::CreateActionCatalog(
+      _fbb,
+      actions__);
+}
+
+struct IdentiteConnue FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef IdentiteConnueBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_NOM = 6
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  const ::flatbuffers::String *nom() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_NOM);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyOffset(verifier, VT_NOM) &&
+           verifier.VerifyString(nom()) &&
+           verifier.EndTable();
+  }
+};
+
+struct IdentiteConnueBuilder {
+  typedef IdentiteConnue Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(IdentiteConnue::VT_ID, id, 0);
+  }
+  void add_nom(::flatbuffers::Offset<::flatbuffers::String> nom) {
+    fbb_.AddOffset(IdentiteConnue::VT_NOM, nom);
+  }
+  explicit IdentiteConnueBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<IdentiteConnue> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<IdentiteConnue>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<IdentiteConnue> CreateIdentiteConnue(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> nom = 0) {
+  IdentiteConnueBuilder builder_(_fbb);
+  builder_.add_id(id);
+  builder_.add_nom(nom);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<IdentiteConnue> CreateIdentiteConnueDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    const char *nom = nullptr) {
+  auto nom__ = nom ? _fbb.CreateString(nom) : 0;
+  return cyberpunk_rp::protocol::CreateIdentiteConnue(
+      _fbb,
+      id,
+      nom__);
+}
+
+struct IdentitesConnues FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef IdentitesConnuesBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ENTREES = 4
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::IdentiteConnue>> *entrees() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::IdentiteConnue>> *>(VT_ENTREES);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_ENTREES) &&
+           verifier.VerifyVector(entrees()) &&
+           verifier.VerifyVectorOfTables(entrees()) &&
+           verifier.EndTable();
+  }
+};
+
+struct IdentitesConnuesBuilder {
+  typedef IdentitesConnues Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_entrees(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::IdentiteConnue>>> entrees) {
+    fbb_.AddOffset(IdentitesConnues::VT_ENTREES, entrees);
+  }
+  explicit IdentitesConnuesBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<IdentitesConnues> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<IdentitesConnues>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<IdentitesConnues> CreateIdentitesConnues(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::IdentiteConnue>>> entrees = 0) {
+  IdentitesConnuesBuilder builder_(_fbb);
+  builder_.add_entrees(entrees);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<IdentitesConnues> CreateIdentitesConnuesDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::IdentiteConnue>> *entrees = nullptr) {
+  auto entrees__ = entrees ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::IdentiteConnue>>(*entrees) : 0;
+  return cyberpunk_rp::protocol::CreateIdentitesConnues(
+      _fbb,
+      entrees__);
+}
+
+struct ItemPossede FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ItemPossedeBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_QUANTITE = 6
+  };
+  const ::flatbuffers::String *id() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_ID);
+  }
+  uint32_t quantite() const {
+    return GetField<uint32_t>(VT_QUANTITE, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_ID) &&
+           verifier.VerifyString(id()) &&
+           VerifyField<uint32_t>(verifier, VT_QUANTITE, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct ItemPossedeBuilder {
+  typedef ItemPossede Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(::flatbuffers::Offset<::flatbuffers::String> id) {
+    fbb_.AddOffset(ItemPossede::VT_ID, id);
+  }
+  void add_quantite(uint32_t quantite) {
+    fbb_.AddElement<uint32_t>(ItemPossede::VT_QUANTITE, quantite, 0);
+  }
+  explicit ItemPossedeBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ItemPossede> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ItemPossede>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ItemPossede> CreateItemPossede(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> id = 0,
+    uint32_t quantite = 0) {
+  ItemPossedeBuilder builder_(_fbb);
+  builder_.add_quantite(quantite);
+  builder_.add_id(id);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ItemPossede> CreateItemPossedeDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *id = nullptr,
+    uint32_t quantite = 0) {
+  auto id__ = id ? _fbb.CreateString(id) : 0;
+  return cyberpunk_rp::protocol::CreateItemPossede(
+      _fbb,
+      id__,
+      quantite);
+}
+
+struct InventaireAutoritaire FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef InventaireAutoritaireBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ITEMS = 4,
+    VT_PRESERVER = 6
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ItemPossede>> *items() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ItemPossede>> *>(VT_ITEMS);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *preserver() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_PRESERVER);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_ITEMS) &&
+           verifier.VerifyVector(items()) &&
+           verifier.VerifyVectorOfTables(items()) &&
+           VerifyOffset(verifier, VT_PRESERVER) &&
+           verifier.VerifyVector(preserver()) &&
+           verifier.VerifyVectorOfStrings(preserver()) &&
+           verifier.EndTable();
+  }
+};
+
+struct InventaireAutoritaireBuilder {
+  typedef InventaireAutoritaire Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_items(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ItemPossede>>> items) {
+    fbb_.AddOffset(InventaireAutoritaire::VT_ITEMS, items);
+  }
+  void add_preserver(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> preserver) {
+    fbb_.AddOffset(InventaireAutoritaire::VT_PRESERVER, preserver);
+  }
+  explicit InventaireAutoritaireBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<InventaireAutoritaire> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<InventaireAutoritaire>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<InventaireAutoritaire> CreateInventaireAutoritaire(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ItemPossede>>> items = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> preserver = 0) {
+  InventaireAutoritaireBuilder builder_(_fbb);
+  builder_.add_preserver(preserver);
+  builder_.add_items(items);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<InventaireAutoritaire> CreateInventaireAutoritaireDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::ItemPossede>> *items = nullptr,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *preserver = nullptr) {
+  auto items__ = items ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::ItemPossede>>(*items) : 0;
+  auto preserver__ = preserver ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*preserver) : 0;
+  return cyberpunk_rp::protocol::CreateInventaireAutoritaire(
+      _fbb,
+      items__,
+      preserver__);
+}
+
 struct RespawnRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef RespawnRequestBuilder Builder;
   template <bool B = false>
@@ -4390,6 +4971,15 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::CellAppearances *msg_as_CellAppearances() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_CellAppearances ? static_cast<const cyberpunk_rp::protocol::CellAppearances *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::ActionCatalog *msg_as_ActionCatalog() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_ActionCatalog ? static_cast<const cyberpunk_rp::protocol::ActionCatalog *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::IdentitesConnues *msg_as_IdentitesConnues() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_IdentitesConnues ? static_cast<const cyberpunk_rp::protocol::IdentitesConnues *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::InventaireAutoritaire *msg_as_InventaireAutoritaire() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_InventaireAutoritaire ? static_cast<const cyberpunk_rp::protocol::InventaireAutoritaire *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -4474,6 +5064,18 @@ template<> inline const cyberpunk_rp::protocol::HealthSync *ServerEnvelope::msg_
 
 template<> inline const cyberpunk_rp::protocol::CellAppearances *ServerEnvelope::msg_as<cyberpunk_rp::protocol::CellAppearances>() const {
   return msg_as_CellAppearances();
+}
+
+template<> inline const cyberpunk_rp::protocol::ActionCatalog *ServerEnvelope::msg_as<cyberpunk_rp::protocol::ActionCatalog>() const {
+  return msg_as_ActionCatalog();
+}
+
+template<> inline const cyberpunk_rp::protocol::IdentitesConnues *ServerEnvelope::msg_as<cyberpunk_rp::protocol::IdentitesConnues>() const {
+  return msg_as_IdentitesConnues();
+}
+
+template<> inline const cyberpunk_rp::protocol::InventaireAutoritaire *ServerEnvelope::msg_as<cyberpunk_rp::protocol::InventaireAutoritaire>() const {
+  return msg_as_InventaireAutoritaire();
 }
 
 struct ServerEnvelopeBuilder {
@@ -4690,6 +5292,18 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_CellAppearances: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::CellAppearances *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_ActionCatalog: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ActionCatalog *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_IdentitesConnues: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::IdentitesConnues *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_InventaireAutoritaire: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::InventaireAutoritaire *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

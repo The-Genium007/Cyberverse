@@ -72,6 +72,20 @@ inline constexpr float kVitesseMaxMS = 20.0f;
 /// déplacement. Voir `TamponPose::Pousser`. 15 m à 20 Hz vaudrait 300 m/s.
 inline constexpr float kSautFrancM = 15.0f;
 
+/// Recul du numéro de tick au-delà duquel on ne parle plus d'un paquet en retard mais d'une
+/// NOUVELLE TIMELINE — un shard redémarré, ou un changement d'ensemble de shards fusionnés.
+///
+/// 250 ticks = 5 secondes à 50 Hz. Le seuil doit séparer deux régimes qui n'ont rien à voir :
+///   · le désordre ORDINAIRE, de l'ordre de quelques ticks — le canal client→serveur est
+///     délibérément non fiable, un paquet peut doubler son voisin ; c'est le régime NORMAL, et
+///     le rejet silencieux est le bon traitement ;
+///   · la RÉGRESSION FRANCHE, de plusieurs millions de ticks quand un shard repart de zéro.
+///
+/// Entre les deux il n'y a rien : aucun mécanisme ne produit un retard de 5 secondes qui soit
+/// encore un retard. Le seuil est donc large exprès — un faux positif viderait un tampon sain,
+/// un faux négatif gèle l'avatar pour toute la session.
+inline constexpr std::uint64_t kRegressionTickFranche = 250;
+
 /// Écart au-delà duquel l'horloge de rendu SAUTE au lieu de rattraper doucement
 /// (chargement de zone, pause, reprise après coupure).
 inline constexpr double kEcartRecalageFrancS = 0.5;
@@ -177,8 +191,28 @@ public:
     {
         if (m_amorcee)
         {
-            ObserverIntervalle(m_depuisDernierSnapshot);
+            // ── L'INTERVALLE ATTENDU SE DÉDUIT DES TICKS, IL NE SE SUPPOSE PAS ─────────────
+            //
+            // ⚠️ On comparait l'arrivée réelle à `kPeriodeTickS`, c'est-à-dire à la période de
+            // SIMULATION. C'était juste tant que le serveur diffusait à chaque tick ; ça a cessé
+            // de l'être le 2026-08-15 (`snapshot_divider()` : simulation 50 Hz, diffusion 25 Hz).
+            //
+            // Ce que ça produisait : un fil parfaitement sain arrivant toutes les 40 ms était lu
+            // comme **20 ms de retard permanent**, donc 20 ms de gigue fantôme en continu. Le
+            // délai adaptatif reste au plancher de 100 ms, donc rien ne se voit à l'écran — mais
+            // le chiffre `gigue` du journal devient un mensonge, et c'est précisément celui qu'on
+            // lira pour décider si le réseau va bien. Un instrument qui accuse à tort coûte plus
+            // cher qu'un instrument absent.
+            //
+            // L'écart de numéros de tick DIT la période de diffusion, exactement : deux ticks
+            // d'écart valent deux périodes de simulation. Aucune constante partagée de plus n'est
+            // donc nécessaire — le client déduit la cadence du serveur au lieu de la supposer, et
+            // un changement de `snapshot_divider()` n'a rien à casser ici.
+            const std::uint64_t ecartTicks = tick > m_dernierTick ? tick - m_dernierTick : 1;
+            ObserverIntervalle(m_depuisDernierSnapshot,
+                               static_cast<double>(ecartTicks) * kPeriodeTickS);
         }
+        m_dernierTick = tick;
         m_depuisDernierSnapshot = 0.0;
         const double cible = static_cast<double>(tick) * kPeriodeTickS - DelaiCourant();
         if (!m_amorcee)
@@ -241,10 +275,14 @@ public:
     [[nodiscard]] double Gigue() const noexcept { return m_gigue; }
 
 private:
-    /// Met à jour la gigue depuis l'intervalle réel d'arrivée de deux snapshots.
-    void ObserverIntervalle(double intervalleReel) noexcept
+    /// Met à jour la gigue : de combien l'arrivée RÉELLE a-t-elle dépassé l'arrivée ATTENDUE ?
+    ///
+    /// `intervalleAttendu` est déduit de l'écart des numéros de tick par l'appelant — jamais
+    /// supposé égal à la période de simulation. Voir `ObserverSnapshot` pour ce que cette
+    /// supposition coûtait depuis le découplage de la cadence de diffusion.
+    void ObserverIntervalle(double intervalleReel, double intervalleAttendu) noexcept
     {
-        const double ecart = intervalleReel - kPeriodeTickS;
+        const double ecart = intervalleReel - intervalleAttendu;
         const double retard = ecart > 0.0 ? ecart : 0.0;
         // Montée immédiate, descente amortie : voir `DelaiCourant`.
         m_gigue = retard > m_gigue ? retard : m_gigue + (retard - m_gigue) * kDecrueGigue;
@@ -254,6 +292,8 @@ private:
     bool m_amorcee = false;
     double m_gigue = 0.0;
     double m_depuisDernierSnapshot = 0.0;
+    /// Dernier numéro de tick observé — sert à déduire la période de diffusion réelle.
+    std::uint64_t m_dernierTick = 0;
 };
 
 /// Historique récent d'UNE entité réseau, et l'échantillonnage qui en tire une pose.
@@ -266,7 +306,45 @@ public:
     /// est le régime NORMAL, pas une anomalie.
     void Pousser(std::uint64_t tick, const Pose& pose) noexcept
     {
-        if (m_nombre > 0 && tick <= DernierTick())
+        // ── UNE RÉGRESSION FRANCHE DU TICK N'EST PAS UN PAQUET EN RETARD ───────────────────
+        //
+        // ⚠️ SANS CE TEST, UN REDÉMARRAGE DE SHARD GÈLE TOUS LES AVATARS **DÉFINITIVEMENT**, et
+        // l'instrument affiche un système en parfaite santé. C'est le pire mode de panne du
+        // fichier : silencieux, permanent, et invisible à la télémétrie.
+        //
+        // Le mécanisme, de bout en bout. `shard.rs` le dit lui-même : « le `Server` est reconstruit
+        // par connexion, l'état de simulation d'un Shard n'est pas persistant ; il repart de zéro à
+        // chaque nouvelle connexion Gateway ». Un redéploiement du conteneur, un blip du lien TCP
+        // interne, et `Snapshot.tick` retombe de plusieurs millions à ~1 — pendant que les clients,
+        // eux, restent connectés au Gateway et ne voient aucune coupure.
+        //
+        // Le rejet ci-dessous (« un tick périmé n'a rien à dire qu'on ne sache déjà ») devient
+        // alors un rejet DE TOUT, POUR TOUJOURS : les nouveaux ticks partent de 1 et ne
+        // rattraperont jamais l'ancien compteur. `Echantillonner` tombe dans la branche « trop en
+        // retard » et fige sur le plus vieil échantillon avec `extrapolee = false` — donc zéro
+        // extrapolation, tampon plein, aucun gel signalé. Le tableau de bord dit que tout va bien
+        // pendant que plus rien ne bouge à l'écran. Et rien ne guérit : l'entité reste présente
+        // dans chaque snapshot, donc le nettoyage à 3 s d'absence ne se déclenche pas ; le
+        // détecteur de fil muet ne mord pas non plus (l'âge du dernier échantillon devient
+        // massivement NÉGATIF après le recalage arrière de l'horloge de rendu). Seul un
+        // redémarrage du jeu répare.
+        //
+        // On distingue donc les deux cas par leur AMPLITUDE, ce qui est exactement la bonne
+        // discrimination : un paquet désordonné a quelques ticks de retard (le canal est
+        // délibérément non fiable, c'est le régime normal) ; une régression de plusieurs secondes
+        // n'est pas du désordre, c'est une nouvelle timeline. On repart de zéro sur celle-ci.
+        //
+        // La même protection couvre le cas multi-shard : `merge_snapshots` prend le `max` des ticks
+        // des shards chargés pour ce client, et cet ensemble change quand le joueur se déplace —
+        // décharger le shard le plus en avance fait donc reculer le tick émis, du décalage de boot
+        // entre les deux shards. Même symptôme, même correctif.
+        if (m_nombre > 0 && tick + kRegressionTickFranche < DernierTick())
+        {
+            m_nombre = 0;
+            m_tete = 0;
+            ++m_regressions;
+        }
+        else if (m_nombre > 0 && tick <= DernierTick())
         {
             return;
         }
@@ -379,6 +457,14 @@ public:
         return m_nombre == 0 ? 0 : At(m_nombre - 1).tick;
     }
 
+    /// Combien de fois la timeline serveur a reculé franchement pour cette entité.
+    ///
+    /// ⚠️ **Ce compteur doit finir dans un journal.** Une régression de tick est l'unique symptôme
+    /// d'un shard qui a redémarré sous les pieds des joueurs — un événement qui, sans cette trace,
+    /// ne laisse strictement rien derrière lui côté client. Le voir à 0 sur toute une session est
+    /// une information ; le voir grimper explique d'un coup une salve de plaintes.
+    [[nodiscard]] std::uint32_t Regressions() const noexcept { return m_regressions; }
+
 private:
     struct Entree
     {
@@ -482,6 +568,8 @@ private:
     Entree m_entrees[kProfondeurTampon]{};
     std::size_t m_tete = 0;   // prochaine case à écrire
     std::size_t m_nombre = 0; // échantillons valides
+    /// Nombre de régressions franches de la timeline serveur observées — voir `Regressions()`.
+    std::uint32_t m_regressions = 0;
 };
 
 /// Point à viser DEVANT l'avatar, le long de sa vitesse — l'équivalent joueur de

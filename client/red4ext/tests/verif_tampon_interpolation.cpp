@@ -14,6 +14,7 @@
 //            client\red4ext\tests\verif_tampon_interpolation.cpp /Fe:verif.exe && verif.exe'
 // =====================================================================================
 
+#include "../src/PlayerSync/HorlogeServeur.h"
 #include "../src/PlayerSync/TamponInterpolation.h"
 
 #include <cmath>
@@ -349,6 +350,186 @@ static void UnTamponVideNeRendRien()
     Verifier(!t.Echantillonner(1.0, r), "faux sur un tampon vide");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────
+// LA PANNE QUI GELAIT TOUT — régression franche du numéro de tick
+// ─────────────────────────────────────────────────────────────────────────────────────
+//
+// Ce test échoue sur le code d'avant le 2026-08-15 : `Pousser` rejetait tout tick
+// inférieur ou égal au dernier vu, sans distinguer le paquet en retard (quelques ticks,
+// régime NORMAL sur un canal non fiable) de la timeline qui repart de zéro (un shard
+// redémarré, cf. `shard.rs` : « le Server est reconstruit par connexion »).
+//
+// Conséquence de l'ancien code, et c'est le pire mode de panne du fichier : plus AUCUN
+// échantillon accepté, pour toute la session, avec un tampon qui se dit plein et zéro
+// extrapolation signalée. L'avatar gèle, et l'instrument affiche un système sain.
+static void UneRegressionFrancheDeTickRepartDeZero()
+{
+    std::printf("une regression franche de tick redemarre le tampon au lieu de tout rejeter\n");
+    TamponPose t;
+    // Une timeline avancée, comme après quelques minutes de jeu.
+    t.Pousser(1'000'000, Pose{0.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    t.Pousser(1'000'001, Pose{1.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    Verifier(t.Nombre() == 2, "deux echantillons rentres");
+    Verifier(t.Regressions() == 0, "aucune regression pour l'instant");
+
+    // Le shard redémarre : les ticks repartent de 1.
+    t.Pousser(1, Pose{50.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    Verifier(t.Regressions() == 1, "la regression est COMPTEE, donc journalisable");
+    Verifier(t.Nombre() == 1, "l'historique perime est jete, le nouvel echantillon est garde");
+    Verifier(t.DernierTick() == 1, "la nouvelle timeline fait autorite");
+
+    // Et surtout : la suite est acceptée normalement. C'est ça qui manquait.
+    t.Pousser(2, Pose{51.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    Verifier(t.Nombre() == 2, "la nouvelle timeline continue d'alimenter le tampon");
+}
+
+// Le pendant du test ci-dessus : un retard ORDINAIRE ne doit surtout pas vider le tampon.
+// Confondre les deux transformerait le régime normal d'un canal non fiable en purge
+// permanente, et l'avatar sauterait à chaque paquet désordonné.
+static void UnRetardOrdinaireNeViderPasLeTampon()
+{
+    std::printf("un paquet en retard ordinaire est ignore, PAS traite comme une discontinuite\n");
+    TamponPose t;
+    t.Pousser(1000, Pose{0.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    t.Pousser(1001, Pose{1.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    t.Pousser(1002, Pose{2.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    // Un paquet du tick 999 arrive après coup : c'est du désordre, pas une nouvelle timeline.
+    t.Pousser(999, Pose{99.0f, 0.0f, 0.0f, 0.0f, 1, 0});
+    Verifier(t.Nombre() == 3, "le tampon garde ses trois echantillons");
+    Verifier(t.Regressions() == 0, "un retard ordinaire n'est PAS compte comme une regression");
+    Verifier(t.DernierTick() == 1002, "le plus recent reste le plus recent");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+// L'HORLOGE SERVEUR
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+static void LHorlogeServeurRetrouveUnDecalageMalgreLaGigue()
+{
+    std::printf("l'horloge serveur retrouve le decalage par le minimum, malgre la gigue\n");
+    HorlogeServeur h;
+    Verifier(!h.EstAmorcee(), "non amorcee tant qu'aucun snapshot n'est observe");
+    Verifier(h.TempsServeurMs(5000) == 5000, "sans observation, on rend l'heure locale telle quelle");
+
+    // Vérité fabriquée : l'horloge locale AVANCE de 3 000 ms sur celle du serveur, et le délai
+    // aller vaut 20 ms au mieux, avec des pointes jusqu'à 120 ms.
+    constexpr std::int64_t kDecalageVrai = 3000;
+    const int delais[] = {60, 120, 45, 20, 80, 95, 30, 110};
+    std::uint64_t tsServeur = 1'000'000;
+    for (int d : delais)
+    {
+        const std::uint64_t reception =
+            static_cast<std::uint64_t>(static_cast<std::int64_t>(tsServeur) + kDecalageVrai + d);
+        h.Observer(tsServeur, reception);
+        tsServeur += 40; // 25 Hz de diffusion
+    }
+
+    Verifier(h.EstAmorcee(), "amorcee apres observation");
+    // Le minimum vaut `decalage + plus petit delai aller` = 3000 + 20.
+    Verifier(h.DecalageMs() == kDecalageVrai + 20,
+             "le decalage estime vaut le vrai decalage plus le plus petit delai aller");
+    // L'étalement dit de combien la datation est floue : 120 - 20 = 100 ms.
+    Verifier(h.EtalementMs() == 100, "l'etalement expose la barre d'erreur");
+
+    // Ce qu'on en fait : dater un événement local sur la timeline du serveur.
+    const std::uint64_t maintenantLocal = 1'000'320 + kDecalageVrai;
+    Verifier(h.TempsServeurMs(maintenantLocal) == 1'000'320 - 20,
+             "un instant local se traduit en instant serveur a 20 ms pres");
+}
+
+static void LHorlogeServeurIgnoreUnHorodatageAbsent()
+{
+    std::printf("un ts_ms absent (serveur ancien) est ignore, jamais pris pour l'annee 1970\n");
+    HorlogeServeur h;
+    h.Observer(0, 1'700'000'000'000ull);
+    Verifier(!h.EstAmorcee(), "un ts_ms a zero n'amorce rien");
+    Verifier(h.TempsServeurMs(42) == 42, "et ne fabrique aucune correction");
+}
+
+static void LHorlogeServeurSupporteUneHorlogeLocaleEnRetard()
+{
+    std::printf("une horloge locale EN RETARD sur le serveur donne un decalage negatif\n");
+    HorlogeServeur h;
+    // Le PC du joueur retarde de 5 s. Sans arithmetique signee, ce cas fait un tour complet
+    // d'`uint64` et l'estimation devient une aberration silencieuse.
+    constexpr std::int64_t kRetardLocal = -5000;
+    std::uint64_t tsServeur = 2'000'000;
+    for (int i = 0; i < 10; ++i)
+    {
+        const std::uint64_t reception = static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(tsServeur) + kRetardLocal + 30);
+        h.Observer(tsServeur, reception);
+        tsServeur += 40;
+    }
+    Verifier(h.DecalageMs() == kRetardLocal + 30, "le decalage negatif est retrouve tel quel");
+    Verifier(h.TempsServeurMs(1'000'000) == 1'004'970,
+             "et la traduction locale vers serveur reste juste");
+}
+
+static void LHorlogeServeurOublieUnVieuxMinimum()
+{
+    std::printf("la fenetre glissante OUBLIE, sinon elle ne suivrait jamais la derive\n");
+    HorlogeServeur h;
+    // Un premier paquet exceptionnellement rapide, puis une longue serie plus lente. Une fois le
+    // chanceux sorti de la fenetre, l'estimation doit avoir suivi — c'est toute la raison d'avoir
+    // une fenetre plutot qu'un minimum absolu.
+    h.Observer(1000, 1000 + 1); // delai aller de 1 ms, le chanceux
+    Verifier(h.DecalageMs() == 1, "le premier echantillon fixe l'estimation initiale");
+    std::uint64_t ts = 1040;
+    for (std::size_t i = 0; i < kFenetreHorloge; ++i)
+    {
+        h.Observer(ts, ts + 50);
+        ts += 40;
+    }
+    Verifier(h.DecalageMs() == 50, "le chanceux est sorti de la fenetre, l'estimation a suivi");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+// LA GIGUE FANTÔME — quand le serveur ne diffuse pas à chaque tick
+// ─────────────────────────────────────────────────────────────────────────────────────
+//
+// Ce test échoue sur le code d'avant le 2026-08-15 : l'estimateur comparait l'arrivée
+// réelle à `kPeriodeTickS`, c'est-à-dire à la période de SIMULATION. Depuis le découplage
+// (`snapshot_divider()` côté serveur : simulation 50 Hz, diffusion 25 Hz), un fil
+// parfaitement sain arrive toutes les 40 ms — et était donc lu comme 20 ms de retard
+// PERMANENT.
+//
+// Rien ne se voyait à l'écran (le délai adaptatif reste au plancher de 100 ms), mais le
+// chiffre `gigue` du journal devenait un mensonge — et c'est exactement celui qu'on lira
+// pour décider si le réseau d'un joueur va bien. Un instrument qui accuse à tort coûte
+// plus cher qu'un instrument absent.
+static void UneDiffusionUnTickSurDeuxNeProduitAucuneGigue()
+{
+    std::printf("une diffusion un tick sur deux ne fabrique PAS de gigue fantome\n");
+    HorlogeRendu h;
+    h.ObserverSnapshot(100);
+
+    // Regime NOMINAL a 25 Hz de diffusion : les ticks avancent de 2, les arrivees sont
+    // espacees de 40 ms, et tout est parfaitement regulier.
+    for (std::uint64_t t = 102; t < 140; t += 2)
+    {
+        h.Avancer(kPeriodeTickS * 2.0);
+        h.ObserverSnapshot(t);
+    }
+    Proche(static_cast<float>(h.Gigue()), 0.0f,
+           "un fil regulier a 25 Hz ne doit produire AUCUNE gigue", 1e-4f);
+    Proche(static_cast<float>(h.DelaiCourant()), 0.100f,
+           "et le delai doit rester au plancher");
+
+    // Et la detection d'un VRAI retard doit continuer de fonctionner : une arrivee a 100 ms sur
+    // un intervalle attendu de 40 ms (le tick avance de 2), c'est 60 ms de gigue.
+    //
+    // ⚠️ Le tick DOIT etre 140 : la boucle ci-dessus s'arrete a 138 (condition `t < 140`). Viser
+    // 142 ferait un ecart de 4 ticks, donc un intervalle attendu de 80 ms et une gigue de 20 —
+    // premiere version de ce test, et elle accusait le code d'une erreur qui etait la mienne.
+    h.Avancer(0.100);
+    h.ObserverSnapshot(140);
+    Proche(static_cast<float>(h.Gigue()), 0.060f,
+           "un vrai retard se mesure contre l'intervalle ATTENDU, pas contre la periode de "
+           "simulation",
+           1e-3f);
+}
+
 int main()
 {
     std::printf("=== Verification du tampon d'interpolation ===\n\n");
@@ -367,6 +548,13 @@ int main()
     LeDelaiEstPlafonne();
     LAgeDuDernierEchantillonDitQuandLeFilSeTait();
     UnTamponVideNeRendRien();
+    UneRegressionFrancheDeTickRepartDeZero();
+    UnRetardOrdinaireNeViderPasLeTampon();
+    LHorlogeServeurRetrouveUnDecalageMalgreLaGigue();
+    LHorlogeServeurIgnoreUnHorodatageAbsent();
+    LHorlogeServeurSupporteUneHorlogeLocaleEnRetard();
+    LHorlogeServeurOublieUnVieuxMinimum();
+    UneDiffusionUnTickSurDeuxNeProduitAucuneGigue();
 
     std::printf("\n%d verifications, %d echec(s)\n", g_verifs, g_echecs);
     return g_echecs == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

@@ -1,7 +1,19 @@
 #include "NetworkGameSystem.h"
 
+#include "PlayerSync/HorlogeServeur.h"
 #include "PlayerSync/Robot.h"
 #include "PlayerSync/Telemetrie.h"
+
+/// Estimateur du décalage entre l'horloge de CETTE machine et celle du serveur.
+///
+/// ⚠️ Déclaré AVANT `g_telemetrie` : celle-ci en garde un pointeur, et l'ordre d'initialisation
+/// des globales d'une même unité de traduction suit l'ordre de déclaration. L'inverse
+/// laisserait `BrancherHorloge` pointer sur un objet pas encore construit.
+///
+/// Alimenté par `HandleSnapshot` (champ `Snapshot.ts_ms`), lu par la télémétrie pour dater chaque
+/// ligne sur une base commune à tous les joueurs. Sans lui, cinquante journaux de playtest ne se
+/// comparent pas — voir `HorlogeServeur.h`.
+Tessera::Sync::HorlogeServeur g_horlogeServeur;
 
 /// Journal de mesure — inerte tant que `--tessera-telemetrie` n'est pas passe (voir Telemetrie.h).
 /// Déclaré ICI, tout en haut : il est utilisé dès le premier tick (démarrage), bien avant le bloc
@@ -10,6 +22,8 @@ Tessera::Sync::Telemetrie g_telemetrie;
 
 // --- Mode robot : l'etat du scenario, hors de la classe (cf. NetworkGameSystem.h) ---
 bool g_robotActif = false;
+/// Sonde T7 — voir `SondeAccroupiDemandee`. Inerte sans le drapeau.
+bool g_sondeAccroupi = false;
 bool g_robotOrigineConnue = false;
 float g_robotOrigineX = 0.0f, g_robotOrigineY = 0.0f, g_robotOrigineZ = 0.0f;
 std::chrono::steady_clock::time_point g_robotDebut;
@@ -22,6 +36,12 @@ int g_robotPhase = -1;
 #include "RED4ext/RTTISystem.hpp"
 #include "RED4ext/Scripting/Natives/Generated/EulerAngles.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/TeleportationFacility.hpp"
+// Asseoir les avatars distants sur les sieges (F-VEH-031, mesure en jeu le 2026-08-14).
+#include "RED4ext/Scripting/Natives/Generated/game/MountEventData.hpp"
+#include "RED4ext/Scripting/Natives/Generated/game/WorkspotGameSystem.hpp"
+#include "RED4ext/Scripting/Natives/Generated/game/mounting/IMountingFacility.hpp"
+#include "RED4ext/Scripting/Natives/Generated/game/mounting/MountingRequest.hpp"
+#include "RED4ext/Scripting/Natives/Generated/game/mounting/UnmountingRequest.hpp"
 #include "RED4ext/Scripting/Utils.hpp"
 #include "RED4ext/SystemUpdate.hpp"
 
@@ -169,6 +189,8 @@ void NetworkGameSystem::Unload()
 bool NetworkGameSystem::ConnectToServer(const std::string& host, uint16_t port)
 {
     SDK->logger->InfoF(PLUGIN, "Trying to connect to server at %s:%d", host.c_str(), port);
+    // Mémorisé pour l'en-tête de session du journal de playtest (voir `SendJoin`).
+    m_serverAddress = host + ":" + std::to_string(port);
 
     if (m_pInterface != nullptr)
     {
@@ -228,6 +250,13 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
         const auto commandLine = GetCommandLineA();
         // DIAGNOSTIC TesseraSynth : tracer ce que voit réellement le tick réseau au 1er passage.
         SDK->logger->InfoF(PLUGIN, "[net] 1er tick — GetCommandLineA = %s", commandLine ? commandLine : "(null)");
+        g_sondeAccroupi = SondeAccroupiDemandee(commandLine);
+        if (g_sondeAccroupi)
+        {
+            SDK->logger->Info(PLUGIN, "[sonde] ACCROUPI — stanceState.state=Crouch poussé sur "
+                                      "chaque avatar distant. Observation attendue : l'avatar "
+                                      "d'en face est accroupi, ou il ne l'est pas.");
+        }
         g_robotActif = RobotDemande(commandLine);
         if (g_robotActif)
         {
@@ -236,9 +265,19 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
         }
         if (TelemetrieDemandee(commandLine))
         {
-            // Le dossier des journaux RED4ext existe forcément — c'est celui où le plugin écrit
-            // déjà. Un dossier à créer serait un mode d'échec de plus, pour rien.
-            g_telemetrie.Demarrer("red4ext/logs", static_cast<std::uint32_t>(GetCurrentProcessId()));
+            // ⚠️ DOSSIER À NOUS depuis le 2026-08-15, plus `red4ext/logs`.
+            //
+            // Le launcher doit pouvoir RAMASSER puis PURGER ce dossier après une session de
+            // playtest. Le faire sur `red4ext/logs` emporterait les journaux du chargeur de mods —
+            // c'est-à-dire précisément ce qu'on relit quand un joueur signale un plantage.
+            // Un dossier qui n'appartient qu'à nous est la condition pour que la collecte
+            // automatique soit sûre.
+            g_telemetrie.Demarrer(Tessera::Sync::kDossierJournaux,
+                                  static_cast<std::uint32_t>(GetCurrentProcessId()));
+            // L'estimateur d'horloge serveur alimente le champ `ts` de chaque ligne. Branché ici,
+            // une fois : sans lui le journal reste lisible localement mais ne se compare plus à
+            // celui d'une autre machine — voir `HorlogeServeur.h`.
+            g_telemetrie.BrancherHorloge(&g_horlogeServeur);
             SDK->logger->InfoF(PLUGIN, "[mesure] telemetrie %s (pid %u) -> %s",
                                g_telemetrie.Active() ? "ACTIVE" : "REFUSEE (fichier non ouvert)",
                                GetCurrentProcessId(),
@@ -514,6 +553,7 @@ StatsRoster g_statsRoster;
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
+std::map<uint64_t, PoseEnAttente> g_posesEnAttente;
 std::set<std::pair<int32_t, int32_t>> g_cellulesRecues;
 /// Sonde d'apparence — premiere apparence vue par record, et garde one-shot. Une sonde qui
 /// rhabillerait toute la rue changerait la scene observee et rendrait le resultat inexploitable.
@@ -684,7 +724,48 @@ void NetworkGameSystem::SetEntityPosition(const RED4ext::ent::EntityID entityId,
         // }
     } else
     {
-        SDK->logger->Warn(PLUGIN, "Cannot SetEntityPosition, because the entity hasn't been found");
+        // CREUX B0 — on RETIENT au lieu de jeter.
+        //
+        // `CreateEntity` rend un id immediatement mais instancie en differe : l'entite existe
+        // pour le serveur et pas encore pour le moteur. Jeter la position ici (ce que faisait
+        // l'ancien code, avec un simple Warn) la laissait figee la ou elle etait nee, POUR
+        // TOUJOURS — il n'y a aucune autre voie de rattrapage.
+        //
+        // La derniere pose voulue ecrase la precedente : c'est la bonne semantique, on veut la
+        // position ACTUELLE quand l'entite arrivera, pas l'historique de celles qu'on a ratees.
+        g_posesEnAttente[entityId.hash] = PoseEnAttente{ worldPosition, yaw };
+    }
+}
+
+/// Rejoue les poses retenues pour les entites qui n'etaient pas encore resolvables.
+///
+/// Appelee une fois par snapshot : c'est la cadence a laquelle de nouvelles poses arrivent, donc
+/// celle a laquelle une entite a une chance d'etre devenue resolvable. Une entite qui repond enfin
+/// est positionnee puis retiree du tampon ; les autres restent pour le prochain tour.
+///
+/// Cout borne : le tampon ne contient que des entites en attente d'instanciation, jamais le roster
+/// complet. En regime etabli il est vide, et la boucle ne coute rien.
+void NetworkGameSystem::RejouerPosesEnAttente()
+{
+    if (g_posesEnAttente.empty())
+    {
+        return;
+    }
+    for (auto it = g_posesEnAttente.begin(); it != g_posesEnAttente.end();)
+    {
+        const RED4ext::ent::EntityID id{ it->first };
+        if (Cyberverse::Utils::GetDynamicEntity(id).has_value())
+        {
+            const auto pose = it->second;
+            it = g_posesEnAttente.erase(it);
+            // Apres l'erase : SetEntityPosition peut re-remplir le tampon si la resolution
+            // echoue de nouveau entre-temps, et invalider l'iterateur qu'on tient.
+            SetEntityPosition(id, pose.position, pose.yaw);
+        }
+        else
+        {
+            ++it;
+        }
     }
 }
 
@@ -761,6 +842,9 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_IdentitesConnues:
                     HandleIdentitesConnues(env->msg_as_IdentitesConnues());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_InventaireAutoritaire:
+                    HandleInventaireAutoritaire(env->msg_as_InventaireAutoritaire());
+                    break;
                 default:
                     // Reste non câblé : CommandResult, PermissionSync,
                     // QueueStatus, InteractionOpen, InteractionResult,
@@ -788,6 +872,24 @@ void NetworkGameSystem::SendJoin(const std::string& displayName)
     {
         return;
     }
+
+    // ── L'EN-TÊTE DE SESSION, ÉCRIT UNE FOIS, ET SANS LEQUEL LE RESTE EST ANONYME ──────────
+    //
+    // C'est ici, au Join, que toutes les informations d'identité sont réunies au même endroit :
+    // qui, contre quel serveur, avec quelle version de protocole. Plus tard elles sont dispersées.
+    //
+    // Ce que ça achète, et c'est ce qui sépare un CORPUS d'un TAS : le launcher va ramasser une
+    // cinquantaine de fichiers après une soirée de playtest. Sans cette ligne, aucun ne dit de qui
+    // il vient — donc on ne peut ni l'apparier au journal serveur, ni écarter les sessions d'un
+    // build périmé, ni même savoir si deux fichiers viennent du même joueur relancé deux fois.
+    //
+    // La « version » est l'horodatage de COMPILATION du plugin. C'est gratuit (le compilateur le
+    // fournit), ça ne peut pas se désynchroniser d'un fichier de version qu'on oublierait de
+    // bumper, et ça répond à la seule question qu'on se posera vraiment en dépouillant :
+    // « est-ce que cette session vient du build que je crois ? »
+    g_telemetrie.Session(displayName.c_str(), m_serverAddress.c_str(), __DATE__ " " __TIME__,
+                         kTesseraProtocolVersion);
+
     flatbuffers::FlatBufferBuilder builder;
     const auto name = builder.CreateString(displayName);
     // token : JWT ZITADEL transmis par le launcher via l'environnement du process
@@ -978,8 +1080,330 @@ void NetworkGameSystem::NotifyModsetNotCompiled()
     }).detach();
 }
 
+// ── ASSEOIR LES AVATARS DISTANTS SUR LES SIEGES ────────────────────────────────────────────────
+//
+// MESURE le 2026-08-14 (F-VEH-031, sonde `seat_mount`, Lucas au volant) : `MountingFacility.Mount`
+// assied reellement un pantin, ET le moteur le PORTE ensuite — « un PNJ est assis et il est synchro
+// quand je roule ». C'est ce second point qui dicte la forme de ce code.
+//
+// ⚠️ CONSEQUENCE : ON NE REPLIQUE PAS LA POSITION D'UN OCCUPANT. Le mounting natif attache le corps
+// au repere du vehicule ; continuer a le teleporter sur la pose serveur le ferait lutter contre le
+// moteur a chaque frame — exactement le « fantome qui glisse » deja observe sur les vehicules
+// pilotes. On paie donc UN evenement de transition par occupant, jamais un flux continu.
+//
+// Etat des montages DEJA APPLIQUES, par avatar distant. Global, jamais membre : `NetworkGameSystem`
+// est alloue par le moteur (cf. en-tete), un membre de plus corrompt la memoire voisine — mesure le
+// 2026-08-06.
+/// Ce que le SERVEUR veut pour un occupant. Recu en entier a chaque snapshot — ce n'est donc pas un
+/// miroir du jeu, seulement le dernier ordre connu.
+struct MontageVoulu
+{
+    uint64_t vehicule;
+    uint8_t siege;
+    bool operator==(const MontageVoulu& a) const
+    {
+        return vehicule == a.vehicule && siege == a.siege;
+    }
+};
+
+/// Ce que le JEU observe, lu quand on en a besoin et JAMAIS memorise.
+struct EtatObserve
+{
+    bool attache;
+    RED4ext::ent::EntityID parent;
+    RED4ext::CName slot;
+};
+
+/// Identifiant reseau du vehicule ou le joueur LOCAL est assis (0 = aucun). Pose par
+/// `RapporterMontage`, verifie periodiquement contre le jeu, lu par `HandleSnapshot` pour ne PAS
+/// placer cette voiture-la : celui qui conduit la possede (F-VEH-033). Global parce que l'en-tete
+/// interdit d'ajouter un membre a `NetworkGameSystem`, alloue par le moteur.
+static uint64_t g_vehiculeLocalMonte = 0;
+
+/// Avatars distants OBSERVES assis quelque part. Alimente par la reconciliation, jamais par un
+/// evenement — et ce n'est PAS une autorite : c'est un cache de RENDU, consulte a chaque frame
+/// pour ne pas piloter un corps que le moteur porte deja. S'il se trompe, la reconciliation le
+/// corrige au passage suivant ; la seule consequence est une frame de pilotage en trop.
+static std::set<uint64_t> g_avatarsAssis;
+
+/// Inverse exact de `IndexDeSiege` (PlayerActionTracker.cpp). Les deux tables DOIVENT rester
+/// jumelles : le serveur ne transporte qu'un index, et un decalage assied les gens ailleurs.
+static RED4ext::CName SiegeDeIndex(uint8_t index)
+{
+    switch (index)
+    {
+    case 0: return RED4ext::CName("seat_front_left");
+    case 1: return RED4ext::CName("seat_front_right");
+    case 2: return RED4ext::CName("seat_back_left");
+    case 3: return RED4ext::CName("seat_back_right");
+    default: return RED4ext::CName("seat_front_left");
+    }
+}
+
+/// Journalise une fois toutes les 3 s par motif. Un `return` muet dans un chemin appele a 50 Hz est
+/// un trou de diagnostic, pas une optimisation — la journee du 2026-08-14 l'a paye quatre fois.
+static void JournalRalenti(const char* motif, const char* details)
+{
+    // Cle = l'ADRESSE du litteral : chaque site d'appel a la sienne, et on evite <string>.
+    static std::map<const void*, std::chrono::steady_clock::time_point> s_dernier;
+    const auto maintenant = std::chrono::steady_clock::now();
+    auto& quand = s_dernier[static_cast<const void*>(motif)];
+    if (maintenant - quand < std::chrono::seconds(3))
+    {
+        return;
+    }
+    quand = maintenant;
+    SDK->logger->InfoF(PLUGIN, "[occupation] %s%s", motif, details);
+}
+
+/// COUCHE B — l'attache logique. Le type de sortie fait partie de l'appel : `IMountingFacility` est
+/// a UN cran de `IGameSystem`, donc un `Handle<IGameSystem>` se lie (mesure le 2026-08-14 : un
+/// `Handle<IScriptable>`, lui, ne se liait pas).
+static RED4ext::IScriptable* FacadeMontage()
+{
+    Red::Handle<Red::IGameSystem> facility;
+    if (Red::CallStatic("ScriptGameInstance", "GetMountingFacility", facility) && facility)
+    {
+        return facility.instance;
+    }
+    if (auto* direct = Red::GetGameSystem<RED4ext::game::mounting::IMountingFacility>())
+    {
+        return direct;
+    }
+    JournalRalenti("facade de montage INJOIGNABLE", "");
+    return nullptr;
+}
+
+/// COUCHE C — le corps et l'animation. Le type DECLARE est `WorkspotGameSystem`, a DEUX crans de
+/// `IGameSystem` (`WorkspotGameSystem` -> `IWorkspotGameSystem` -> `IGameSystem`), et un
+/// `Handle<IGameSystem>` ne se lie PAS : `workspot INJOIGNABLE` quatre fois par minute, mesure le
+/// 2026-08-14. Le parametre de sortie se calque sur le type DECLARE, jamais sur ce qu'on croit
+/// compatible par heritage.
+static RED4ext::IScriptable* SystemeWorkspot()
+{
+    Red::Handle<RED4ext::game::WorkspotGameSystem> systeme;
+    if (Red::CallStatic("ScriptGameInstance", "GetWorkspotSystem", systeme) && systeme)
+    {
+        return systeme.instance;
+    }
+    // ⚠️ REPLI PAR RESOLUTION DIRECTE, et c'est lui qui marche (mesure du 2026-08-15).
+    //
+    // `CallStatic("ScriptGameInstance", "GetWorkspotSystem", ...)` a echoue avec CHAQUE type de
+    // sortie essaye — `IGameSystem` puis `WorkspotGameSystem`, le type declare. La reconciliation
+    // emettait donc parfaitement ses ordres (montage, changement de place, sortie : tous
+    // journalises) et la couche C n'etait JAMAIS atteinte : `corps NON PLACE` a chaque fois.
+    //
+    // `GetGameSystem<T>` ne passe pas par la fonction statique du script : il resout le systeme par
+    // son TYPE dans le registre du moteur. C'est le chemin qu'emploie `Utils::GetPlayer` pour
+    // `PlayerSystem` depuis toujours, et il ne depend d'aucune signature de script.
+    //
+    // Lecon : quand un `CallStatic` refuse de se lier apres deux types de sortie corrects, ce n'est
+    // pas le type qui est en cause — c'est la voie. Il faut en changer, pas la raffiner.
+    if (auto* direct = Red::GetGameSystem<RED4ext::game::WorkspotGameSystem>())
+    {
+        return direct;
+    }
+    JournalRalenti("systeme workspot INJOIGNABLE", " — ni CallStatic ni GetGameSystem<T>");
+    return nullptr;
+}
+
+static std::optional<Red::Handle<RED4ext::GameObject>> ObjetDe(RED4ext::ent::EntityID id)
+{
+    const auto entite = Cyberverse::Utils::GetDynamicEntity(id);
+    if (!entite.has_value() || entite->instance == nullptr)
+    {
+        return {};
+    }
+    // Descente de type explicite : `Handle<Entity>` ne se convertit pas seul vers
+    // `Handle<GameObject>` (assertion statique de RED4ext).
+    return Red::ToHandle(static_cast<RED4ext::GameObject*>(entite->instance));
+}
+
+/// Lit la couche B. `false` = on n'a pas pu lire ; l'appelant ne doit alors RIEN faire — agir a
+/// l'aveugle est ce qui produit les etats incoherents.
+static bool LireEtatObserve(RED4ext::ent::EntityID avatar, EtatObserve& sortie)
+{
+    auto* facility = FacadeMontage();
+    const auto objet = ObjetDe(avatar);
+    if (facility == nullptr || !objet.has_value())
+    {
+        return false;
+    }
+    // Les TROIS parametres se passent, meme les optionnels : `optional` decrit ce que le SCRIPT
+    // peut omettre, pas ce que l'appel RTTI peut omettre (mesure le 2026-08-14).
+    RED4ext::game::mounting::MountingInfo reel{};
+    Red::Handle<RED4ext::GameObject> aucunParent{};
+    RED4ext::game::mounting::MountingSlotId aucunSlot{};
+    if (!Red::CallVirtual(facility, "GetMountingInfoSingleWithObjects", reel, *objet, aucunParent,
+                          aucunSlot))
+    {
+        JournalRalenti("lecture d'attache IMPOSSIBLE", "");
+        return false;
+    }
+    sortie.attache = reel.parentId.hash != 0;
+    sortie.parent = reel.parentId;
+    sortie.slot = reel.slotId.id;
+    return true;
+}
+
+/// Remplit le contexte que le chemin natif remplit toujours
+/// (`gameVehicleMountableComponent.script:98-105`). Un `mountData` nul prive le moteur de ce qu'il
+/// doit faire — c'est ce qui laissait un avatar assis dans une voiture qu'il avait quittee.
+static Red::Handle<RED4ext::game::MountEventData> ContexteMontage(RED4ext::ent::EntityID vehicule,
+                                                                  RED4ext::CName siege,
+                                                                  bool instantane)
+{
+    auto donnees = Red::MakeScriptedHandle<RED4ext::game::MountEventData>();
+    if (donnees)
+    {
+        donnees->slotName = siege;
+        donnees->mountParentEntityId = vehicule;
+        donnees->isInstant = instantane;
+    }
+    return donnees;
+}
+
+/// DEHORS -> ASSIS. Couche B puis couche C, dans cet ordre.
+static void AsseoirAvatar(uint64_t avatarReseau, RED4ext::ent::EntityID vehicule,
+                          RED4ext::ent::EntityID avatar, uint64_t vehiculeReseau, uint8_t siege,
+                          bool instantane)
+{
+    auto* facility = FacadeMontage();
+    if (facility == nullptr)
+    {
+        return;
+    }
+
+    // Le siege conducteur a son propre chemin dans le jeu : `PreHijackPrepareDriverSlot` est
+    // appelee avant tout montage au volant (`gameVehicleMountableComponent.script`). L'ignorer se
+    // payait en reessais — quatre tentatives mesurees le 2026-08-14.
+    if (siege == 0)
+    {
+        const auto caisse = Cyberverse::Utils::GetDynamicEntity(vehicule);
+        if (caisse.has_value() && caisse->instance != nullptr)
+        {
+            Red::CallVirtual(caisse->instance, "PreHijackPrepareDriverSlot");
+        }
+    }
+
+    const RED4ext::CName nomSiege = SiegeDeIndex(siege);
+    auto requete = Red::MakeScriptedHandle<RED4ext::game::mounting::MountingRequest>();
+    if (!requete)
+    {
+        JournalRalenti("requete de montage NON CONSTRUITE", "");
+        return;
+    }
+    requete->lowLevelMountingInfo.childId = avatar;
+    requete->lowLevelMountingInfo.parentId = vehicule;
+    requete->lowLevelMountingInfo.slotId.id = nomSiege;
+    requete->preservePositionAfterMounting = true;
+    requete->mountData = ContexteMontage(vehicule, nomSiege, instantane);
+    if (!Red::CallVirtual(facility, "Mount", requete))
+    {
+        JournalRalenti("Mount REFUSE", " — la methode n'a pas ete trouvee");
+        return;
+    }
+
+    // COUCHE C. Sans elle, l'occupation est correcte partout SAUF a l'ecran.
+    bool corpsPlace = false;
+    if (auto* workspot = SystemeWorkspot())
+    {
+        const auto oCaisse = ObjetDe(vehicule);
+        const auto oCorps = ObjetDe(avatar);
+        if (oCaisse.has_value() && oCorps.has_value())
+        {
+            RED4ext::DynArray<RED4ext::ent::EntityID> aucunSync{};
+            RED4ext::DynArray<RED4ext::CName> aucuneVar{};
+            corpsPlace = Red::CallVirtual(workspot, "MountToVehicle", *oCaisse, *oCorps, 0.0f, 0.0f,
+                                          RED4ext::CName("OccupantSlots"), nomSiege, aucunSync,
+                                          RED4ext::CName(), aucuneVar);
+        }
+    }
+    SDK->logger->InfoF(PLUGIN, "[occupation] avatar %llu -> vehicule %llu siege %u (corps %s, %s)",
+        avatarReseau, vehiculeReseau, static_cast<uint32_t>(siege),
+        corpsPlace ? "place" : "NON PLACE", instantane ? "instantane" : "anime");
+}
+
+/// ASSIS(a) -> ASSIS(b). Une operation DEDIEE, pas une descente suivie d'une montee : decomposer
+/// laisse le corps accroche a l'ancien siege entre les deux (mesure le 2026-08-14).
+static void ChangerDeSiege(uint64_t avatarReseau, RED4ext::ent::EntityID vehicule,
+                           RED4ext::ent::EntityID avatar, uint8_t siege)
+{
+    auto* workspot = SystemeWorkspot();
+    const auto oCaisse = ObjetDe(vehicule);
+    const auto oCorps = ObjetDe(avatar);
+    if (workspot == nullptr || !oCaisse.has_value() || !oCorps.has_value())
+    {
+        return;
+    }
+    RED4ext::DynArray<RED4ext::CName> aucuneVar{};
+    const bool ok = Red::CallVirtual(workspot, "SwitchSeatVehicle", *oCaisse, *oCorps,
+                                     RED4ext::CName("OccupantSlots"), SiegeDeIndex(siege),
+                                     RED4ext::CName("switch_seat"), aucuneVar, aucuneVar);
+    SDK->logger->InfoF(PLUGIN, "[occupation] avatar %llu change pour le siege %u (%s)",
+        avatarReseau, static_cast<uint32_t>(siege), ok ? "ok" : "REFUSE");
+}
+
+/// ASSIS -> DEHORS. Couche B sur l'attache REELLE (jamais reconstruite de memoire), puis couche C,
+/// animee : la descente vient d'arriver sur le fil, la jouer maintenant est juste.
+static void DescendreAvatar(uint64_t avatarReseau, RED4ext::ent::EntityID avatar,
+                            const EtatObserve& observe)
+{
+    if (auto* facility = FacadeMontage())
+    {
+        auto requete = Red::MakeScriptedHandle<RED4ext::game::mounting::UnmountingRequest>();
+        if (requete)
+        {
+            requete->lowLevelMountingInfo.childId = avatar;
+            requete->lowLevelMountingInfo.parentId = observe.parent;
+            requete->lowLevelMountingInfo.slotId.id = observe.slot;
+            requete->mountData = ContexteMontage(observe.parent, observe.slot, true);
+            Red::CallVirtual(facility, "Unmount", requete);
+        }
+    }
+
+    if (auto* workspot = SystemeWorkspot())
+    {
+        const auto oCaisse = ObjetDe(observe.parent);
+        const auto oCorps = ObjetDe(avatar);
+        if (oCaisse.has_value() && oCorps.has_value())
+        {
+            RED4ext::Vector4 aucunDelta{};
+            RED4ext::Quaternion aucuneRotation{ 0.0f, 0.0f, 0.0f, 1.0f };
+            Red::CallVirtual(workspot, "UnmountFromVehicle", *oCaisse, *oCorps, false, aucunDelta,
+                             aucuneRotation, RED4ext::CName());
+        }
+    }
+
+    // ON JETTE LE TAMPON D'INTERPOLATION (F-VEH-035). Il contient encore les poses du temps ou
+    // l'avatar etait assis — c'est-a-dire la position du VEHICULE, puisque l'invariant convoi
+    // ecrase la position de chaque occupant. Les rejouer teleporte le corps en pleine carrosserie,
+    // et le moteur l'ejecte : un corps sur le toit, l'autre dessous, la voiture qui decolle.
+    g_tamponsJoueurs.erase(avatarReseau);
+    SDK->logger->InfoF(PLUGIN, "[occupation] avatar %llu sorti du vehicule", avatarReseau);
+}
+
+
+int NetworkGameSystem::PingCourantMs() const
+{
+    if (m_pInterface == nullptr || m_hConnection == k_HSteamNetConnection_Invalid)
+    {
+        return -1; // pas encore connecte : -1 dit « inconnu », jamais 0 qui dirait « parfait ».
+    }
+    SteamNetConnectionRealTimeStatus_t etat{};
+    if (!m_pInterface->GetConnectionRealTimeStatus(m_hConnection, &etat, 0, nullptr))
+    {
+        return -1;
+    }
+    return etat.m_nPing;
+}
+
 void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot)
 {
+    // D'ABORD rattraper ce qui n'avait pas pu etre place (creux B0), AVANT d'appliquer le nouveau
+    // snapshot : une entite nee au snapshot precedent est justement devenue resolvable entre-temps.
+    RejouerPosesEnAttente();
+
     if (snapshot == nullptr)
     {
         return;
@@ -1047,6 +1471,37 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     // `snapshot->tick()` existe sur le fil depuis le gel du palier 2 et n'etait lu NULLE PART.
     // C'est la donnee dont depend tout le rendu lisse.
     g_horlogeRendu.ObserverSnapshot(snapshot->tick());
+
+    // ── L'ANCRE DE TEMPS COMMUNE ───────────────────────────────────────────────────────────
+    //
+    // `ts_ms` est l'horloge MURALE du serveur au moment de l'encodage. Elle n'a rien à voir avec
+    // `tick`, qui est un compteur de simulation dont l'origine change à chaque redémarrage de
+    // shard : `tick` sert à interpoler, `ts_ms` sert à DATER.
+    //
+    // C'est ce qui rend le journal de cette machine comparable à celui du serveur et à ceux des
+    // quarante-neuf autres joueurs. Sans ça, une soustraction d'horodatages entre deux PC mesure
+    // la dérive des horloges Windows (couramment plusieurs secondes) et l'appelle « latence ».
+    //
+    // Un serveur antérieur au 2026-08-15 laisse le champ à son défaut (0) : l'estimateur l'ignore
+    // et la télémétrie retombe sur l'heure locale, sans rien inventer.
+    g_horlogeServeur.Observer(snapshot->ts_ms(),
+                              static_cast<std::uint64_t>(Tessera::Sync::Telemetrie::Maintenant()));
+
+    // L'état de l'horloge, périodiquement — c'est la ligne qui permet de RE-CORRIGER tout le
+    // fichier après coup si l'estimation s'avère mauvaise. À 25 Hz de diffusion, une fois par
+    // seconde suffit : le décalage ne bouge pas d'un snapshot à l'autre.
+    if (g_telemetrie.Active())
+    {
+        static std::uint64_t s_prochainRapportHorloge = 0;
+        const auto maintenant = static_cast<std::uint64_t>(Tessera::Sync::Telemetrie::Maintenant());
+        if (maintenant >= s_prochainRapportHorloge)
+        {
+            s_prochainRapportHorloge = maintenant + 1000;
+            g_telemetrie.Horloge(g_horlogeServeur.DecalageMs(), g_horlogeServeur.EtalementMs(),
+                                 g_horlogeServeur.Observations(), PingCourantMs());
+        }
+    }
+
     const auto* players = snapshot->players();
     if (players != nullptr)
     {
@@ -1135,6 +1590,47 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     // Vehicules AUTONOMES (trafic). Distincts des vehicules PILOTES (`vehicles_player`), qui
     // relevent du niveau 2 et d'un filet de correction, pas d'un placement direct — les traiter
     // ici les ferait « glisser » (fantome observe en jeu, cf. protocol.fbs VehiclePlayerState).
+    // ── LA PROPRIETE LOCALE SE VERIFIE, ELLE NE SE CROIT PAS ──────────────────────────────
+    //
+    // `g_vehiculeLocalMonte` est pose par `RapporterMontage`, donc par un EVENEMENT. Si l'evenement
+    // de descente manque une fois — sortie par un chemin qui ne le declenche pas, mort dans le
+    // vehicule, changement de siege mal apparie — la voiture reste « a moi » pour toujours : je
+    // cesse definitivement de lui appliquer la pose du serveur, elle se fige chez moi et continue
+    // de bouger chez les autres.
+    //
+    // C'est exactement le symptome rapporte par Lucas le 2026-08-14 : « on voit pas les memes
+    // voitures, elles sont pas au meme endroit », alors que les sieges, eux, restaient synchrones.
+    //
+    // On relit donc l'etat REEL du joueur local une fois par seconde. Meme discipline que le
+    // montage des avatars : l'evenement propose, la relecture dispose.
+    if (g_vehiculeLocalMonte != 0)
+    {
+        static std::chrono::steady_clock::time_point s_derniereVerifProprio{};
+        const auto maintenant = std::chrono::steady_clock::now();
+        if (maintenant - s_derniereVerifProprio >= std::chrono::seconds(1))
+        {
+            s_derniereVerifProprio = maintenant;
+            if (auto* facility = FacadeMontage())
+            {
+                const auto joueur = Cyberverse::Utils::GetPlayer();
+                if (joueur)
+                {
+                    bool monte = false;
+                    // `entityID` est un CHAMP, pas un accesseur — `GetEntityID()` n'existe pas sur
+                    // `game::Object` (erreur deja faite le 2026-08-14, en C++ comme ici).
+                    if (Red::CallVirtual(facility, "IsMountedToAnything", monte, joueur->entityID)
+                        && !monte)
+                    {
+                        SDK->logger->InfoF(PLUGIN,
+                            "[montage] je ne suis plus dans le vehicule %llu — je lui rends sa "
+                            "pose serveur", g_vehiculeLocalMonte);
+                        g_vehiculeLocalMonte = 0;
+                    }
+                }
+            }
+        }
+    }
+
     const auto* vehicles = snapshot->vehicles();
     if (vehicles != nullptr)
     {
@@ -1142,12 +1638,246 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         {
             if (vs != nullptr)
             {
+                // La voiture ou JE suis assis m'appartient : la placer depuis le fil produirait la
+                // boucle mesuree le 2026-08-14 (voiture enfoncee, volant inerte) — cf. F-VEH-033
+                // et le commentaire de `RapporterMontage`. On la marque presente pour qu'elle
+                // echappe au despawn, et on ne touche pas a sa pose.
+                if (vs->id() == g_vehiculeLocalMonte)
+                {
+                    present.insert(vs->id());
+                    continue;
+                }
+                // ── ON NE TELEPORTE PAS UNE VOITURE QUI N'A PAS BOUGE ─────────────────
+                //
+                // MESURE le 2026-08-15 (Lucas) : « des vehicules empiles, ca sature physiquement,
+                // ca prend des degats, ca saute dans tous les sens ».
+                //
+                // Ces voitures sont de VRAIES entites physiques — pas les fantomes immateriels du
+                // sondage de juillet (F-VEH-007), qui n'existaient que par `Teleport`. Le moteur
+                // leur applique donc collisions et gravite, et notre placement autoritaire par
+                // frame se BAT contre lui : le moteur pousse, on repose, le moteur repousse. Sur
+                // une voiture a l'arret c'est un tremblement permanent et des degats gratuits.
+                //
+                // Une voiture dont la pose serveur n'a pas bouge n'a rien a recevoir : on la laisse
+                // au moteur. Le seuil est large devant la quantization du fil (`q_pos`) et etroit
+                // devant un deplacement reel — une voiture qui roule depasse 5 cm par snapshot des
+                // la premiere vitesse.
+                static std::map<uint64_t, RED4ext::Vector4> s_dernierePoseVehicule;
+                const RED4ext::Vector4 posee = { DequantPos(vs->position()->x()),
+                                                 DequantPos(vs->position()->y()),
+                                                 DequantPos(vs->position()->z()), 1.0f };
+                auto& precedente = s_dernierePoseVehicule[vs->id()];
+                const float dx = posee.X - precedente.X;
+                const float dy = posee.Y - precedente.Y;
+                const float dz = posee.Z - precedente.Z;
+                const bool immobile = precedente.W != 0.0f
+                    && (dx * dx + dy * dy + dz * dz) < (0.05f * 0.05f);
+                if (immobile)
+                {
+                    present.insert(vs->id());
+                    continue;
+                }
+                precedente = posee;
+
                 // Les vehicules n'ont PAS le triplet biped (ils portent une `speed`
                 // scalaire) : locomotion 0, donc placement direct sans commande de marche.
                 applyPose(vs->id(), vs->position(), vs->yaw(), 0);
             }
         }
     }
+
+    // ── OCCUPANTS : RÉCONCILIATION, PAS ÉVÉNEMENTS ─────────────────────────────────────────
+    //
+    // Refonte du 2026-08-14 (spec `2026-08-14-vehicules-refonte-occupation-design.md` §2.1), après
+    // sept correctifs successifs qui n'avaient rien débloqué. Le modèle précédent traitait
+    // l'occupation comme une suite d'ÉVÉNEMENTS et maintenait un miroir local de « qui est assis
+    // où ». Un miroir diverge toujours : la voiture figée chez un client, l'avatar assis dans une
+    // voiture vide, la place restée vacante — les trois étaient des divergences de miroir, pas des
+    // défauts de réplication.
+    //
+    // Ici on ne mémorise plus l'état du JEU. À chaque passage on lit ce que le jeu observe, on le
+    // compare à ce que le serveur veut, et on n'émet que la différence. Trois propriétés en
+    // découlent, et ce sont exactement celles qui manquaient : auto-réparant (un ordre perdu ou
+    // différé se rattrape au passage suivant, sans code de reprise), sans dérive (rien à
+    // maintenir), idempotent (le même snapshot appliqué deux fois n'émet rien).
+    //
+    // ⚠️ TROIS COUCHES, ET L'ORDRE N'EST PAS NÉGOCIABLE (spec §2) :
+    //     A · le SERVEUR décide      → `occupants[]`
+    //     B · `MountingFacility`     → l'attache logique (occupation, portes, scanner)
+    //     C · `WorkspotGameSystem`   → le CORPS et l'animation
+    // Écrire B sans C donne un état cohérent partout SAUF à l'écran. C'est ce qui a coûté la
+    // journée du 14 août : chaque instrument ajouté interrogeait B, qui disait vrai.
+    {
+        // État VOULU (couche A). Le joueur local s'en exclut par construction : il n'est jamais
+        // dans `m_networkedEntitiesLookup`, qui ne contient que les corps nés pour les autres.
+        std::map<uint64_t, MontageVoulu> voulu;
+        if (vehicles != nullptr)
+        {
+            for (const auto* vs : *vehicles)
+            {
+                if (vs == nullptr || vs->occupants() == nullptr)
+                {
+                    continue;
+                }
+                for (const auto* occ : *vs->occupants())
+                {
+                    if (occ != nullptr)
+                    {
+                        voulu[occ->client()] = { vs->id(), occ->seat() };
+                    }
+                }
+            }
+        }
+
+        // Qui faut-il examiner à ce passage ? Tout le monde serait correct mais coûteux : lire les
+        // couches B et C est un aller RTTI par avatar. On examine donc (a) ceux dont l'état VOULU
+        // vient de changer — c'est la réactivité, et comparer deux états SERVEUR reçus en entier
+        // n'est pas un miroir du jeu — et (b) tout le monde, une fois par seconde, pour la
+        // réparation. Entre les deux, on ne paie rien.
+        static std::map<uint64_t, MontageVoulu> s_vouluPrecedent;
+        static std::set<uint64_t> s_candidats; // avatars déjà assis : à surveiller pour la descente
+        /// Corps qu'on avait deja resolus au passage precedent. Un avatar qu'on decouvre a
+        /// l'instant rejoue forcement un etat vieux de plusieurs secondes, meme si le serveur
+        /// vient de nous l'annoncer : il etait deja assis avant qu'on le voie.
+        static std::set<uint64_t> s_corpsConnus;
+        static std::chrono::steady_clock::time_point s_dernierBalayage{};
+        const auto maintenant = std::chrono::steady_clock::now();
+        const bool balayage = (maintenant - s_dernierBalayage) >= std::chrono::seconds(1);
+        if (balayage)
+        {
+            s_dernierBalayage = maintenant;
+        }
+
+        std::set<uint64_t> aExaminer;
+        for (const auto& [id, cible] : voulu)
+        {
+            const auto avant = s_vouluPrecedent.find(id);
+            if (balayage || avant == s_vouluPrecedent.end() || !(avant->second == cible))
+            {
+                aExaminer.insert(id);
+            }
+        }
+        for (uint64_t id : s_candidats)
+        {
+            if (balayage || voulu.find(id) == voulu.end())
+            {
+                aExaminer.insert(id);
+            }
+        }
+        // ⚠️ ON GARDE UNE COPIE AVANT D'ECRASER. C'est le seul signal qui distingue « le serveur
+        // vient d'annoncer qu'il s'assied » de « on decouvre qu'il etait deja assis » — et c'est
+        // cette distinction, et elle seule, qui decide si l'animation se joue.
+        const std::map<uint64_t, MontageVoulu> precedent = s_vouluPrecedent;
+        s_vouluPrecedent = voulu;
+
+        for (uint64_t avatarReseau : aExaminer)
+        {
+            const auto corps = m_networkedEntitiesLookup.find(avatarReseau);
+            if (corps == m_networkedEntitiesLookup.end())
+            {
+                continue; // corps pas (encore) rendu : rien à réconcilier, on retentera.
+            }
+            // Note du passage COURANT, lu au passage suivant. Insere apres le `continue` : un corps
+            // qu'on n'a pas pu resoudre n'est pas « connu ».
+            const bool corpsVuAvant = s_corpsConnus.count(avatarReseau) != 0;
+            s_corpsConnus.insert(avatarReseau);
+
+            EtatObserve observe{};
+            if (!LireEtatObserve(corps->second, observe))
+            {
+                continue; // lecture impossible : ne rien faire vaut mieux que faire à l'aveugle.
+            }
+
+            const auto cible = voulu.find(avatarReseau);
+            if (cible == voulu.end())
+            {
+                // Le serveur ne le dit plus assis. S'il l'est encore dans le jeu, on l'en sort.
+                if (observe.attache)
+                {
+                    DescendreAvatar(avatarReseau, corps->second, observe);
+                }
+                s_candidats.erase(avatarReseau);
+                g_avatarsAssis.erase(avatarReseau);
+                continue;
+            }
+
+            const auto caisse = m_networkedEntitiesLookup.find(cible->second.vehicule);
+            if (caisse == m_networkedEntitiesLookup.end())
+            {
+                continue; // véhicule pas rendu : on ne peut pas encore l'y asseoir.
+            }
+            s_candidats.insert(avatarReseau);
+            g_avatarsAssis.insert(avatarReseau);
+
+            const RED4ext::CName siegeVoulu = SiegeDeIndex(cible->second.siege);
+            const bool bonVehicule = observe.attache
+                && observe.parent.hash == caisse->second.hash;
+            if (bonVehicule && observe.slot == siegeVoulu)
+            {
+                continue; // déjà exactement là où il doit être : rien à faire.
+            }
+
+            // ⚠️ UN CHANGEMENT DE PLACE N'EST PAS UNE DESCENTE SUIVIE D'UNE MONTÉE. Le jeu a une
+            // opération dédiée (`workspotSystem.script:34`, employée par
+            // `vehicleTransition.script:1995`). La décomposer laisse le corps accroché à l'ancien
+            // siège entre les deux — c'est le « la place reste vide » mesuré le 2026-08-14.
+            if (bonVehicule)
+            {
+                ChangerDeSiege(avatarReseau, caisse->second, corps->second, cible->second.siege);
+                continue;
+            }
+
+            // Attaché ailleurs (autre véhicule) : on le décroche d'abord, sinon le montage ne
+            // déplace rien.
+            if (observe.attache)
+            {
+                DescendreAvatar(avatarReseau, corps->second, observe);
+            }
+
+            // ── REGLE DU « DEJA VECU » (spec §2.3) ────────────────────────────────────────
+            //
+            // On n'anime QUE ce qu'on voit arriver en direct. Un avatar qu'on decouvre deja assis
+            // rejoue un etat vieux de plusieurs secondes — l'animer le ferait entrer dans une
+            // voiture ou il est deja, en retard et en double.
+            //
+            // ⚠️ LA PREMIERE VERSION DE CE TEST ETAIT INVERSEE, et l'animation d'entree ne se
+            // jouait donc JAMAIS : `s_candidats.insert` avait lieu quelques lignes plus haut, si
+            // bien que `count() != 0` etait toujours vrai et que la condition se reduisait a
+            // `observe.attache` — faux par definition dans une transition DEHORS -> ASSIS. Un
+            // drapeau calcule APRES avoir ete pose ne mesure plus rien.
+            //
+            // Le bon signal tient en deux termes, et aucun n'est un miroir de l'etat du jeu :
+            //   · le corps etait DEJA connu au passage precedent (sinon c'est une decouverte) ;
+            //   · le serveur ne le disait PAS assis au passage precedent (sinon c'est un
+            //     rattrapage).
+            // Les deux ensemble : le serveur vient de l'asseoir sous nos yeux.
+            const bool corpsDejaConnu = corpsVuAvant;
+            const bool assisAuPassagePrecedent = precedent.find(avatarReseau) != precedent.end();
+            const bool vuArriver = corpsDejaConnu && !assisAuPassagePrecedent;
+            AsseoirAvatar(avatarReseau, caisse->second, corps->second, cible->second.vehicule,
+                          cible->second.siege, !vuArriver);
+        }
+
+        // ── PURGE ─────────────────────────────────────────────────────────────────────────
+        //
+        // Ces ensembles survivraient au despawn : fuite lente, et surtout une entree perimee ferait
+        // rater le premier placement d'un identifiant REUTILISE — on le croirait deja connu, ou
+        // deja assis, sur la foi d'une vie anterieure. Un cache qui ne se vide pas finit par
+        // repondre sur des morts.
+        for (auto it = s_corpsConnus.begin(); it != s_corpsConnus.end();)
+        {
+            it = (m_networkedEntitiesLookup.find(*it) == m_networkedEntitiesLookup.end())
+                     ? s_corpsConnus.erase(it)
+                     : std::next(it);
+        }
+        for (auto it = s_candidats.begin(); it != s_candidats.end();)
+        {
+            it = (m_networkedEntitiesLookup.find(*it) == m_networkedEntitiesLookup.end())
+                     ? s_candidats.erase(it)
+                     : std::next(it);
+        }
+    }
+
 
     // Ids disparus du snapshot -> despawn, APRÈS UN DÉLAI DE GRÂCE.
     //
@@ -1216,6 +1946,11 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             g_tamponsJoueurs.erase(it->first);
             g_absentsDepuis.erase(it->first);
             g_suiviAvatars.erase(it->first);
+            // La table d'échantillonnage de la télémétrie suit la même règle que ses voisines
+            // ci-dessus : une entrée par id réseau jamais revu s'accumulerait sur une session de
+            // plusieurs heures. Petit, mais c'est exactement le patron de la « table jamais
+            // purgée » que ce dépôt a déjà payé ailleurs (cf. le halo côté serveur).
+            g_telemetrie.OublierEntite(it->first);
             it = m_networkedEntitiesLookup.erase(it);
         }
         else
@@ -1633,6 +2368,53 @@ void NetworkGameSystem::HandleIdentitesConnues(
         m_nomsConnus.size());
 }
 
+void NetworkGameSystem::HandleInventaireAutoritaire(
+    const cyberpunk_rp::protocol::InventaireAutoritaire* msg)
+{
+    if (msg == nullptr)
+    {
+        return;
+    }
+    // ⚠️ ON REMPLACE, contrairement aux identites qui s'ACCUMULENT — et la difference est
+    // structurelle. Ce message est un ETAT (« voici ton sac »), pas un ajout. Le traiter comme un
+    // ajout ferait grossir le sac a chaque envoi, et le rejeu cesserait d'etre inoffensif.
+    m_sacAutoritaire.clear();
+    m_aPreserver.clear();
+
+    if (msg->items() != nullptr)
+    {
+        for (const auto* it : *msg->items())
+        {
+            if (it == nullptr || it->id() == nullptr)
+            {
+                continue;
+            }
+            ItemAutoritaire item;
+            item.id = it->id()->str();
+            item.quantite = it->quantite();
+            m_sacAutoritaire.push_back(std::move(item));
+        }
+    }
+    if (msg->preserver() != nullptr)
+    {
+        for (const auto* p : *msg->preserver())
+        {
+            if (p != nullptr)
+            {
+                m_aPreserver.push_back(p->str());
+            }
+        }
+    }
+
+    // Pose EN DERNIER : tant que ce drapeau est faux, redscript ne touche a rien. Le poser avant de
+    // remplir laisserait une fenetre ou le sac autoritaire est vu VIDE — donc ou le joueur se
+    // ferait vider.
+    m_sacRecu = true;
+
+    SDK->logger->InfoF(PLUGIN, "InventaireAutoritaire : %zu item(s), %zu a preserver",
+        m_sacAutoritaire.size(), m_aPreserver.size());
+}
+
 void NetworkGameSystem::SendActionJoueur(uint64_t target, uint32_t recette)
 {
     if (m_pInterface == nullptr || target == 0 || recette == 0)
@@ -1658,7 +2440,7 @@ void NetworkGameSystem::SendActionJoueur(uint64_t target, uint32_t recette)
 }
 
 bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record,
-                                                uint64_t apparence)
+                                                uint64_t apparence, const Red::CString& origine)
 {
     if (m_pInterface == nullptr)
     {
@@ -1676,12 +2458,20 @@ bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, 
         return false;
     }
 
-    SDK->logger->InfoF(PLUGIN, "CreateCharacter : « %s » record %llu apparence %llu",
-        nom.c_str(), record, apparence);
+    // L'ORIGINE (corpo / nomade / gosse des rues) gouverne la dotation de depart cote serveur,
+    // eurodollars compris. VIDE EST LEGITIME : l'ecran du lobby ne la posait pas encore quand ce
+    // champ a ete ajoute, et un client plus ancien ne l'envoie pas — le serveur retombe alors sur
+    // sa dotation de repli. On ne refuse donc PAS une creation sans origine ici.
+    const std::string org = origine.c_str() != nullptr ? std::string(origine.c_str()) : std::string();
+
+    SDK->logger->InfoF(PLUGIN, "CreateCharacter : « %s » record %llu apparence %llu origine « %s »",
+        nom.c_str(), record, apparence, org.c_str());
 
     flatbuffers::FlatBufferBuilder builder;
     const auto pseudo = builder.CreateString(nom);
-    const auto req = cyberpunk_rp::protocol::CreateCreateCharacter(builder, pseudo, record, apparence);
+    const auto org_off = builder.CreateString(org);
+    const auto req = cyberpunk_rp::protocol::CreateCreateCharacter(
+        builder, pseudo, record, apparence, org_off);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_CreateCharacter, req.Union());
     builder.Finish(env);
@@ -2540,6 +3330,83 @@ void NetworkGameSystem::HandleHealthSync(const cyberpunk_rp::protocol::HealthSyn
     }
 }
 
+uint64_t NetworkGameSystem::IdReseauDe(const RED4ext::ent::EntityID entityId) const
+{
+    for (const auto& [idReseau, idJeu] : m_networkedEntitiesLookup)
+    {
+        if (idJeu == entityId)
+        {
+            return idReseau;
+        }
+    }
+    return 0;
+}
+
+void NetworkGameSystem::RapporterMontage(uint64_t vehiculeReseau, uint32_t siege, bool monte)
+{
+    if (m_pInterface == nullptr || vehiculeReseau == 0)
+    {
+        return;
+    }
+
+    // Constantes du GEL du schema (protocol.fbs, EntityInteraction) — surtout pas une
+    // numerotation locale : 3=Mount, 4=Unmount, et `param` = index de siege desire.
+    constexpr uint8_t kKindMount = 3;
+    constexpr uint8_t kKindUnmount = 4;
+
+    SDK->logger->InfoF(PLUGIN, "%s vehicule %llu siege %u", monte ? "Montee" : "Descente",
+        vehiculeReseau, siege);
+
+    // ── LA VOITURE OU JE SUIS ASSIS N'EST PLUS PLACEE PAR LE SERVEUR ───────────────────────
+    //
+    // MESURE le 2026-08-14 (F-VEH-033), Lucas au volant : « le vehicule est a moitie dans le sol »,
+    // « le moteur demarre et la radio marche, mais impossible de l'utiliser », et au moment de
+    // s'asseoir « ca a teleporte la voiture ailleurs ».
+    //
+    // Un seul mecanisme derriere les trois. Le serveur ecrit la pose du vehicule depuis celle du
+    // CONDUCTEUR, et ce client la reappliquait au vehicule a chaque frame. D'ou une BOUCLE : le
+    // vehicule est pose sur les pieds du joueur (origine caisse != origine pantin, donc il
+    // s'enfonce), le joueur s'enfonce avec, la position remontee s'enfonce encore. Et un placement
+    // autoritaire a 50 Hz ecrase tout ce que le modele de conduite calcule — le volant ne peut pas
+    // gagner contre un `Teleport` par frame.
+    //
+    // Le client qui conduit POSSEDE sa voiture : elle appartient au moteur local, pas au fil.
+    // (La remontee de la pose du VEHICULE — `VehiclePlayerState`, deja gele au protocole et
+    // toujours pas alimente — reste le chantier de niveau 2 ; sans elle, les AUTRES clients voient
+    // encore la voiture suivre la position du conducteur, avec le decalage que ca implique.)
+    //
+    // ⚠️ SEUL LE CONDUCTEUR POSSEDE, ET LA NUANCE N'EST PAS COSMETIQUE (Lucas, 2026-08-14).
+    //
+    // La premiere version coupait le placement pour TOUT occupant. Consequence mesuree : le
+    // PASSAGER cessait lui aussi de recevoir la pose du vehicule — donc, sur son ecran, la voiture
+    // ne bougeait plus du tout, et lui avec, pendant que le conducteur s'eloignait. « J'ai commence
+    // a me deplacer avec le vehicule, l'autre joueur n'a pas suivi. »
+    //
+    // Un passager n'a aucune information locale sur ou va la voiture : la sienne vient du fil, et
+    // elle est la SEULE qu'il ait. Couper le placement pour lui, c'est le laisser a l'arret dans un
+    // vehicule parti sans lui.
+    constexpr uint32_t kSiegeConducteur = 0; // meme convention que `IndexDeSiege`/`SiegeDeIndex`
+    if (siege == kSiegeConducteur)
+    {
+        g_vehiculeLocalMonte = monte ? vehiculeReseau : 0;
+    }
+    else if (!monte && g_vehiculeLocalMonte == vehiculeReseau)
+    {
+        // Descente d'un siege passager alors qu'on possedait la voiture (changement de place du
+        // conducteur vers l'arriere) : on rend la propriete, sinon elle resterait acquise a vie.
+        g_vehiculeLocalMonte = 0;
+    }
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ei = cyberpunk_rp::protocol::CreateEntityInteraction(
+        builder, vehiculeReseau, monte ? kKindMount : kKindUnmount, siege);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_EntityInteraction, ei.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
 void NetworkGameSystem::SendAttackReport(uint64_t target, uint32_t degats)
 {
     if (m_pInterface == nullptr || target == 0 || degats == 0)
@@ -2726,10 +3593,46 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
     }
     else
     {
+        // ── ON ATTEND LE RECORD PLUTOT QUE DE NAITRE FAUX ──────────────────────────────────
+        //
+        // MESURE le 2026-08-14, deux clients : le second a fait naitre les TROIS voitures serveur
+        // en `Character.CitizenBikerMale` — le repli — parce que l'`AppearanceSync` n'etait pas
+        // encore arrivee. Il avait donc trois PIETONS la ou l'autre voyait trois voitures, et
+        // « je ne vois pas la voiture, je ne peux pas monter » n'etait pas un bug de vehicule.
+        //
+        // ⚠️ ET CE CORPS-LA NE GUERIT JAMAIS. `ApplyAppearance` change l'APPARENCE (un `CName`),
+        // pas le RECORD : un pieton ne devient pas une voiture quand l'apparence arrive enfin.
+        // Le repli etait donc definitif, alors qu'il se presentait comme temporaire.
+        //
+        // Differer ne coute rien : l'appelant retente le spawn a CHAQUE snapshot tant que l'entite
+        // manque (c'est deja le mecanisme du creux B0). Une frame d'attente vaut mieux qu'un corps
+        // faux pour la session entiere.
+        static std::map<uint64_t, std::chrono::steady_clock::time_point> s_attenteApparence;
+        const auto maintenant = std::chrono::steady_clock::now();
+        auto& depuis = s_attenteApparence[networkId];
+        if (depuis == std::chrono::steady_clock::time_point{})
+        {
+            depuis = maintenant;
+        }
+
+        // ⚠️ L'ATTENTE EST BORNEE, et c'est delibere. Si le serveur n'envoie JAMAIS d'apparence
+        // pour cette entite, attendre indefiniment la rendrait INVISIBLE pour toujours — une
+        // panne muette, pire que le corps faux qu'on cherche a eviter. Passe le delai, on prend le
+        // repli et on le dit fort : un repli visible se diagnostique, un vide ne se voit pas.
+        constexpr auto kDelaiApparence = std::chrono::seconds(3);
+        if (maintenant - depuis < kDelaiApparence)
+        {
+            JournalRalenti("apparence ATTENDUE",
+                " — spawn differe le temps que l'AppearanceSync arrive (retente au prochain "
+                "snapshot)");
+            return false;
+        }
+
         record = RED4ext::TweakDBID(kFallbackAvatarRecord);
         SDK->logger->WarnF(PLUGIN,
-            "Spawn %llu SANS apparence serveur — repli %s. Le serveur n'a pas (encore) envoye "
-            "d'AppearanceSync pour cette entite.", networkId, kFallbackAvatarRecord);
+            "Spawn %llu SANS apparence serveur apres 3 s d'attente — repli %s. Ce corps ne "
+            "guerira PAS (le record ne se change pas apres coup) : cherche pourquoi le serveur "
+            "n'envoie pas d'AppearanceSync pour cette entite.", networkId, kFallbackAvatarRecord);
     }
 
     const RED4ext::Quaternion worldOrientation = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -2793,9 +3696,27 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     // position seule — alors que les rapports de statiques l'ont déjà saturé une fois
     // (F-PNJ-131). Non fiable d'abord, cadence ensuite.
     //
-    // On ne monte PAS au-delà : émettre plus vite que le serveur ne diffuse n'ajouterait que du
-    // trafic que personne ne lira. Cette période SUIT donc `default_tick_rate_hz()` côté serveur —
-    // 0,02 s = 50 Hz depuis le 2026-08-13.
+    // ⚠️ CE COMMENTAIRE DISAIT « on ne monte pas au-delà : émettre plus vite que le serveur ne
+    // DIFFUSE n'ajouterait que du trafic que personne ne lira ». C'est devenu faux le 2026-08-15,
+    // et la correction vaut d'être écrite plutôt que la ligne effacée.
+    //
+    // Depuis le découplage (`snapshot_divider()`), le serveur SIMULE à 50 Hz mais ne DIFFUSE qu'à
+    // 25 Hz. La moitié de ce qu'on émet n'atteint donc jamais un autre client sous forme de pose
+    // rendue — et pourtant cette cadence reste la bonne, pour une raison différente de celle qui
+    // l'avait justifiée :
+    //
+    //   · le SERVEUR, lui, consomme tout à 50 Hz. L'anti-triche, les interactions, la santé et la
+    //     position autoritaire travaillent sur chaque paquet reçu. Émettre à 25 Hz rendrait la
+    //     vérification de vitesse deux fois plus grossière et perdrait les gestes courts AVANT
+    //     qu'ils n'atteignent l'autorité — c'est-à-dire là où plus rien ne peut les récupérer.
+    //   · pour les autres CLIENTS, l'échantillon supplémentaire n'est pas perdu non plus : il est
+    //     la matière du prochain segment d'interpolation. Un tampon interpole entre deux
+    //     échantillons, il ne les invente pas.
+    //
+    // Cette période suit donc `default_tick_rate_hz()` (la SIMULATION), jamais `snapshot_rate_hz()`
+    // (la diffusion). Confondre les deux ferait baisser la cadence d'émission avec celle de
+    // diffusion, et dégraderait l'autorité serveur pour économiser une bande passante MONTANTE qui
+    // n'a jamais été le problème (le goulot mesuré est descendant).
     static constexpr float kPeriodeEnvoiS = 0.02f;
     m_TimeSinceLastPlayerPositionSync += deltaTime;
     if (m_TimeSinceLastPlayerPositionSync < kPeriodeEnvoiS)
@@ -2889,6 +3810,27 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
         std::snprintf(detail, sizeof(detail), "connus=%zu,corps=%zu", g_tamponsJoueurs.size(),
                       avecCorps);
         g_telemetrie.Evenement("voisins", 0, detail);
+
+        // ── SONDE T7 ───────────────────────────────────────────────────────────────────────
+        //
+        // Rejouée toutes les deux secondes plutôt qu'une seule fois : une entrée de graphe peut
+        // être écrasée par la machine d'état du pantin au premier changement d'état. Un unique
+        // appel qui « ne marche pas » ne distinguerait donc pas « inatteignable » de « atteint
+        // puis écrasé » — deux verdicts opposés.
+        if (g_sondeAccroupi)
+        {
+            for (const auto& [networkId, tampon] : g_tamponsJoueurs)
+            {
+                const auto e = m_networkedEntitiesLookup.find(networkId);
+                if (e == m_networkedEntitiesLookup.end())
+                {
+                    continue;
+                }
+                bool pousse = false;
+                Red::CallVirtual(this, "TesseraPousserPosture", pousse, e->second, true);
+                g_telemetrie.Evenement("sonde_accroupi", networkId, pousse ? "envoye" : "refuse");
+            }
+        }
     }
 
     for (auto& [networkId, tampon] : g_tamponsJoueurs)
@@ -2905,7 +3847,7 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
         // le vehicule a chaque frame, et produirait le tremblement deja vu sur les fantomes
         // glissants. On laisse donc le tampon se remplir (il servira a la descente) et on ne
         // pilote pas.
-        if (AvatarMonte(networkId))
+        if (g_avatarsAssis.count(networkId) != 0)
         {
             continue;
         }
@@ -3035,7 +3977,66 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suivi.commande = false;
         }
         suivi.derniereLocomotion = 0;
-        SetEntityPosition(entityId, positionVoulue, pose.yaw);
+
+        // ── UN AVATAR IMMOBILE NE DOIT RIEN COÛTER, ET IL COÛTAIT LE PLUS CHER ─────────────
+        //
+        // ⚠️ Ce chemin appelait `SetEntityPosition` À CHAQUE FRAME. Or `SetEntityPosition` fait
+        // deux choses (voir le corps de `PlacerSansCommande`) : il empile un `AITeleportCommand`
+        // dans la file du contrôleur d'IA, PUIS il place l'entité. Il faisait donc très exactement
+        // ce que `PlacerSansCommande` a été écrit pour éviter — sauf qu'ici personne ne l'avait vu,
+        // parce qu'une branche « immobile » a l'air inoffensive par construction.
+        //
+        // L'arithmétique est brutale, et c'est elle qui en fait un défaut de production plutôt
+        // qu'une inélégance : 50 joueurs immobiles × 60 fps = **3 000 commandes d'IA par seconde**.
+        // C'est la zone du régime qui a fait tomber le jeu deux fois le 2026-08-06 (~3 120 par
+        // seconde). Au plafond de 200 voisins, ce serait 12 000 par seconde. Et le pire cas d'un
+        // serveur RP, c'est justement celui-là : un attroupement où tout le monde est debout et
+        // personne ne bouge.
+        //
+        // Deux corrections, et la première est la plus importante :
+        //
+        // 1. **Une bande morte.** Un avatar déjà à sa place n'a aucune raison d'être replacé. Le
+        //    coût nominal d'un avatar immobile tombe alors à une soustraction par frame — zéro
+        //    appel moteur, zéro commande. C'est le patron que le chemin VÉHICULE applique déjà
+        //    (test d'immobilité à 5 cm) et que celui-ci n'avait jamais reçu.
+        // 2. **`PlacerSansCommande` au lieu de `SetEntityPosition`.** Quand il faut vraiment
+        //    replacer, on place — sans repasser par la file d'IA qu'on vient précisément
+        //    d'annuler quelques lignes plus haut avec `TesseraFigerAvatar`. Empiler un ordre juste
+        //    après en avoir annulé un est contradictoire.
+        //
+        // 5 cm : sous le seuil de perception à distance de conversation, et au-dessus du bruit de
+        // quantification de la position sur le fil (`QuantPos`).
+        static constexpr float kBandeMorteImmobileM = 0.05f;
+        const auto placeActuelle = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+        const float ex = positionVoulue.X - placeActuelle.X;
+        const float ey = positionVoulue.Y - placeActuelle.Y;
+        const float ez = positionVoulue.Z - placeActuelle.Z;
+        const float deriveImmobile = std::sqrt(ex * ex + ey * ey + ez * ez);
+        if (deriveImmobile > kBandeMorteImmobileM)
+        {
+            PlacerSansCommande(entityId, positionVoulue, pose.yaw);
+        }
+
+        // ── T10 bis : L'INSTRUMENT ÉTAIT AVEUGLE SUR UN AVATAR IMMOBILE ────────────────────
+        //
+        // Relevé au chantier `fiabiliser-le-rendu-des-avatars` (T10 bis) : cette branche sortait
+        // AVANT l'appel de télémétrie, donc un avatar parfaitement immobile ne produisait aucune
+        // ligne `rx`. Conséquence : `rx=0` ne distinguait pas « rien rendu » de « rendu mais pas
+        // mesuré » — deux verdicts opposés, même trace. C'est très exactement la confusion que cet
+        // instrument existe pour éliminer, et il la portait lui-même.
+        //
+        // Le correctif était noté « à faire au prochain build client ». C'est celui-ci.
+        if (g_telemetrie.RenduAutorise(networkId, /*force=*/false))
+        {
+            const auto tamponImmobile = g_tamponsJoueurs.find(networkId);
+            g_telemetrie.Rendu(networkId, placeActuelle.X, placeActuelle.Y, placeActuelle.Z,
+                               pose.locomotion, deriveImmobile,
+                               tamponImmobile != g_tamponsJoueurs.end()
+                                   ? tamponImmobile->second.Nombre()
+                                   : 0u,
+                               pose.extrapolee, g_horlogeRendu.DelaiCourant(),
+                               g_horlogeRendu.Gigue(), /*recalage=*/false);
+        }
         return;
     }
 
@@ -3092,10 +4093,28 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // `derive`, journalisé à côté — ensemble, ils distinguent « le réseau est en retard » de
     // « le moteur traîne derrière une pose pourtant à jour », deux pannes qui se ressemblent
     // exactement vues de face.
-    g_telemetrie.Rendu(networkId, position.X, position.Y, position.Z, pose.locomotion, derive,
-                       tampon != g_tamponsJoueurs.end() ? tampon->second.Nombre() : 0u,
-                       pose.extrapolee, g_horlogeRendu.DelaiCourant(), g_horlogeRendu.Gigue(),
-                       derive > kSautFrancM);
+    //
+    // ⚠️ **ÉCHANTILLONNÉ, ET IL LE FALLAIT.** Cette ligne partait à CHAQUE frame et pour CHAQUE
+    // avatar. Tant que « chaque avatar » voulait dire un ou deux, c'était gratuit ; depuis que le
+    // plafond de voisins est à 200 (2026-08-15), ça ferait **12 000 lignes par seconde** à 60 fps,
+    // chacune suivie d'un `fflush`. L'instrument deviendrait la charge dominante, et la première
+    // chose qu'il fausserait serait le temps de frame — c'est-à-dire précisément ce qu'on mesure.
+    //
+    // `RenduAutorise` plafonne à dix lignes par seconde ET PAR ENTITÉ (jamais globalement : un
+    // plafond global laisserait les avatars les plus proches évincer les autres du journal, et un
+    // avatar absent du fichier est indiscernable d'un avatar qui va bien).
+    //
+    // ⚠️ `force` sur le RECALAGE : un événement rare est exactement ce qu'on cherche. Le manquer
+    // parce qu'il tombe dans le mauvais dixième de seconde rendrait le journal muet sur le seul
+    // symptôme qui compte.
+    const bool recalageFranc = derive > kSautFrancM;
+    if (g_telemetrie.RenduAutorise(networkId, /*force=*/recalageFranc))
+    {
+        g_telemetrie.Rendu(networkId, position.X, position.Y, position.Z, pose.locomotion, derive,
+                           tampon != g_tamponsJoueurs.end() ? tampon->second.Nombre() : 0u,
+                           pose.extrapolee, g_horlogeRendu.DelaiCourant(), g_horlogeRendu.Gigue(),
+                           recalageFranc);
+    }
 
     // ⚠️ LA VERTICALE APPARTIENT AU MOTEUR, PAS À NOUS.
     //
@@ -3252,8 +4271,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
 
     const RED4ext::Vector4 visee = { cx, cy, cz, 1.0f };
     bool enRoute = false;
+    // `pose.yaw` en quatrieme argument : la direction du REGARD, distincte de celle du
+    // deplacement. C'est ce qui donne la marche arriere et le pas de cote — voir
+    // `TesseraSuivreAvatar` cote redscript.
     if (Red::CallVirtual(this, "TesseraSuivreAvatar", enRoute, entityId, visee,
-                         static_cast<int32_t>(pose.locomotion))
+                         static_cast<int32_t>(pose.locomotion), pose.yaw)
         && enRoute)
     {
         // ── L'INSTRUMENT ───────────────────────────────────────────────────────────────────

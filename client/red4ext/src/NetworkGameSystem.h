@@ -57,6 +57,11 @@ namespace cyberpunk_rp::protocol {
     // Interactions joueur<->joueur (spec 2026-08-09). Meme regle, troisieme rappel.
     struct ActionCatalog;
     struct IdentitesConnues;
+    // Inventaire sous autorite serveur (ADR 0026). QUATRIEME fois que ce bloc est oublie —
+    // 2026-08-13, avec exactement le message annonce ci-dessus (« impossible de convertir
+    // 'const InventaireAutoritaire *' en 'const int' », qui pointe vers l'appelant alors que le
+    // defaut est ICI). Le build local l'a attrape en une minute ; la relecture, non.
+    struct InventaireAutoritaire;
 }
 
 // Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
@@ -153,6 +158,35 @@ struct SuiviAvatar
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 
+/// Pose voulue par le serveur pour une entite qui n'etait PAS ENCORE RESOLVABLE quand elle est
+/// arrivee — a rejouer des que `GetDynamicEntity` repond enfin.
+///
+/// ── CREUX B0 : mesure du 2026-08-05, reproduit sur les vehicules le 2026-08-14 ───────────────
+///
+/// `CreateEntity` rend un id IMMEDIATEMENT mais instancie l'entite EN DIFFERE. Le client interroge
+/// `GetDynamicEntity` quelques dizaines de millisecondes plus tard et tombe dans le trou : 65
+/// spawns pour 75 « Failed to get the entity » a la premiere mesure.
+///
+/// Jusqu'ici la position etait alors JETEE — un `Warn`, rien d'autre. L'entite restait donc
+/// exactement la ou elle etait nee, pour toujours. C'est la cause des PNJ figes du 2026-08-05, et
+/// celle des vehicules serveur visibles chez un client et pas chez l'autre le 2026-08-14 : les
+/// trois ids de vehicule figuraient dans les echecs de resolution des DEUX clients, mais en
+/// nombre tres inegal (10 contre 36).
+///
+/// On retient la derniere pose voulue au lieu de la perdre, et elle se rejoue des que l'entite
+/// existe. Aucune fenetre a deviner, aucun delai a calibrer — ce qui compte, puisque le delai reel
+/// d'instanciation n'a JAMAIS ete mesure (la sonde reste ouverte au backlog).
+///
+/// ⚠️ HORS DE LA CLASSE, comme ses voisines : `NetworkGameSystem` est allouee par le moteur
+/// (`RTTI_IMPL_ALLOCATOR`) et lui ajouter un membre corrompt la memoire voisine (mesure le
+/// 2026-08-06). J'allais poser un `std::map` membre par reflexe.
+struct PoseEnAttente
+{
+    RED4ext::Vector4 position;
+    float yaw;
+};
+extern std::map<uint64_t, PoseEnAttente> g_posesEnAttente;
+
 // Identité visuelle d'une entité réseau, telle que le SERVEUR la décide (`AppearanceSync`).
 // Deux hashes suffisent (modèle PRESET, ADR/design apparence §6.2) : le record TweakDB à faire
 // apparaître et le nom d'apparence `.ent` à appliquer. C'est ce qui remplace le `Character.Panam`
@@ -173,6 +207,10 @@ class NetworkGameSystem : public Red::IGameSystem
 private:
     HSteamNetConnection m_hConnection;
     ISteamNetworkingSockets *m_pInterface;
+    /// Adresse du serveur joint, `host:port`. Mémorisée au seul usage des journaux de playtest :
+    /// un fichier ramassé chez un joueur doit dire CONTRE QUOI il a été produit, sinon on ne peut
+    /// pas l'apparier au journal serveur correspondant.
+    std::string m_serverAddress;
     bool m_hasTriedToConnect = false;
     bool m_hasEnqueuedLoadLastCheckpoint = false;
     Red::Handle<Red::ink::ISystemRequestsHandler> m_systemRequestsHandler;
@@ -351,6 +389,27 @@ private:
     /// reveler ce qu'il n'a jamais recu.
     std::map<uint64_t, std::string> m_nomsConnus;
 
+    // --- Inventaire sous autorite serveur (ADR 0026 et 0027) ---
+    /// Le sac AUTORITAIRE, tel que le serveur l'a enonce. Le client s'y ALIGNE ; il ne decide
+    /// jamais de ce qu'il possede.
+    struct ItemAutoritaire
+    {
+        std::string id;
+        uint32_t quantite = 0;
+    };
+    std::vector<ItemAutoritaire> m_sacAutoritaire;
+    /// Ce qu'il ne faut JAMAIS retirer, envoye par le serveur avec le sac.
+    ///
+    /// ⚠️ Le sac du joueur contient des pieces de son CORPS — tete, bras, poings nus, connecteur
+    /// d'interaction (sept entrees mesurees, F-MND-047). Le serveur ne les connait pas et ne peut
+    /// donc pas les enoncer dans le sac. Sans cette liste, un client qui s'aligne retirerait la
+    /// tete de son personnage, SANS lever d'erreur.
+    std::vector<std::string> m_aPreserver;
+    /// Un sac a-t-il ete recu ? Distinct de « le sac est vide » : un sac vide est un ORDRE (« tu ne
+    /// possedes rien »), l'absence de message n'en est pas un. Les confondre ferait vider les
+    /// joueurs d'un serveur qui n'a jamais parle d'inventaire.
+    bool m_sacRecu = false;
+
 private:
     // Appelé à chaque échec de `SpawnTransientEntity`. Agrège les logs et déclenche UNE fois
     // l'alerte native quand le seuil est franchi.
@@ -383,6 +442,10 @@ private:
     /// ANNULE la commande de marche en cours.
     void PlacerSansCommande(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
     void SetEntityPosition(RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw);
+
+    /// Rejoue les poses retenues quand `GetDynamicEntity` avait echoue (creux B0). Appelee une
+    /// fois par snapshot ; ne coute rien quand le tampon est vide, ce qui est le regime etabli.
+    void RejouerPosesEnAttente();
     // Placement HYBRIDE : marche animée quand l'entité bouge et que la dérive est faible,
     // téléportation de correction sinon. Le mécanisme vient de F-PNJ-082/F-PLY-007, qui posent
     // aussi la règle : la commande de marche est de l'animation, l'autorité reste au Snapshot.
@@ -446,6 +509,17 @@ protected:
     void DetruireTousLesRemplacants(const char* raison);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
+    /// RTT courant de la connexion, en millisecondes ; -1 si inconnu (pas encore connecté).
+    ///
+    /// ⚠️ **Ce chiffre ne CORRIGE aucune horloge, et c'est important de savoir pourquoi.** Un RTT
+    /// donne la LARGEUR de l'incertitude, jamais le SENS du décalage : deux horloges désynchronisées
+    /// d'une heure produisent exactement le même ping que deux horloges parfaites. La correction
+    /// d'horloge vient de `Snapshot.ts_ms` et du min-filtre de `HorlogeServeur`.
+    ///
+    /// Il sert à SÉPARER DEUX CAUSES qui donnent le même symptôme dans un journal de playtest :
+    /// « ce joueur a une mauvaise connexion » et « ce joueur a une horloge fausse ». Sans lui, les
+    /// deux se lisent pareil — un `ts` qui ne colle pas avec les autres.
+    int PingCourantMs() const;
     // Rubber-band / spawn autoritaire : téléporte le joueur local à la position corrigée par le
     // serveur et arme l'anti-boucle (m_skipNextPositionUpdate).
     void HandlePositionCorrection(const cyberpunk_rp::protocol::PositionCorrection* correction);
@@ -504,6 +578,10 @@ protected:
     // Declenche une recette du catalogue sur une cible. `kind = 2` (Interagit), `param` = l'id de
     // la recette : le canal montant existe depuis le gel, zero octet ajoute au fil.
     void SendActionJoueur(uint64_t target, uint32_t recette);
+    // Le sac autoritaire. REMPLACE integralement l'etat precedent (contrairement aux identites, qui
+    // s'accumulent) : c'est un ETAT, pas un ajout. Le rejouer ne fait donc rien de plus, et un
+    // message perdu se rattrape au suivant.
+    void HandleInventaireAutoritaire(const cyberpunk_rp::protocol::InventaireAutoritaire* msg);
 
     // Fait apparaître une entité réseau à l'apparence décidée par le serveur, ou au repli si
     // aucune n'est connue pour cet id. Renvoie false si le spawn a échoué (modset non compilé).
@@ -523,7 +601,22 @@ public:
         m_hasEnqueuedLoadLastCheckpoint = true;
     }
 
-    template<typename T>
+    /// Rapporte au serveur qu'un joueur monte (`monte=true`) ou descend d'un vehicule.
+    ///
+    /// `EntityInteraction{target, kind=3|4, param=<index de siege>}` — canal GELE depuis juillet,
+    /// que **personne n'emettait**. C'est ce qui manquait pour que le serveur sache qui est assis
+    /// ou : il comprenait ces deux verbes depuis toujours, aucun client ne les a jamais envoyes.
+    /// Zero octet de protocole ajoute.
+    void RapporterMontage(uint64_t vehiculeReseau, uint32_t siege, bool monte);
+
+    /// Id RESEAU d'une entite du jeu, ou 0 si elle n'en a pas (objet purement local).
+    ///
+    /// Balayage lineaire de `m_networkedEntitiesLookup` — assume : le roster reseau est petit, et
+    /// on n'appelle ceci qu'au montage/demontage, pas par frame. Un index inverse serait une
+    /// deuxieme table a garder synchronisee pour un gain nul a cette cadence.
+    uint64_t IdReseauDe(RED4ext::ent::EntityID entityId) const;
+
+    template <typename T>
     bool EnqueueMessage(uint8_t channel_id, T frame);
 
     // --- Getters exposés au HUD Lua (via des wrappers redscript @addMethod(PlayerPuppet) côté
@@ -596,7 +689,8 @@ public:
     // Demande la creation d'un personnage. Le serveur arbitre : cap de slots, pseudonyme deja pris,
     // apparence hors catalogue. Renvoie false seulement si l'envoi lui-meme n'a pas pu partir
     // (pas de connexion) — un `true` ne dit RIEN du verdict, qui arrive en `CharacterResult`.
-    bool Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record, uint64_t apparence);
+    bool Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record, uint64_t apparence,
+                                 const Red::CString& origine);
     // Entre dans le monde avec ce personnage. Meme remarque : `true` = « parti », pas « accepte ».
     bool Tessera_ChoisirPersonnage(uint64_t id);
     // Supprime un personnage du compte. Le SERVEUR arbitre (`not_owner`, `not_found`) et renvoie la
@@ -822,6 +916,45 @@ public:
             return 0.0f;
         }
         return m_actions[static_cast<size_t>(index)].portee_m;
+    }
+
+    // --- Le sac autoritaire, lu depuis redscript ---
+    //
+    // ⚠️ `Tessera_SacRecu` est SEPARE de la taille, et c'est essentiel : un sac VIDE est un ordre
+    // (« tu ne possedes rien, vide-toi »), l'absence de message n'en est pas un. Si redscript ne
+    // pouvait distinguer les deux, il viderait les joueurs de tout serveur qui n'a jamais parle
+    // d'inventaire — une taille de 0 se lit alors comme « retire tout ».
+    bool Tessera_SacRecu() const { return m_sacRecu; }
+
+    int32_t Tessera_SacTaille() const { return static_cast<int32_t>(m_sacAutoritaire.size()); }
+
+    Red::CString Tessera_SacItemId(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_sacAutoritaire.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_sacAutoritaire[static_cast<size_t>(index)].id.c_str());
+    }
+
+    int32_t Tessera_SacItemQuantite(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_sacAutoritaire.size())
+        {
+            return 0;
+        }
+        return static_cast<int32_t>(m_sacAutoritaire[static_cast<size_t>(index)].quantite);
+    }
+
+    int32_t Tessera_PreserverTaille() const { return static_cast<int32_t>(m_aPreserver.size()); }
+
+    Red::CString Tessera_PreserverId(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_aPreserver.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_aPreserver[static_cast<size_t>(index)].c_str());
     }
 
     /// Le nom de cette entite, SI on nous l'a donne. Chaine VIDE sinon — et c'est la reponse
@@ -1057,6 +1190,12 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_NomConnu);
     RTTI_METHOD(Tessera_EnvoyerAction);
     RTTI_METHOD(Tessera_AvatarParIndex);
+    RTTI_METHOD(Tessera_SacRecu);
+    RTTI_METHOD(Tessera_SacTaille);
+    RTTI_METHOD(Tessera_SacItemId);
+    RTTI_METHOD(Tessera_SacItemQuantite);
+    RTTI_METHOD(Tessera_PreserverTaille);
+    RTTI_METHOD(Tessera_PreserverId);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");
