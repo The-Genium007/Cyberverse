@@ -168,11 +168,94 @@ public native class NetworkGameSystem extends IGameSystem {
     // `record` en Uint64 via `TDBID.ToNumber(...)`, `apparence` en CName passée telle quelle : le
     // couple exact déjà éprouvé par `Tessera_DemanderPromotion`. Côté C++ les deux arrivent en
     // `uint64_t` — une CName EST un hash 64 bits, la conversion est faite par le RTTI.
-    public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName) -> Bool;
+    // `origine` : corpo / nomade / gosse des rues. Elle gouverne la dotation de départ côté serveur,
+    // eurodollars compris (`dotation.toml`).
+    //
+    // ⚠️ Une chaîne VIDE est légitime, et le serveur ne la refuse pas : l'écran du lobby ne posait
+    // pas encore la question quand ce champ est arrivé. Le serveur retombe alors sur sa dotation de
+    // repli, volontairement la plus maigre — personne ne doit avoir intérêt à ne pas choisir.
+    public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName, origine: String) -> Bool;
     public native func Tessera_ChoisirPersonnage(id: Uint64) -> Bool;
     // Supprime un personnage. Le serveur arbitre et renvoie la liste à jour — le client ne retire
     // rien de lui-même, sinon il afficherait une suppression qui pourrait être refusée.
     public native func Tessera_SupprimerPersonnage(id: Uint64) -> Bool;
+
+    // ── Interactions joueur↔joueur (spec 2026-08-09) ───────────────────────────────────────
+    //
+    // ⚠️ Ces six déclarations ont leurs six `RTTI_METHOD` dans `NetworkGameSystem.h`. Les deux
+    // côtés se posent ET se déploient ENSEMBLE : un `native func` sans backing dans la DLL déployée
+    // fait tomber TOUT `r6/scripts` et le jeu se ferme SANS UN MOT (F-PLF-020, F-PLF-023). Le
+    // contrôle avant tout lancement : comparer les `native func Tessera_*` d'ici aux chaînes de la
+    // DLL construite.
+    //
+    // Le catalogue se lit PAR INDEX plutôt que rendu d'un coup : recevoir un `array<struct>` d'un
+    // natif obligerait à déclarer la struct des deux côtés, donc à créer une occasion de plus de les
+    // désynchroniser — exactement la panne ci-dessus. Trois accesseurs scalaires ne divergent pas.
+
+    // Combien d'actions CE joueur a le droit de proposer. Déjà filtré par le serveur : le client
+    // n'apprend jamais l'existence de celles qu'il n'a pas. 0 est un cas légitime, pas une erreur.
+    public native func Tessera_NombreActions() -> Int32;
+    // L'id de recette à cet index — c'est LUI qu'on renvoie, jamais l'index : le catalogue peut
+    // changer entre l'affichage et le clic (`/groupgrant` le repousse à chaud).
+    public native func Tessera_ActionId(index: Int32) -> Int32;
+    public native func Tessera_ActionLibelle(index: Int32) -> String;
+    // Portée en mètres, 0 = sans limite. Sert à décider d'AFFICHER, jamais à autoriser : le serveur
+    // revérifie droit, portée et état à l'exécution, systématiquement.
+    public native func Tessera_ActionPorteeM(index: Int32) -> Float;
+
+    // Le nom de cette entité, SI on nous l'a donné. Chaîne VIDE pour un inconnu — et c'est la
+    // réponse normale, pas une panne.
+    //
+    // ⚠️ Un nom absent n'est pas un nom masqué : il n'a jamais traversé le fil. Le serveur ne
+    // l'envoie qu'à qui s'est fait présenter, donc un client modifié ne peut pas le révéler.
+    public native func Tessera_NomConnu(cible: EntityID) -> String;
+
+    // Déclenche une recette sur une cible. `recette` = ce que rend `Tessera_ActionId`.
+    // Renvoie true si le message est PARTI — jamais qu'il a été accepté.
+    public native func Tessera_EnvoyerAction(cible: EntityID, recette: Uint32) -> Bool;
+
+    // L'EntityID du N-ième avatar réseau, pour les PARCOURIR sans que le joueur en vise un.
+    // Le compte se lit avec `Tessera_GetVisiblePlayerCount` — même table, donc un seul natif de plus.
+    //
+    // ⚠️ L'index n'est pas un identifiant : la table est ordonnée et son ordre change dès qu'une
+    // entité apparaît ou disparaît. On énumère dans la foulée et on mémorise l'`EntityID`.
+    public native func Tessera_AvatarParIndex(index: Int32) -> EntityID;
+
+    // ── ET CEUX-LÀ SONT DES JOUEURS — c'est ce qui manquait pour la réplication de posture ──
+    //
+    // ⚠️ `Tessera_GetVisiblePlayerCount` et `Tessera_AvatarParIndex` ci-dessus portent des noms
+    // qui MENTENT : ils parcourent toutes les entités réseau, PNJ du serveur compris (F-PLY-047).
+    // Le 2026-08-15, la première tentative de réplication de posture (chantier `postures-du-monde`,
+    // T7) a joué sa séquence sur un `Character.CitizenRichMale` en croyant viser un joueur, et le
+    // compte rendait 4 pour deux joueurs. Ces deux-là, eux, ne rendent que des joueurs — par
+    // construction, parce qu'ils lisent le tampon d'interpolation, alimenté uniquement depuis
+    // `snapshot->players()`.
+    //
+    // Ne rendent que les avatars pourvus d'un CORPS : un joueur connu dont l'entité n'est pas
+    // encore née n'est pas désignable, et le rendre ferait échouer l'appelant sur un `EntityID`
+    // nul sans qu'il sache pourquoi.
+    //
+    // ⚠️ Même règle que ci-dessus : l'index n'est pas un identifiant. Énumérer dans la foulée,
+    // mémoriser l'`EntityID`, jamais l'index.
+    public native func Tessera_CompteAvatarsJoueurs() -> Int32;
+    public native func Tessera_AvatarJoueurParIndex(index: Int32) -> EntityID;
+
+    // ── Le sac AUTORITAIRE (ADR 0026) — le serveur énonce, le client s'aligne ────────────────
+    //
+    // ⚠️ `Tessera_SacRecu` est SÉPARÉ de la taille, et c'est la distinction qui protège les joueurs.
+    // Un sac VIDE est un ordre (« tu ne possèdes rien »), l'absence de message n'en est pas un. Les
+    // confondre viderait les joueurs de tout serveur qui n'a jamais parlé d'inventaire, puisqu'une
+    // taille de 0 se lirait alors comme « retire tout ».
+    public native func Tessera_SacRecu() -> Bool;
+    public native func Tessera_SacTaille() -> Int32;
+    public native func Tessera_SacItemId(index: Int32) -> String;
+    public native func Tessera_SacItemQuantite(index: Int32) -> Int32;
+
+    // Ce qu'il ne faut JAMAIS retirer — envoyé par le serveur AVEC le sac, parce qu'il contient des
+    // pièces du corps du personnage que le serveur ne connaît pas et ne peut donc pas énoncer
+    // (F-MND-047 : tête, bras, poings nus, connecteur d'interaction).
+    public native func Tessera_PreserverTaille() -> Int32;
+    public native func Tessera_PreserverId(index: Int32) -> String;
 
 
     public func SpawnTransientEntity(entityName: TweakDBID, worldPosition: Vector4, worldOrientation: Quaternion) -> EntityID {
@@ -1051,6 +1134,89 @@ public native class NetworkGameSystem extends IGameSystem {
         // Un yaw de 0 regarde +Y dans ce moteur ; `RotByAngleXY` applique la rotation autour de Z.
         let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
         return new Vector4(depuis.X + avant.X * 5.0, depuis.Y + avant.Y * 5.0, depuis.Z, 1.0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // SONDE T7 — un `ApplyFeature` venant du script ATTEINT-IL le graphe d'un pantin spawné ?
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    //
+    // C'EST LA QUESTION QUI COMMANDE TOUT LE RESTE. F-PNJ-153 a établi, par extraction WolvenKit
+    // du `.animgraph` livré, que le graphe humanoïde expose 1 146 entrées `(groupe, champ)` —
+    // dont `stanceState.state`, qui décrit la posture. Mais « l'entrée existe dans la donnée » et
+    // « un appel script y arrive » sont deux affirmations différentes, et c'est précisément l'écart
+    // qui a déjà produit `SendCommand` renvoyant `true` sans rien faire (F-PNJ-082) et
+    // `ToggleCollision` accepté 35 fois sans effet.
+    //
+    // La sonde est choisie pour être INDISCUTABLE : un avatar est accroupi ou il ne l'est pas.
+    // Pas de « ça a l'air plus fluide », pas de seuil à interpréter, pas de mesure à instrumenter.
+    // C'est le critère du protocole de sondage — un état binaire, visible à l'œil nu.
+    //
+    // Le mécanisme suit exactement ce que la donnée décrit :
+    //   · `n"stanceState"` est le GROUPE du nœud d'entrée, donc l'`inputName` de `ApplyFeature`
+    //     (`animationControllerComponent.script:30`) ;
+    //   · `AnimFeature_Stance` porte l'unique champ du groupe via `SetStanceState`
+    //     (`animFeature.script:113-116`) ;
+    //   · `animStanceState.Crouch` est la valeur (`animFeature.script:103-111`).
+    //
+    // ⚠️ On utilise `ApplyFeature` et NON `ApplyFeatureToReplicate` : la variante « ToReplicate »
+    // rejouerait la feature vers le réseau NATIF du jeu, dont nous ne voulons rien. Notre
+    // réplication à nous est déjà faite — c'est le serveur qui a dit quoi afficher.
+    //
+    // SI ÇA MARCHE, la voie est ouverte pour l'allure continue (`crowd_locomotion.speed`), la
+    // marche arrière et le pas de côté (`locomotion.directionAngle`) — c'est-à-dire les deux
+    // gestes qui portent la moitié des recalages mesurés le 2026-08-14.
+    // SI ÇA NE MARCHE PAS, on l'apprend en une session au lieu de bâtir dessus.
+    // ── SECONDE PASSE, 2026-08-15 : LA VOIE « SIGNAL DE COMPORTEMENT » ────────────────────
+    //
+    // La première passe a rendu son verdict, et il est négatif : `ApplyFeature` sur
+    // `stanceState` ne montre RIEN (F-PLY-053 — avatar observé DEBOUT par Lucas alors que la
+    // sonde tirait toutes les 2 s et rendait `true`). C'est le troisième refus de la même
+    // famille, avec F-PLY-036 (l'arme ne s'affiche que par une commande d'IA) et le backlog Q7.
+    //
+    // La règle qui s'en dégage : **sur un pantin de foule, ce qui se voit passe par un
+    // COMPORTEMENT, jamais par une écriture d'état.**
+    //
+    // `NPCPuppet.ChangeStanceState` appartient justement à l'autre famille, et c'est pour ça
+    // qu'elle vaut d'être essayée : elle n'écrit pas une donnée d'animation, elle **émet un
+    // signal** (`NPCStateChangeSignal`) dans la table de signaux du pantin, que la machine à
+    // états de comportement consomme (`NPCPuppet.script:1360-1380`). C'est la seule voie de la
+    // famille « posture » jamais tentée — F-PLY-009, restée en `hypothèse` depuis le 2026-07-23.
+    //
+    // ⚠️ LE CONTRÔLE EST LA SESSION PRÉCÉDENTE, et c'est ce qui rend la comparaison valide.
+    // `ApplyFeature` est conservé ci-dessous, inchangé, et il a été prouvé INERTE une demi-heure
+    // plus tôt dans exactement ce montage. Si l'avatar s'accroupit maintenant, le delta n'est
+    // imputable qu'à `ChangeStanceState`. Le retirer aurait changé deux choses à la fois.
+    //
+    // Deux bornes connues, lues au script décompilé :
+    //   · la fonction sort tôt si la stance demandée est déjà celle du blackboard — rejouer la
+    //     sonde toutes les 2 s est donc sans effet de bord : elle ne fait rien après le premier
+    //     coup, et c'est voulu ;
+    //   · elle exige un cast vers `NPCPuppet`. Notre avatar est un pantin de foule (F-PLY-007),
+    //     donc il devrait passer — mais si le cast échoue, la voie B n'est PAS tentée. D'où le
+    //     `return false` distinct : sans lui, « envoye » mentirait sur ce qui a été fait.
+    //
+    // `NPCPuppet` est bien l'alias redscript (`NPCPuppet.script:119` : `class NPCPuppet extends
+    // ScriptedPuppet`), pas un nom natif du dump RTTI — piège documenté dans la skill.
+    public func TesseraPousserPosture(entityId: EntityID, accroupi: Bool) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+
+        // Voie A — écriture d'état dans le graphe d'animation. RÉFUTÉE (F-PLY-053), gardée comme
+        // TÉMOIN : c'est elle qui rend lisible la comparaison avec la session précédente.
+        let posture = new AnimFeature_Stance();
+        posture.SetStanceState(accroupi ? animStanceState.Crouch : animStanceState.Stand);
+        AnimationControllerComponent.ApplyFeature(puppet, n"stanceState", posture);
+
+        // Voie B — signal de comportement. C'est celle qu'on teste maintenant.
+        let pantin = entity as NPCPuppet;
+        if !IsDefined(pantin) {
+            return false; // cast échoué : la voie B n'a pas été tentée, et il faut le savoir.
+        }
+        NPCPuppet.ChangeStanceState(pantin, accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
+        return true;
     }
 
     public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float) -> Bool {

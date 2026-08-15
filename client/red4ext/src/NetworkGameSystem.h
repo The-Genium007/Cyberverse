@@ -999,6 +999,66 @@ public:
         return it->second;
     }
 
+    // ── CEUX-LÀ SONT DES JOUEURS, ET C'EST TOUTE LA DIFFÉRENCE ────────────────────────────────
+    //
+    // ⚠️ `Tessera_GetVisiblePlayerCount` et `Tessera_AvatarParIndex` ci-dessus ne comptent PAS des
+    // joueurs : ils parcourent `m_networkedEntitiesLookup`, qui contient TOUTE entité réseau — PNJ
+    // du serveur compris. C'est **F-PLY-047**, et ça a coûté une tentative de mesure le
+    // 2026-08-15 : le compte rendait **4** pour deux joueurs, et `AvatarParIndex(0)` tombait sur un
+    // `Character.CitizenRichMale`. La sonde a joué sa séquence sur un passant.
+    //
+    // Le discriminant existait pourtant déjà, à portée de main : `g_tamponsJoueurs` n'est alimenté
+    // que depuis `snapshot->players()` (`HandleSnapshot`), jamais depuis `npcs` ni `vehicles`. Un
+    // id qui s'y trouve EST un joueur, par construction — pas par heuristique sur la valeur de
+    // l'id, piège déjà payé côté serveur (`d3dcc67` : filtrer par plage numérique excluait à tort
+    // les PNJ nominatifs).
+    //
+    // On ne rend que les avatars qui ont un CORPS : un joueur connu dont l'entité n'est pas encore
+    // née n'est pas désignable, et le rendre ferait échouer l'appelant sur un `EntityID` nul sans
+    // qu'il sache pourquoi. Le recensement `voisins` de la télémétrie distingue déjà les deux
+    // (`connus=` contre `corps=`) — c'est le même critère ici.
+    //
+    // ⚠️ Même avertissement que ci-dessus : l'index n'est PAS un identifiant. `g_tamponsJoueurs`
+    // est un `std::map` dont l'ordre change quand un joueur entre ou sort de portée. Énumérer dans
+    // la foulée, mémoriser l'`EntityID`, jamais l'index.
+    int32_t Tessera_CompteAvatarsJoueurs() const
+    {
+        int32_t n = 0;
+        for (const auto& [networkId, tampon] : g_tamponsJoueurs)
+        {
+            if (m_networkedEntitiesLookup.find(networkId) != m_networkedEntitiesLookup.end())
+            {
+                ++n;
+            }
+        }
+        return n;
+    }
+
+    // L'EntityID du N-ième avatar de JOUEUR pourvu d'un corps. `EntityID{}` si l'index est hors
+    // bornes — l'appelant doit tester, comme pour `Tessera_AvatarParIndex`.
+    RED4ext::ent::EntityID Tessera_AvatarJoueurParIndex(int32_t index) const
+    {
+        if (index < 0)
+        {
+            return RED4ext::ent::EntityID{};
+        }
+        int32_t n = 0;
+        for (const auto& [networkId, tampon] : g_tamponsJoueurs)
+        {
+            const auto corps = m_networkedEntitiesLookup.find(networkId);
+            if (corps == m_networkedEntitiesLookup.end())
+            {
+                continue;
+            }
+            if (n == index)
+            {
+                return corps->second;
+            }
+            ++n;
+        }
+        return RED4ext::ent::EntityID{};
+    }
+
     /// Declenche une recette sur une cible. `recette` est l'id rendu par `Tessera_ActionId`.
     ///
     /// Renvoie true si le message est PARTI — jamais qu'il a ete accepte (D1). Le serveur reverifie
@@ -1190,6 +1250,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_NomConnu);
     RTTI_METHOD(Tessera_EnvoyerAction);
     RTTI_METHOD(Tessera_AvatarParIndex);
+    // ⚠️ Ces deux-là comptent des JOUEURS, contrairement aux deux ci-dessus (F-PLY-047).
+    RTTI_METHOD(Tessera_CompteAvatarsJoueurs);
+    RTTI_METHOD(Tessera_AvatarJoueurParIndex);
     RTTI_METHOD(Tessera_SacRecu);
     RTTI_METHOD(Tessera_SacTaille);
     RTTI_METHOD(Tessera_SacItemId);
