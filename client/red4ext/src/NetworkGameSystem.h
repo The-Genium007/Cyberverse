@@ -192,6 +192,18 @@ extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 /// Bascule par la sonde `suspendre` du harnais. Par defaut faux : aucun effet en jeu normal.
 extern bool g_suspendreCommandes;
 
+/// SUSPEND les corrections de position, en LAISSANT tourner la commande de marche.
+///
+/// C'est l'instrument de la mesure de determinisme exigee par l'ADR 0032. La question a trancher :
+/// deux clients nourris des memes ordres de marche produisent-ils des positions comparables ? Tant
+/// que les corrections tournent, elles masquent la reponse — meme mortes (F-PLY-080), elles
+/// dictent le point VISE et donc la commande suivante.
+///
+/// ⚠️ Ne pas confondre avec `g_suspendreCommandes`, qui fait l'INVERSE : il coupe la marche et
+/// laisse les corrections. Les deux existent parce qu'ils repondent a deux questions opposees, et
+/// les melanger produirait un avatar immobile dans les deux cas — donc un resultat ininterpretable.
+extern bool g_suspendreCorrections;
+
 /// Pose voulue par le serveur pour une entite qui n'etait PAS ENCORE RESOLVABLE quand elle est
 /// arrivee — a rejouer des que `GetDynamicEntity` repond enfin.
 ///
@@ -1132,6 +1144,10 @@ public:
     /// ~25 ms — trois tests du 2026-08-16 en sont morts.
     bool Tessera_SuspendreCommandes(bool actif);
 
+    /// Suspend/reprend les CORRECTIONS de position en laissant la marche tourner — instrument de
+    /// la mesure de determinisme (ADR 0032). Inverse de `Tessera_SuspendreCommandes`.
+    bool Tessera_SuspendreCorrections(bool actif);
+
     int32_t Tessera_CompteAvatarsJoueurs() const
     {
         int32_t n = 0;
@@ -1366,6 +1382,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AvatarParIndex);
     // ⚠️ Ces deux-là comptent des JOUEURS, contrairement aux deux ci-dessus (F-PLY-047).
     RTTI_METHOD(Tessera_SuspendreCommandes);
+    RTTI_METHOD(Tessera_SuspendreCorrections);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);
     RTTI_METHOD(Tessera_AvatarJoueurParIndex);
     RTTI_METHOD(Tessera_SacRecu);

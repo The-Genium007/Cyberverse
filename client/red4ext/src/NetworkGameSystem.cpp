@@ -690,6 +690,13 @@ Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 bool g_suspendreCommandes = false;
+bool g_suspendreCorrections = false;
+
+bool NetworkGameSystem::Tessera_SuspendreCorrections(bool actif)
+{
+    g_suspendreCorrections = actif;
+    return g_suspendreCorrections;
+}
 
 bool NetworkGameSystem::Tessera_SuspendreCommandes(bool actif)
 {
@@ -4520,7 +4527,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // Un correcteur maximal qui ne rattrape toujours pas veut dire que le probleme n'est PAS sa
     // force : ce sont les passages qui sont trop espaces. On mesure donc ca, au lieu de le deviner.
 
-    if (enLair && derive <= kSautFrancM)
+    if (!g_suspendreCorrections && enLair && derive <= kSautFrancM)
     {
         // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On suit
         // donc la verticale SANS lissage, et on garde l'amortissement sur l'horizontale.
@@ -4536,7 +4543,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
           const float rvolx = reluvol.X - vol.X, rvoly = reluvol.Y - vol.Y, rvolz = reluvol.Z - vol.Z;
           g_ecartApresPose = std::sqrt(rvolx * rvolx + rvoly * rvoly + rvolz * rvolz); }
     }
-    else if (deriveHorizontale > kCorrectionMiniM && derive <= kSautFrancM)
+    else if (!g_suspendreCorrections && deriveHorizontale > kCorrectionMiniM
+             && derive <= kSautFrancM)
     {
         // Résorption douce. On ne touche NI à la commande de marche (elle continue d'animer), ni
         // au yaw (l'orientation vient du moteur pendant qu'il marche ; l'imposer ici ferait
@@ -4581,7 +4589,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
           g_ecartApresPose = std::sqrt(rpasx * rpasx + rpasy * rpasy + rpasz * rpasz); }
     }
 
-    if (derive > kSautFrancM)
+    if (!g_suspendreCorrections && derive > kSautFrancM)
     {
         // ⚠️ CE CHEMIN EST LE PLUS IMPORTANT À JOURNALISER, et il ne l'était pas.
         //
