@@ -155,6 +155,30 @@ struct SuiviAvatar
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai
     /// avant que ça se déclenche » signalé le 2026-08-13.
     std::uint8_t derniereLocomotion = 0;
+
+    /// ── OU ON A LAISSE L'AVATAR A LA FRAME PRECEDENTE ────────────────────────────────────────
+    ///
+    /// Sert a mesurer UNE seule chose, et c'est la question ouverte de F-PLY-064 : de combien
+    /// l'avatar se deplace TOUT SEUL entre deux frames, apres qu'on l'a place.
+    ///
+    /// Le raisonnement : le correcteur ferme 15 % de l'ecart par frame (`kFractionCorrection`), ce
+    /// qui referme 99,99 % d'un ecart STATIQUE en ~0,1 s a 60 fps. Or on mesure 9 m de derive
+    /// SOUTENUE. Un correcteur qui fonctionne et un ecart qui persiste ne sont conciliables que si
+    /// quelque chose eloigne l'avatar entre deux corrections — et le seul candidat qui bouge un
+    /// pantin sans qu'on le lui demande frame par frame, c'est le moteur lui-meme, executant notre
+    /// commande de marche continue a SA vitesse vers un point a 5 m devant.
+    ///
+    /// `ecartLibre` = distance(position placee a la frame N-1, position lue a la frame N). C'est du
+    /// deplacement que NOUS n'avons pas ordonne. S'il est proche de zero, le correcteur n'est pas
+    /// distance et il faut chercher ailleurs ; s'il est du meme ordre que la derive, le coupable
+    /// est nomme sans ambiguite.
+    float placeX = 0.0f;
+    float placeY = 0.0f;
+    float placeZ = 0.0f;
+    bool placeValide = false;
+    /// Secondes ecoulees depuis ce placement. Dit a quelle CADENCE le correcteur
+    /// passe reellement — la variable manquante de F-PLY-065.
+    float depuisPlaceS = 0.0f;
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 

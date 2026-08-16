@@ -263,17 +263,22 @@ public:
     ///
     /// ⚠️ **Échantillonné par entité** (`kPeriodeRenduParEntiteS`) : à 200 voisins et 60 fps, tout
     /// écrire noierait le disque et fausserait le temps de frame. `RenduAutorise` décide.
+    /// `libre` : de combien l'avatar s'est deplace TOUT SEUL depuis la position ou on l'a place a
+    /// la frame precedente — du mouvement que NOUS n'avons pas ordonne. C'est la mesure qui tranche
+    /// la question ouverte de F-PLY-064 : un correcteur qui ferme 15 % de l'ecart par frame ne peut
+    /// pas laisser 9 m de derive soutenue, a moins que quelque chose ne rattrape l'avatar entre
+    /// deux corrections. `-1` = pas de position de reference (premiere frame de cet avatar).
     void Rendu(std::uint64_t id, float x, float y, float z, std::uint8_t locomotion, float derive,
                std::size_t echantillons, bool extrapole, double delai, double gigue,
-               bool recalage) noexcept
+               bool recalage, float libre = -1.0f, float depuisPlace = -1.0f, float ecartPose = -1.0f) noexcept
     {
         Ecrire("{\"t\":%lld,\"ts\":%lld,\"k\":\"rx\",\"id\":%llu,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
                "\"loco\":%u,\"derive\":%.3f,\"ech\":%zu,\"ext\":%d,\"delai\":%.4f,\"gigue\":%.4f,"
-               "\"recal\":%d}\n",
+               "\"recal\":%d,\"libre\":%.3f,\"dtcorr\":%.4f,\"pose\":%.4f}\n",
                static_cast<long long>(Maintenant()), static_cast<long long>(TempsServeur()),
                static_cast<unsigned long long>(id), x, y, z,
                static_cast<unsigned>(locomotion), derive, echantillons, extrapole ? 1 : 0, delai,
-               gigue, recalage ? 1 : 0);
+               gigue, recalage ? 1 : 0, libre, depuisPlace, ecartPose);
     }
 
     /// Faut-il écrire une ligne `rx` pour cette entité maintenant ?

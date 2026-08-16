@@ -689,6 +689,9 @@ StatsRoster g_statsRoster;
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
+/// Ecart entre la position DEMANDEE au dernier placement et celle relue dans la MEME
+/// frame. Non nul = notre placement n'a pas pris (F-PLY-066, candidat 2).
+static float g_ecartApresPose = -1.0f;
 std::map<uint64_t, PoseEnAttente> g_posesEnAttente;
 std::set<std::pair<int32_t, int32_t>> g_cellulesRecues;
 /// Sonde d'apparence — premiere apparence vue par record, et garde one-shot. Une sonde qui
@@ -829,7 +832,28 @@ void NetworkGameSystem::PlacerSansCommande(const RED4ext::ent::EntityID entityId
     }
     const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yaw };
     const auto teleportFacility = Red::GetGameSystem<RED4ext::TeleportationFacility>();
-    Red::CallVirtual(teleportFacility, "Teleport", entity.value(), worldPosition, angles);
+
+    // ⚠️ LE CAST N'EST PAS COSMETIQUE — SANS LUI, CET APPEL N'A JAMAIS RIEN FAIT (F-PLY-070).
+    //
+    // `GetDynamicEntity` rend un `Handle<Entity>` : un handle type sur la classe de BASE. Or la
+    // signature RTTI est `Teleport(handle:gameObject, Vector4, EulerAngles)` — un handle type sur
+    // `gameObject`, classe DERIVEE. Le marshalling refuse un handle de base la ou il attend un
+    // derive, et il le refuse EN SILENCE : pas d'erreur, pas de valeur de retour, l'entite ne bouge
+    // simplement pas.
+    //
+    // Prouve sur 3048 echantillons : la mediane de `libre / derive` valait 0,1489 pour une fraction
+    // de correction de 0,1500 — c'est-a-dire que l'ecart au point vise egalait EXACTEMENT la
+    // correction demandee, la signature d'une entite qui n'a pas bouge du tout.
+    //
+    // Le recalage franc (`SetEntityPosition`, au-dela de 15 m) passait par un `AITeleportCommand`,
+    // un mecanisme different, et fonctionnait — ce qui a masque le defaut : le seul chemin de
+    // placement qui marchait etait celui reserve aux cas extremes.
+    const auto cible = Red::Cast<RED4ext::game::Object>(entity.value());
+    if (!cible)
+    {
+        return;
+    }
+    Red::CallVirtual(teleportFacility, "Teleport", cible, worldPosition, angles);
 }
 
 void NetworkGameSystem::SetEntityPosition(const RED4ext::ent::EntityID entityId, RED4ext::Vector4 worldPosition, float yaw)
@@ -4383,12 +4407,44 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // parce qu'il tombe dans le mauvais dixième de seconde rendrait le journal muet sur le seul
     // symptôme qui compte.
     const bool recalageFranc = derive > kSautFrancM;
+
+    // ── COMBIEN L'AVATAR A-T-IL BOUGE TOUT SEUL DEPUIS QU'ON L'A PLACE ? ────────────────────
+    //
+    // La question ouverte de F-PLY-064. Le correcteur ferme 15 % de l'ecart par frame, ce qui
+    // referme 99,99 % d'un ecart STATIQUE en ~0,1 s a 60 fps — et pourtant 9 m de derive tiennent.
+    // Les deux ne se concilient que si quelque chose eloigne l'avatar ENTRE deux corrections.
+    //
+    // On compare donc la position lue MAINTENANT a celle ou on l'avait laisse a la frame
+    // precedente. Cet ecart n'est pas de notre fait : nous, on ne l'a pas touche depuis.
+    //   proche de 0                 -> le correcteur n'est pas distance, chercher ailleurs
+    //   du meme ordre que la derive -> le moteur deplace l'avatar sous nos pieds, coupable nomme
+    float libre = -1.0f;
+    float depuisPlace = -1.0f;
+    const float ecartPose = g_ecartApresPose;
+    {
+        auto& s = g_suiviAvatars[networkId];
+        s.depuisPlaceS += deltaTime;   // avance a chaque passage, remis a 0 au placement
+        if (s.placeValide)
+        {
+            const float lx = position.X - s.placeX;
+            const float ly = position.Y - s.placeY;
+            const float lz = position.Z - s.placeZ;
+            libre = std::sqrt(lx * lx + ly * ly + lz * lz);
+            // Le temps ecoulé depuis ce placement. Tout mon raisonnement « 15 % par frame a
+            // 60 fps referme un ecart en 0,1 s » supposait un passage PAR FRAME. Si ces passages
+            // sont en realite espaces de centaines de millisecondes, le calcul s'effondre — et
+            // 7 m de mouvement libre deviennent normaux. C'est la seule variable de l'equation
+            // que je n'ai jamais lue.
+            depuisPlace = s.depuisPlaceS;
+        }
+    }
+
     if (g_telemetrie.RenduAutorise(networkId, /*force=*/recalageFranc))
     {
         g_telemetrie.Rendu(networkId, position.X, position.Y, position.Z, pose.locomotion, derive,
                            tampon != g_tamponsJoueurs.end() ? tampon->second.Nombre() : 0u,
                            pose.extrapolee, g_horlogeRendu.DelaiCourant(), g_horlogeRendu.Gigue(),
-                           recalageFranc);
+                           recalageFranc, libre, depuisPlace, ecartPose);
     }
 
     // ⚠️ LA VERTICALE APPARTIENT AU MOTEUR, PAS À NOUS.
@@ -4425,6 +4481,34 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
 
     static constexpr float kSeuilVerticalM = 0.5f;
     const float deriveHorizontale = std::sqrt(dx * dx + dy * dy);
+
+    // ── LE CORRECTEUR PERDAIT LA COURSE, ET C'ETAIT ARITHMETIQUE (F-PLY-065) ────────────────
+    //
+    // Mesure du 2026-08-16, joueur en marche : derive moyenne 3,004 m, et l'avatar s'eloigne de
+    // 1,156 m TOUT SEUL entre deux corrections (champ `libre`). Une correction de 15 % du gap ne
+    // regagnait que 0,451 m. Bilan : +0,705 m par cycle, donc une derive qui CROIT jusqu'au point
+    // fixe 0,15 x d = 1,156, soit d ~ 7,7 m — exactement les 9 m observes la veille. Le recalage
+    // franc n'intervenant qu'a 15 m, l'equilibre s'installait sous son seuil et il ne se
+    // declenchait jamais : l'avatar trainait a sept metres et rien ne considerait ca comme anormal.
+    //
+    // ⚠️ POURQUOI MONTER `kFractionCorrection` N'AURAIT PAS SUFFI. Le mouvement libre est a peu
+    // pres CONSTANT (c'est notre propre commande de marche, que le moteur execute a SA vitesse vers
+    // un point a 5 m devant — `ignoreNavigation = true`, donc la navigation est hors de cause).
+    // Une correction PROPORTIONNELLE au gap est donc toujours perdante quand le gap est petit :
+    // il faudrait f > 2,3 pour tenir a 50 cm de derive, ce qui n'a pas de sens.
+    //
+    // Le correctif ajoute un terme ABSOLU : on rattrape ce que l'avatar vient de perdre tout seul,
+    // PLUS 15 % du reste. Le bilan par cycle devient -f x d — une decroissance geometrique propre,
+    // a n'importe quelle amplitude de derive.
+    //
+    // On garde `kFractionCorrection` comme plancher (premier passage, ou `libre` indisponible) et
+    // on plafonne a 1.0 : corriger plus que l'ecart ferait depasser la cible.
+    // ⚠️ CORRECTIF RETIRE (2026-08-16, le jour meme). Ajouter un terme absolu au correcteur
+    // faisait saturer la fraction a 1,0 — on teleportait l'avatar pile sur sa cible a chaque
+    // passage — et la derive a EMPIRE (3,0 -> 6,7 m), le mouvement libre avec (1,16 -> 6,99 m).
+    // Un correcteur maximal qui ne rattrape toujours pas veut dire que le probleme n'est PAS sa
+    // force : ce sont les passages qui sont trop espaces. On mesure donc ca, au lieu de le deviner.
+
     if (enLair && derive <= kSautFrancM)
     {
         // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On suit
@@ -4435,6 +4519,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             positionVoulue.Z,
             1.0f};
         PlacerSansCommande(entityId, vol, pose.yaw);
+        { auto& s = g_suiviAvatars[networkId];
+          s.placeX = vol.X; s.placeY = vol.Y; s.depuisPlaceS = 0.0f; s.placeZ = vol.Z; s.placeValide = true;
+          const auto reluvol = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+          const float rvolx = reluvol.X - vol.X, rvoly = reluvol.Y - vol.Y, rvolz = reluvol.Z - vol.Z;
+          g_ecartApresPose = std::sqrt(rvolx * rvolx + rvoly * rvoly + rvolz * rvolz); }
     }
     else if (deriveHorizontale > kCorrectionMiniM && derive <= kSautFrancM)
     {
@@ -4449,7 +4538,17 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             1.0f};
         // ⚠️ `PlacerSansCommande` et NON `SetEntityPosition` : ce dernier empile un ordre de
         // téléport qui annule la marche en cours. Voir le corps de `PlacerSansCommande`.
+        // ⚠️ « Figer, placer, recommander » a ete essaye ici le 2026-08-16 et RETIRE le meme
+        // jour : annuler la commande avant de teleporter n'a pas fait prendre le placement
+        // (`pose` 1,34 -> 1,64 m, inchange). L'hypothese « le systeme de mouvement ecrase
+        // notre Teleport tant qu'une commande tourne » est donc REFUTEE — et figer a chaque
+        // correction hacherait l'animation pour un gain nul. Voir F-PLY-068.
         PlacerSansCommande(entityId, pas, pose.yaw);
+        { auto& s = g_suiviAvatars[networkId];
+          s.placeX = pas.X; s.placeY = pas.Y; s.depuisPlaceS = 0.0f; s.placeZ = pas.Z; s.placeValide = true;
+          const auto relupas = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+          const float rpasx = relupas.X - pas.X, rpasy = relupas.Y - pas.Y, rpasz = relupas.Z - pas.Z;
+          g_ecartApresPose = std::sqrt(rpasx * rpasx + rpasy * rpasy + rpasz * rpasz); }
     }
 
     if (derive > kSautFrancM)
@@ -4467,6 +4566,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             g_tamponsJoueurs[networkId].Nombre(), pose.extrapolee ? " EXTRAPOLE" : "");
         ++g_statsRoster.recalagesAvatar;
         SetEntityPosition(entityId, positionVoulue, pose.yaw);
+        { auto& s = g_suiviAvatars[networkId];
+          s.placeX = positionVoulue.X; s.placeY = positionVoulue.Y; s.depuisPlaceS = 0.0f; s.placeZ = positionVoulue.Z; s.placeValide = true;
+          const auto relupositionVoulue = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+          const float rpositionVouluex = relupositionVoulue.X - positionVoulue.X, rpositionVouluey = relupositionVoulue.Y - positionVoulue.Y, rpositionVouluez = relupositionVoulue.Z - positionVoulue.Z;
+          g_ecartApresPose = std::sqrt(rpositionVouluex * rpositionVouluex + rpositionVouluey * rpositionVouluey + rpositionVouluez * rpositionVouluez); }
         // La commande survit au Teleport (c'est tout le resultat de Q6b) — mais la cible commandee
         // date d'avant le saut. On force une reemission au prochain passage.
         g_suiviAvatars[networkId].commande = false;
