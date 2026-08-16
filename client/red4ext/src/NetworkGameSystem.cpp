@@ -1165,7 +1165,7 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
     // « émission » de la mesure de latence bout-en-bout (voir Telemetrie.h). Journalisée APRÈS la
     // lecture du regard, pour que `yaw` et `lyaw` de la même ligne décrivent le même instant :
     // c'est leur COMPARAISON qui tranche la convention d'axes non mesurée.
-    g_telemetrie.Emission(x, y, z, yaw, locomotion, lookYawDeg, lookPitchDeg);
+    g_telemetrie.Emission(x, y, z, yaw, locomotion, lookYawDeg, lookPitchDeg, moveDir);
 
     const cyberpunk_rp::protocol::QVec3 pos(QuantPos(x), QuantPos(y), QuantPos(z));
     const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
@@ -4469,7 +4469,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         g_telemetrie.Rendu(networkId, position.X, position.Y, position.Z, pose.locomotion, derive,
                            tampon != g_tamponsJoueurs.end() ? tampon->second.Nombre() : 0u,
                            pose.extrapolee, g_horlogeRendu.DelaiCourant(), g_horlogeRendu.Gigue(),
-                           recalageFranc, libre, depuisPlace, ecartPose);
+                           recalageFranc, libre, depuisPlace, ecartPose, pose.moveDir);
     }
 
     // ⚠️ LA VERTICALE APPARTIENT AU MOTEUR, PAS À NOUS.
@@ -4734,7 +4734,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     //
     // `move_dir == 0` signifie IMMOBILE (et non « droit devant ») : dans ce cas on ne vise rien de
     // neuf, la branche « locomotion == 0 » plus haut a deja fige l'avatar.
-    if (g_pilotageParEntrees && pose.moveDir != 0)
+    // ⚠️ PAS DE GARDE SUR `moveDir != 0` — ELLE SAUTAIT LE CAS LE PLUS FREQUENT.
+    //
+    // `move_dir` est la direction du deplacement RELATIVE AU REGARD. Marcher droit devant donne un
+    // angle nul, donc `move_dir == 0`. Or le schema documente aussi 0 comme « immobile » : la
+    // valeur porte DEUX sens et rien ne les separe — l'emetteur lui-meme ne peut pas les
+    // distinguer, puisque l'angle est identique.
+    //
+    // Mesure du 2026-08-16, joueur marchant 81,8 m : sur 1352 emissions en mouvement, `move_dir`
+    // vaut 0 dans 56 % des cas et se groupe autour de 0 dans le reste (255, 1, 2, 3, 254). En
+    // sautant les zeros, on ignorait donc TOUTE la marche en ligne droite — l'avatar ne recevait
+    // d'ordre que pendant les virages, d'ou 2,3 m parcourus pour 90,8 m de marche reelle.
+    //
+    // Le test d'immobilite se fait sur `locomotion == 0`, qui est sans ambiguite, et il est deja
+    // fait plus haut dans cette fonction.
+    if (g_pilotageParEntrees)
     {
         const auto ici = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
         const float capMonde = pose.yaw + static_cast<float>(pose.moveDir) * (360.0f / 256.0f);

@@ -249,12 +249,13 @@ public:
     ///   · `lyaw` toujours 0 → l'appel échoue et le repli s'applique (dégradation sûre, pas panne).
     /// `lpitch` se lit pareil : lever la tête doit le faire monter, la baisser le faire descendre.
     void Emission(float x, float y, float z, float yaw, std::uint8_t locomotion, float lookYaw,
-                  float lookPitch) noexcept
+                  float lookPitch, std::uint8_t moveDir = 0) noexcept
     {
         Ecrire("{\"t\":%lld,\"ts\":%lld,\"k\":\"tx\",\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
-               "\"yaw\":%.1f,\"loco\":%u,\"lyaw\":%.1f,\"lpitch\":%.1f}\n",
+               "\"yaw\":%.1f,\"loco\":%u,\"lyaw\":%.1f,\"lpitch\":%.1f,\"mdir\":%u}\n",
                static_cast<long long>(Maintenant()), static_cast<long long>(TempsServeur()), x, y,
-               z, yaw, static_cast<unsigned>(locomotion), lookYaw, lookPitch);
+               z, yaw, static_cast<unsigned>(locomotion), lookYaw, lookPitch,
+               static_cast<unsigned>(moveDir));
     }
 
     /// CE QUE JE RENDS — la pose à laquelle un avatar distant est effectivement placé, plus l'état
@@ -270,15 +271,16 @@ public:
     /// deux corrections. `-1` = pas de position de reference (premiere frame de cet avatar).
     void Rendu(std::uint64_t id, float x, float y, float z, std::uint8_t locomotion, float derive,
                std::size_t echantillons, bool extrapole, double delai, double gigue,
-               bool recalage, float libre = -1.0f, float depuisPlace = -1.0f, float ecartPose = -1.0f) noexcept
+               bool recalage, float libre = -1.0f, float depuisPlace = -1.0f, float ecartPose = -1.0f,
+               std::uint8_t moveDir = 0) noexcept
     {
         Ecrire("{\"t\":%lld,\"ts\":%lld,\"k\":\"rx\",\"id\":%llu,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
                "\"loco\":%u,\"derive\":%.3f,\"ech\":%zu,\"ext\":%d,\"delai\":%.4f,\"gigue\":%.4f,"
-               "\"recal\":%d,\"libre\":%.3f,\"dtcorr\":%.4f,\"pose\":%.4f}\n",
+               "\"recal\":%d,\"libre\":%.3f,\"dtcorr\":%.4f,\"pose\":%.4f,\"mdir\":%u}\n",
                static_cast<long long>(Maintenant()), static_cast<long long>(TempsServeur()),
                static_cast<unsigned long long>(id), x, y, z,
                static_cast<unsigned>(locomotion), derive, echantillons, extrapole ? 1 : 0, delai,
-               gigue, recalage ? 1 : 0, libre, depuisPlace, ecartPose);
+               gigue, recalage ? 1 : 0, libre, depuisPlace, ecartPose, static_cast<unsigned>(moveDir));
     }
 
     /// Faut-il écrire une ligne `rx` pour cette entité maintenant ?
