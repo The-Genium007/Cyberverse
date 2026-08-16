@@ -160,6 +160,12 @@ struct SuiviAvatar
     /// cible : celle-ci etant calculee depuis la position courante de l'avatar, elle ne bouge
     /// presque pas tant qu'il n'avance pas — le garde se refermait sur lui-meme et l'avatar ne
     /// recevait qu'UNE commande (mesure : 4,4 m en ligne droite pour 88,8 m de marche reelle).
+    /// Nombre de commandes de marche REELLEMENT emises, et resultat du dernier appel.
+    /// Instrumente apres QUATRE correctifs poses sans savoir si le chemin s'executait — et
+    /// re-applique SEUL apres un crash, parce qu'un instrument doit survivre au patch qu'il
+    /// mesure. La premiere fois, le revert du correctif avait emporte les compteurs avec lui.
+    std::uint32_t commandesEmises = 0;
+    int dernierRetourCommande = -1;
     std::uint8_t derniereMoveDir = 0;
     float dernierYawEntree = 0.0f;
 

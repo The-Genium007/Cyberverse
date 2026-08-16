@@ -4443,6 +4443,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // precedente. Cet ecart n'est pas de notre fait : nous, on ne l'a pas touche depuis.
     //   proche de 0                 -> le correcteur n'est pas distance, chercher ailleurs
     //   du meme ordre que la derive -> le moteur deplace l'avatar sous nos pieds, coupable nomme
+    const auto& suivi2 = g_suiviAvatars[networkId];
     float libre = -1.0f;
     float depuisPlace = -1.0f;
     const float ecartPose = g_ecartApresPose;
@@ -4469,7 +4470,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         g_telemetrie.Rendu(networkId, position.X, position.Y, position.Z, pose.locomotion, derive,
                            tampon != g_tamponsJoueurs.end() ? tampon->second.Nombre() : 0u,
                            pose.extrapolee, g_horlogeRendu.DelaiCourant(), g_horlogeRendu.Gigue(),
-                           recalageFranc, libre, depuisPlace, ecartPose, pose.moveDir);
+                           recalageFranc, libre, depuisPlace, ecartPose, pose.moveDir,
+                           suivi2.commandesEmises, suivi2.dernierRetourCommande);
     }
 
     // ⚠️ LA VERTICALE APPARTIENT AU MOTEUR, PAS À NOUS.
@@ -4784,9 +4786,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     {
         return;
     }
+    ++suivi.commandesEmises;
     if (Red::CallVirtual(this, "TesseraSuivreAvatar", enRoute, entityId, visee,
                          static_cast<int32_t>(pose.locomotion), pose.yaw)
-        && enRoute)
+        && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
     {
         // ── L'INSTRUMENT ───────────────────────────────────────────────────────────────────
         //
