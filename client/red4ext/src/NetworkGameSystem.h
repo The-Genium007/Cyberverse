@@ -160,20 +160,6 @@ struct SuiviAvatar
     /// cible : celle-ci etant calculee depuis la position courante de l'avatar, elle ne bouge
     /// presque pas tant qu'il n'avance pas — le garde se refermait sur lui-meme et l'avatar ne
     /// recevait qu'UNE commande (mesure : 4,4 m en ligne droite pour 88,8 m de marche reelle).
-    /// Nombre de commandes de marche REELLEMENT emises pour cet avatar. Instrumente le
-    /// 2026-08-16 apres QUATRE correctifs successifs poses sans savoir si le chemin s'executait.
-    /// Tant qu'on ignore si la commande part une fois ou cent, tout correctif est un pari.
-    std::uint32_t commandesEmises = 0;
-    /// Resultat du dernier appel a `TesseraSuivreAvatar` : 1 acceptee, 0 refusee, -1 jamais appele.
-    int dernierRetourCommande = -1;
-    /// Destination PERSISTANTE du pilotage par entrees. Recalculee seulement quand l'entree
-    /// change — jamais a chaque passage. Recalculer depuis la position courante de l'avatar
-    /// rapproche la cible de lui a chaque fois : l'ordre repart de zero avant que le pas ne
-    /// s'engage, et le pantin "fremit sur place" (pathologie mesuree le 2026-08-06 sur les PNJ,
-    /// documentee dans protocol.fbs). Mesure du 2026-08-16 : 903 commandes en 120 s pour 5,3 m.
-    float cibleEntreeX = 0.0f;
-    float cibleEntreeY = 0.0f;
-    bool cibleEntreeValide = false;
     std::uint8_t derniereMoveDir = 0;
     float dernierYawEntree = 0.0f;
 
