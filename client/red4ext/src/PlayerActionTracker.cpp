@@ -55,6 +55,25 @@ void PlayerActionTracker::OnHit(RED4ext::Handle<RED4ext::GameObject> gameObject,
     SDK->logger->InfoF(PLUGIN, "OnHit! %d", event->attackData->attackType);
 }
 
+
+/// Index de siege a partir du nom de slot du jeu.
+///
+/// L'ordre suit `EVehicleDoor` (`vehicleComponentPS.script:2194`), que le serveur reprend tel quel
+/// dans `param`. Les NOMS sont canoniques meme si la TOPOLOGIE varie d'un modele a l'autre
+/// (F-VEH-012 : 2 places sur un coupe, 4 sur une berline) — c'est pour ca qu'on traduit un nom et
+/// qu'on ne compte pas des sieges.
+///
+/// Un slot inconnu rend 0 (place du conducteur) plutot que de faire echouer le rapport : mieux
+/// vaut un siege approximatif qu'un serveur qui ignore qu'un joueur est monte.
+static uint32_t IndexDeSiege(RED4ext::CName slot)
+{
+    if (slot == RED4ext::CName("seat_front_left")) return 0;
+    if (slot == RED4ext::CName("seat_front_right")) return 1;
+    if (slot == RED4ext::CName("seat_back_left")) return 2;
+    if (slot == RED4ext::CName("seat_back_right")) return 3;
+    return 0;
+}
+
 void PlayerActionTracker::OnMounting(RED4ext::Handle<RED4ext::game::mounting::MountingEvent> event)
 {
     if (event->relationship.otherMountableType != RED4ext::game::MountingObjectType::Vehicle)
@@ -96,7 +115,25 @@ void PlayerActionTracker::OnMounting(RED4ext::Handle<RED4ext::game::mounting::Mo
     spawnCar.worldTransform = Vector3{X, Y, Z};
     spawnCar.yaw = Yaw;
 
-    Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(0, spawnCar);
+    const auto reseau = Red::GetGameSystem<NetworkGameSystem>();
+    reseau->EnqueueMessage(0, spawnCar);
+
+    // Rapport de MONTEE au serveur — le fil qui manquait.
+    //
+    // Sans lui, le serveur ne sait pas qu'un joueur est assis : pas d'occupation de siege, donc
+    // aucun autre client ne peut le voir dans la voiture, ni jouer l'animation d'entree. Mesure du
+    // 2026-08-14 : « le vehicule est visible des deux cotes, mais quand on rentre dedans on n'a pas
+    // la mise a jour de l'etat des gens ».
+    //
+    // `IdReseauDe` rend 0 pour un vehicule purement LOCAL (une voiture d'appel, une epave du
+    // decor) : on ne rapporte alors rien, ce qui est correct — le serveur ne connait pas cet objet
+    // et ne pourrait pas le repliquer. C'est aussi ce que resout le TODO historique juste
+    // au-dessous dans OnUnmounting (« le serveur ne devrait pas avoir a deviner »).
+    const auto idReseau = reseau->IdReseauDe(vehicleInstance->entityID);
+    if (idReseau != 0)
+    {
+        reseau->RapporterMontage(idReseau, IndexDeSiege(event->relationship.slotId.id), true);
+    }
 }
 
 void PlayerActionTracker::OnUnmounting(RED4ext::Handle<RED4ext::game::mounting::UnmountingEvent> event)
@@ -126,9 +163,22 @@ void PlayerActionTracker::OnUnmounting(RED4ext::Handle<RED4ext::game::mounting::
     const RED4ext::game::Object* ptr = strongLock;
     const auto vehicleInstance = RED4ext::Handle((RED4ext::VehicleObject*)ptr);
 
-    // TODO: Read the networkedEntityId from the entity, so we can be precise and the server doesn't need to guess.
+    // Le TODO historique — « lire le networkedEntityId depuis l'entite, pour que le serveur n'ait
+    // pas a deviner » — est resolu ci-dessous par `IdReseauDe`. Le message herite reste envoye tel
+    // quel pour ne rien casser de l'existant.
+    const auto reseau = Red::GetGameSystem<NetworkGameSystem>();
     const PlayerUnmountCar unmount_car = {};
-    Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(0, unmount_car);
+    reseau->EnqueueMessage(0, unmount_car);
+
+    // Rapport de DESCENTE. Sans lui, le siege reste occupe cote serveur pour toujours : plus
+    // personne ne peut s'y asseoir, et l'invariant convoi continue de poser un joueur qui n'est
+    // plus dans la voiture. Le siege est rapporte pour symetrie, mais le serveur n'en a pas besoin
+    // pour demonter — `unmount` retire l'occupant de TOUT siege qu'il occupait.
+    const auto idReseau = reseau->IdReseauDe(vehicleInstance->entityID);
+    if (idReseau != 0)
+    {
+        reseau->RapporterMontage(idReseau, IndexDeSiege(event->relationship.slotId.id), false);
+    }
 }
 
 void PlayerActionTracker::OnItemEquipped(const RED4ext::TweakDBID slot, const RED4ext::ItemID item, const bool isWeapon)

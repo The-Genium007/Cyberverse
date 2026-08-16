@@ -274,6 +274,16 @@ public:
     /// Gigue courante retenue, en secondes — exposée pour le diagnostic.
     [[nodiscard]] double Gigue() const noexcept { return m_gigue; }
 
+    /// Temps écoulé depuis le dernier `Snapshot` REÇU, en secondes.
+    ///
+    /// C'est la seule mesure côté client qui distingue « le serveur se tait » de « le serveur va
+    /// bien » : la socket GNS reste ouverte quand c'est un SHARD qui tombe (le client ne parle
+    /// qu'au Gateway), donc `FullyConnected` ne bouge pas et rien d'autre ne trahit le trou.
+    ///
+    /// ⚠️ Ne vaut que si `Amorcee()` — avant le premier snapshot, `Avancer` n'incrémente rien et
+    /// ce compteur reste à 0, ce qui se lirait comme un fil parfaitement frais.
+    [[nodiscard]] double DepuisDernierSnapshot() const noexcept { return m_depuisDernierSnapshot; }
+
 private:
     /// Met à jour la gigue : de combien l'arrivée RÉELLE a-t-elle dépassé l'arrivée ATTENDUE ?
     ///

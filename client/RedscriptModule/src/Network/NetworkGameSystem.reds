@@ -97,6 +97,25 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_Faim() -> Int32;
     public native func Tessera_Soif() -> Int32;
 
+    // Millisecondes depuis le dernier `Snapshot` reçu. -1 = aucun n'est encore arrivé — à ne jamais
+    // confondre avec 0, qui veut dire « fil parfaitement frais ». Backing C++ :
+    // `RTTI_METHOD(Tessera_SilenceMs)`, même règle de déploiement conjoint que les deux ci-dessus.
+    //
+    // Lue par `UiKitLienPerdu.reds`, croisée avec `FullyConnected`, pour distinguer les deux façons
+    // dont le serveur peut disparaître : socket tombée (Gateway parti) contre socket vivante mais
+    // muette (Shard tombé). Le second cas n'a AUCUN autre symptôme côté client.
+    public native func Tessera_SilenceMs() -> Int32;
+
+    // Essais de reconnexion consécutifs depuis la dernière connexion réussie. 0 = aucun en cours.
+    // L'écran d'attente ne parle de « reconnexion » que si ce compteur bouge : tant qu'il vaut 0,
+    // il constate la panne au lieu de promettre un retour qui n'aurait pas lieu.
+    public native func Tessera_TentativesReconnexion() -> Int32;
+
+    // Rejoue la connexion immédiatement, sans attendre la fin du recul. La demande explicite du
+    // joueur passe avant la temporisation — celle-ci n'existe que pour ne pas marteler un serveur
+    // mort, pas pour faire attendre quelqu'un qui vient de cliquer.
+    public native func Tessera_ReconnecterMaintenant() -> Void;
+
     // Journal de SONDE — écrit dans le log du plugin, donc UN FICHIER PAR INSTANCE.
     // `FTLog` écrit dans le gamelog de CET, partagé par toutes les instances : deux clients y
     // mélangent leurs lignes, ce qui interdit toute comparaison entre eux.

@@ -57,6 +57,15 @@ inline bool ModeDeveloppementDemande(char* commandLine)
 // `--tessera-robot` — cette instance n'envoie plus sa vraie position mais celle d'un SCÉNARIO
 // reproductible (`PlayerSync/Robot.h`). Sert de partenaire de mesure : l'autre instance observe et
 // journalise, et deux sessions deviennent comparables. Jamais dans un lancement joueur.
+// `--tessera-sonde-accroupi` — SONDE T7, jamais un mécanisme de production. Pousse
+// `stanceState.state = Crouch` dans le graphe d'animation de CHAQUE avatar distant, en boucle.
+// L'observation qui tranche est binaire : l'avatar d'en face est accroupi, ou il ne l'est pas.
+inline bool SondeAccroupiDemandee(char* commandLine)
+{
+    if (commandLine == nullptr) { return false; }
+    return std::string(commandLine).find("--tessera-sonde-accroupi") != std::string::npos;
+}
+
 inline bool RobotDemande(char* commandLine)
 {
     if (commandLine == nullptr) { return false; }

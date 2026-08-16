@@ -102,6 +102,22 @@ static void LeYawPrendLePlusCourtChemin()
     // parcoure pas plus de 180 degres.
     Verifier(std::fabs(EcartAngulaire(0.0f, 180.0f)) <= 180.0f, "jamais plus de 180 degres");
 
+    // ── L'AMPLITUDE DE L'ECART, ET PAS SEULEMENT SON PLAFOND (ajoute le 2026-08-15) ──────
+    //
+    // Les assertions ci-dessus verifient `LerpAngle` et un PLAFOND sur `EcartAngulaire`. Aucune
+    // ne verifiait la propriete dont depend la bande morte d'orientation d'un avatar immobile
+    // (`NetworkGameSystem.cpp`, branche `locomotion == 0`) : au franchissement du nord, l'ecart
+    // doit etre PETIT. Une soustraction naive rendrait 358 la ou il faut 2 — et un avatar
+    // immobile pile sur le nord se ferait alors replacer a chaque frame, ce qui est exactement
+    // le regime d'effondrement du 2026-08-06. Le plafond de 180 ne l'attrape pas : 358 le
+    // violerait, mais 178 le respecterait tout en etant faux.
+    Proche(EcartAngulaire(359.0f, 1.0f), 2.0f, "359 -> 1 = +2 degres, jamais -358");
+    Proche(EcartAngulaire(1.0f, 359.0f), -2.0f, "1 -> 359 = -2 degres, jamais +358");
+    Proche(EcartAngulaire(90.0f, 90.0f), 0.0f, "aucun ecart quand rien ne bouge");
+    // Angles hors [0,360) : le fil peut livrer un yaw non normalise.
+    Proche(EcartAngulaire(-1.0f, 1.0f), 2.0f, "entree negative normalisee");
+    Proche(EcartAngulaire(721.0f, 1.0f), 0.0f, "entree au-dela d'un tour normalisee");
+
     TamponPose t;
     t.Pousser(10, PoseXY(0.0f, 0.0f, 350.0f));
     t.Pousser(11, PoseXY(0.0f, 0.0f, 10.0f));

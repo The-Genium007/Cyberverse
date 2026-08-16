@@ -205,13 +205,36 @@ struct NetworkAppearance
 class NetworkGameSystem : public Red::IGameSystem
 {
 private:
-    HSteamNetConnection m_hConnection;
+    /// ⚠️ INITIALISÉ, et ce n'est pas cosmétique : c'est LUI qui garde `ConnectToServer` depuis
+    /// l'ajout de la reconnexion. Laissé indéterminé, le premier appel pouvait être refusé au
+    /// hasard de la pile.
+    HSteamNetConnection m_hConnection = k_HSteamNetConnection_Invalid;
     ISteamNetworkingSockets *m_pInterface;
     /// Adresse du serveur joint, `host:port`. Mémorisée au seul usage des journaux de playtest :
     /// un fichier ramassé chez un joueur doit dire CONTRE QUOI il a été produit, sinon on ne peut
     /// pas l'apparier au journal serveur correspondant.
     std::string m_serverAddress;
     bool m_hasTriedToConnect = false;
+
+    // --- RECONNEXION AUTOMATIQUE (2026-08-16) -------------------------------------------------
+    //
+    // Avant : la connexion était à USAGE UNIQUE. `m_hasTriedToConnect` interdisait un second essai,
+    // et un garde `m_pInterface != nullptr` aurait de toute façon refusé — `SteamNetworkingSockets()`
+    // est un singleton de processus, il ne redevient jamais nul. Perdre le Gateway mettait donc fin
+    // à la session, sans recours autre que relancer le jeu.
+    //
+    // Host et port sont mémorisés SÉPARÉMENT de `m_serverAddress` : celle-ci est une chaîne
+    // d'affichage pour les journaux, la reparser pour reconnecter serait la détourner de son usage.
+    std::string m_host;
+    uint16_t m_port = 0;
+    /// Secondes restantes avant le prochain essai. <= 0 = aucun essai armé.
+    double m_reconnexionDansS = 0.0;
+    /// Essais consécutifs depuis la dernière connexion réussie. Remis à zéro par une connexion.
+    int32_t m_tentativesReconnexion = 0;
+    /// Dernier personnage incarné, à rejouer après une reconnexion — sans lui le joueur revient
+    /// connecté mais SPECTATEUR (le serveur ignore tout d'un client resté en `AwaitingSelection`,
+    /// F-PLF-024), et le symptôme est un monde vide qu'on prend pour une panne réseau.
+    uint64_t m_personnageIncarne = 0;
     bool m_hasEnqueuedLoadLastCheckpoint = false;
     Red::Handle<Red::ink::ISystemRequestsHandler> m_systemRequestsHandler;
     bool m_gameRestored = false;
@@ -424,6 +447,12 @@ private:
 
 private:
     bool ConnectToServer(const std::string& host, uint16_t port);
+    /// Arme un essai de reconnexion, avec un recul qui croît (1, 2, 4, 8… plafonné). Le recul n'est
+    /// pas de la politesse : un serveur qui redémarre met quelques secondes, et le marteler pendant
+    /// ce temps ne le fait pas revenir plus vite — ça ne fait que remplir ses journaux.
+    void ArmerReconnexion();
+    /// Rejoue `ConnectToServer` sur la dernière adresse connue.
+    void TenterReconnexion();
     static void ConnectionStatusChangedCallback(SteamNetConnectionStatusChangedCallback_t* pInfo);
     void OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext::JobQueue& job_queue);
     /// Rend TOUS les avatars de joueurs pour l'instant courant, une fois par frame.
@@ -845,6 +874,48 @@ public:
     int32_t Tessera_Faim() const { return m_faim; }
     int32_t Tessera_Soif() const { return m_soif; }
 
+    // Millisecondes ecoulees depuis le dernier `Snapshot` RECU. -1 = aucun snapshot n'est encore
+    // arrive (chargement, session sans serveur) — a ne jamais confondre avec zero, qui veut dire
+    // « fil parfaitement frais ».
+    //
+    // ⚠️ POURQUOI CETTE MESURE EXISTE, ALORS QUE `FullyConnected` EST DEJA LA. Les deux repondent a
+    // des questions differentes, et c'est le croisement qui identifie la panne :
+    //
+    //   FullyConnected=false            -> la socket GNS est tombee : le GATEWAY est parti.
+    //   FullyConnected=true + silence   -> la socket tient, mais plus rien n'arrive : un SHARD est
+    //                                      tombe, ou il est gele.
+    //
+    // Le second cas est INVISIBLE sans ce compteur : le client ne parle qu'au Gateway (les shards
+    // sont derriere, en TCP interne), donc un shard qui meurt ne bouge aucun etat de connexion cote
+    // client. Le Gateway cesse simplement d'emettre (`gateway.rs`, envoi conditionne a la
+    // fraicheur), et le joueur continue de jouer dans un monde qui ne l'ecoute plus.
+    //
+    // ⚠️ ET SURTOUT : la profondeur du tampon d'interpolation NE REPOND PAS a cette question. Mesure
+    // le 2026-08-15 (F-PLY-054) — un tampon plein d'echantillons perimes affiche `ech=48`,
+    // `extrapolation=0 %`, un tableau de bord parfaitement sain, pendant que plus rien ne bouge a
+    // l'ecran. C'est l'instant de la DERNIERE ARRIVEE qui dit si le fil est vivant, rien d'autre.
+    int32_t Tessera_SilenceMs() const
+    {
+        if (!g_horlogeRendu.Amorcee())
+        {
+            return -1;
+        }
+        return static_cast<int32_t>(g_horlogeRendu.DepuisDernierSnapshot() * 1000.0);
+    }
+
+    // Essais de reconnexion consecutifs depuis la derniere connexion reussie. 0 = aucun en cours.
+    // Lu par l'ecran d'attente pour n'annoncer une reconnexion que si elle a REELLEMENT lieu : tant
+    // que ce compteur ne bouge pas, l'ecran constate la panne au lieu de promettre un retour.
+    int32_t Tessera_TentativesReconnexion() const { return m_tentativesReconnexion; }
+
+    // Rejoue la connexion tout de suite, sans attendre la fin du backoff — la demande explicite du
+    // joueur passe avant la temporisation, qui n'existe que pour ne pas marteler un serveur mort.
+    void Tessera_ReconnecterMaintenant()
+    {
+        m_reconnexionDansS = 0.0;
+        TenterReconnexion();
+    }
+
     // Rapporte au serveur une variation de vie que LUI SEUL ne peut pas connaitre : regeneration,
     // soin, chute, feu, PNJ, vehicule. Appelee periodiquement par redscript avec le pourcentage de
     // vie COURANT du joueur local ; toute la logique est ici, pour que le script reste bete.
@@ -1222,6 +1293,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_HopitalOuvert);
     RTTI_METHOD(Tessera_Faim);
     RTTI_METHOD(Tessera_Soif);
+    RTTI_METHOD(Tessera_SilenceMs);
+    RTTI_METHOD(Tessera_TentativesReconnexion);
+    RTTI_METHOD(Tessera_ReconnecterMaintenant);
     RTTI_METHOD(Tessera_Journal);
     RTTI_METHOD(Tessera_RapporterStatique);
     RTTI_METHOD(Tessera_ApparenceStatiqueConnue);

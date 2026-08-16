@@ -209,8 +209,22 @@ bool NetworkGameSystem::ConnectToServer(const std::string& host, uint16_t port)
     SDK->logger->InfoF(PLUGIN, "Trying to connect to server at %s:%d", host.c_str(), port);
     // Mémorisé pour l'en-tête de session du journal de playtest (voir `SendJoin`).
     m_serverAddress = host + ":" + std::to_string(port);
+    // Mémorisés pour POUVOIR RECOMMENCER : sans ça, l'adresse n'existe que dans la ligne de
+    // commande, relue une seule fois au premier tick.
+    m_host = host;
+    m_port = port;
 
-    if (m_pInterface != nullptr)
+    // ⚠️ LE GARDE PORTE SUR LA CONNEXION, PLUS SUR L'INTERFACE.
+    //
+    // Il testait `m_pInterface != nullptr`, ce qui rendait toute reconnexion impossible :
+    // `SteamNetworkingSockets()` renvoie un singleton de processus, donc une fois la première
+    // connexion faite, ce pointeur ne redevient JAMAIS nul — pas même quand la socket tombe. Le
+    // second appel était refusé par un garde censé empêcher les connexions concurrentes, et qui
+    // interdisait en fait les connexions successives.
+    //
+    // Ce qu'on veut vraiment interdire, c'est d'ouvrir une seconde connexion pendant qu'une
+    // première est vivante. C'est exactement ce que dit `m_hConnection`.
+    if (m_hConnection != k_HSteamNetConnection_Invalid)
     {
         SDK->logger->Warn(PLUGIN, "Trying to connect while already being connected. Aborting");
         return false;
@@ -247,10 +261,45 @@ bool NetworkGameSystem::ConnectToServer(const std::string& host, uint16_t port)
     if (m_hConnection == k_HSteamNetConnection_Invalid)
     {
         SDK->logger->WarnF(PLUGIN, "Could not create connection for string \"%s\": invalid", connection_string);
+        // Un essai qui échoue ICI (adresse injoignable, socket refusée) ne produira jamais de
+        // callback de changement d'état — c'est donc le seul endroit d'où réarmer, sans quoi la
+        // reconnexion s'arrêterait au premier échec dur.
+        ArmerReconnexion();
         return false;
     }
 
     return true;
+}
+
+void NetworkGameSystem::ArmerReconnexion()
+{
+    if (m_host.empty() || m_port == 0)
+    {
+        // Jamais connecté (jeu lancé sans adresse serveur) : il n'y a rien à retrouver.
+        return;
+    }
+    m_tentativesReconnexion += 1;
+    // 1, 2, 4, 8, 16, plafonné à 30 s. Le plafond compte autant que la croissance : un joueur parti
+    // déjeuner pendant une panne longue doit retrouver sa partie sans avoir à relancer le jeu.
+    double recul = 1.0;
+    for (int32_t i = 1; i < m_tentativesReconnexion && recul < 30.0; ++i)
+    {
+        recul *= 2.0;
+    }
+    m_reconnexionDansS = recul > 30.0 ? 30.0 : recul;
+    SDK->logger->InfoF(PLUGIN, "[reconnexion] essai %d arme dans %.0f s (%s)",
+                       m_tentativesReconnexion, m_reconnexionDansS, m_serverAddress.c_str());
+}
+
+void NetworkGameSystem::TenterReconnexion()
+{
+    if (m_host.empty() || m_port == 0)
+    {
+        return;
+    }
+    SDK->logger->InfoF(PLUGIN, "[reconnexion] essai %d — %s", m_tentativesReconnexion,
+                       m_serverAddress.c_str());
+    ConnectToServer(m_host, m_port);
 }
 
 void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext::JobQueue& job_queue)
@@ -321,6 +370,20 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
     if (m_pInterface == nullptr)
     {
         return;
+    }
+
+    // ── LE RETOUR ─────────────────────────────────────────────────────────────────────────────
+    // Décompte du recul armé par `ArmerReconnexion`. Placé APRÈS le garde d'interface (il n'y a
+    // rien à reconnecter tant qu'on n'a jamais connecté) et AVANT `RunCallbacks`, pour que l'essai
+    // parte dans la frame où il est décidé plutôt qu'à la suivante.
+    if (m_reconnexionDansS > 0.0)
+    {
+        m_reconnexionDansS -= frame_info.deltaTime;
+        if (m_reconnexionDansS <= 0.0)
+        {
+            m_reconnexionDansS = 0.0;
+            TenterReconnexion();
+        }
     }
 
     PollIncomingMessages();
@@ -396,9 +459,64 @@ void NetworkGameSystem::ConnectionStatusChangedCallback(SteamNetConnectionStatus
         system->SendJoin(nom);
         // Notre serveur n'a pas d'ACK d'auth : connexion etablie = pret.
         system->FullyConnected = true;
+        // La serie d'essais s'arrete ici. Le compteur repart de zero, donc le prochain incident
+        // recommencera son recul a 1 s au lieu d'heriter des 30 s de la panne precedente.
+        if (system->m_tentativesReconnexion > 0)
+        {
+            SDK->logger->InfoF(PLUGIN, "[reconnexion] retablie apres %d essai(s)",
+                               system->m_tentativesReconnexion);
+        }
+        system->m_tentativesReconnexion = 0;
+        system->m_reconnexionDansS = 0.0;
+        // ⚠️ `SelectCharacter` n'est PAS rejoue ici. Le serveur vient de recevoir notre `Join` et
+        // n'a pas encore repondu : il repondra par une `CharacterList`, et c'est LA que l'on se
+        // rincarne (`HandleCharacterList`). Envoyer les deux d'affilee marcherait peut-etre, mais
+        // ferait dependre la reprise d'un ordre de traitement qu'on ne controle pas.
     } else {
         auto* systeme = Red::GetGameSystem<NetworkGameSystem>();
         systeme->FullyConnected = false;
+
+        // ── LA CONNEXION MORTE SE FERME, PUIS SE REARME ────────────────────────────────────────
+        //
+        // ⚠️ SEULS LES ETATS TERMINAUX SONT DES PANNES. `ClosedByPeer` (4) et
+        // `ProblemDetectedLocally` (5), rien d'autre.
+        //
+        // ⚠️⚠️ CE `if` EST LA CORRECTION D'UN BUG QUI A EMPECHE TOUTE CONNEXION — mesure du
+        // 2026-08-16, journal `cyberverse.red4ext-2026-08-16-13-45-45.log`. La premiere version
+        // fermait la connexion pour TOUT etat different de `Connected`. Or l'etablissement passe
+        // par `Connecting` (1), qui est un etat NORMAL et transitoire : on fermait donc la
+        // connexion pendant qu'elle s'ouvrait, et la boucle etait parfaite —
+        //
+        //     Trying to connect -> Status Changed (1) -> [reconnexion] essai N arme
+        //     -> Status Changed (0) "Application closed connection"   <- nous
+        //     -> essai N+1 -> ... a l'infini, jamais connecte.
+        //
+        // Le symptome n'avait rien d'un bug de connexion : en jeu, RIEN ne s'affichait — ni monde
+        // partage, ni ecran de panne. Il a fallu le journal du plugin pour voir que le client se
+        // sabordait lui-meme, une fois par seconde.
+        //
+        // `None` (0) est aussi exclu : c'est l'etat que produit NOTRE PROPRE `CloseConnection`, et
+        // le traiter comme une panne rearmerait une reconnexion apres chaque nettoyage.
+        const bool estUnePanne =
+            pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+            pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally;
+
+        if (estUnePanne)
+        {
+            // GNS impose de fermer explicitement une connexion passee dans un de ces deux etats :
+            // sans ce `CloseConnection`, le handle fuit et le socket reste reserve. C'est aussi ce
+            // qui remet `m_hConnection` a `Invalid`, donc ce qui REOUVRE le garde de
+            // `ConnectToServer` — les deux gestes sont le meme.
+            if (systeme->m_pInterface != nullptr && pInfo->m_hConn != k_HSteamNetConnection_Invalid)
+            {
+                systeme->m_pInterface->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
+            }
+            if (pInfo->m_hConn == systeme->m_hConnection)
+            {
+                systeme->m_hConnection = k_HSteamNetConnection_Invalid;
+                systeme->ArmerReconnexion();
+            }
+        }
         // ⚠️ Nos remplaçants ne survivent PAS à la session qui les a créés. Sans ça, une
         // déconnexion (serveur coupé, réseau perdu, retour au menu) laisse des PNJ fabriqués par
         // nous debout dans un monde qui n'a plus d'autorité pour en parler — et la reconnexion en
@@ -790,6 +908,20 @@ void NetworkGameSystem::RejouerPosesEnAttente()
 
 void NetworkGameSystem::PollIncomingMessages()
 {
+    // ⚠️ RIEN A LIRE SUR UNE CONNEXION FERMEE — et surtout, ne pas INTERROGER un handle invalide.
+    //
+    // Depuis la reconnexion automatique (2026-08-16), `m_hConnection` retombe a `Invalid` des que
+    // la connexion meurt. `ReceiveMessagesOnConnection` sur un handle invalide renvoie -1, et le
+    // journal se remplissait alors de « Error polling messages: -1 » A CHAQUE FRAME pendant toute
+    // la coupure — mesure du 2026-08-16, journal `cyberverse.red4ext-2026-08-16-15-01-05.log`.
+    //
+    // Le bruit n'est pas le seul probleme : ce message ressemble a une panne reseau alors qu'il ne
+    // dit que « la connexion est fermee », ce que nous savons deja. Un journal qui crie a l'erreur
+    // pendant un etat normal rend le diagnostic SUIVANT plus difficile, pas plus facile.
+    if (m_hConnection == k_HSteamNetConnection_Invalid)
+    {
+        return;
+    }
     while (true)
     {
         ISteamNetworkingMessage* pIncomingMsg = nullptr;
@@ -2332,6 +2464,44 @@ void NetworkGameSystem::HandleCharacterList(const cyberpunk_rp::protocol::Charac
         SDK->logger->InfoF(PLUGIN, "TESSERA_AUTO_CHARACTER : incarnation automatique de %s",
             m_personnages.front().pseudonyme.c_str());
         Tessera_ChoisirPersonnage(m_personnages.front().id);
+        return;
+    }
+
+    // ── REPRISE APRES RECONNEXION ─────────────────────────────────────────────────────────────
+    //
+    // On incarnait deja quelqu'un avant la coupure : on y retourne, sans repasser par le lobby.
+    // C'est ICI et pas dans le callback de connexion, parce que cette liste EST la reponse du
+    // serveur a notre `Join` : la recevoir prouve qu'il nous a acceptes et qu'il est pret a
+    // entendre un `SelectCharacter`. Rejouer plus tot ferait dependre la reprise d'un ordre de
+    // traitement qu'on ne controle pas.
+    //
+    // ⚠️ On verifie que le personnage EXISTE ENCORE dans la liste. Il peut avoir ete supprime
+    // depuis une autre machine pendant la coupure ; demander un id disparu ferait repondre au
+    // serveur un refus que personne n'affiche, et le joueur resterait spectateur sans savoir
+    // pourquoi. Absent = on laisse le lobby faire son travail.
+    if (m_personnageIncarne != 0)
+    {
+        const uint64_t vise = m_personnageIncarne;
+        bool existe = false;
+        for (const auto& p : m_personnages)
+        {
+            if (p.id == vise)
+            {
+                existe = true;
+                break;
+            }
+        }
+        if (existe)
+        {
+            SDK->logger->InfoF(PLUGIN, "[reconnexion] reprise du personnage %llu", vise);
+            Tessera_ChoisirPersonnage(vise);
+        }
+        else
+        {
+            SDK->logger->WarnF(PLUGIN,
+                "[reconnexion] le personnage %llu n'est plus sur ce compte — retour au lobby", vise);
+            m_personnageIncarne = 0;
+        }
     }
 }
 
@@ -2528,6 +2698,15 @@ bool NetworkGameSystem::Tessera_ChoisirPersonnage(uint64_t id)
         return false;
     }
     SDK->logger->InfoF(PLUGIN, "SelectCharacter : id %llu", id);
+    // Retenu pour la REPRISE apres une reconnexion (voir `HandleCharacterList`). Sans lui, un
+    // joueur qui revient est connecte mais n'incarne personne : la Gateway retient tout ce qu'il
+    // envoie, le Shard reste a zero joueur, et l'ecran reste vide (F-PLF-024).
+    //
+    // Seuls les id non nuls arrivent ici (le garde ci-dessus refuse zero), donc « sortir du monde »
+    // par `SelectCharacter(0)` ne peut pas effacer cette memoire. Sans consequence aujourd'hui :
+    // ce chemin-la est de toute facon refuse par ce meme garde (cf. `UiKitRetourLobby.reds`, qui
+    // l'appelle et n'a jamais ete mesure en jeu).
+    m_personnageIncarne = id;
 
     flatbuffers::FlatBufferBuilder builder;
     const auto req = cyberpunk_rp::protocol::CreateSelectCharacter(builder, id);
