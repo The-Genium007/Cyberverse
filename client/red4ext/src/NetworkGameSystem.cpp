@@ -696,6 +696,13 @@ bool g_pilotageParEntrees = false;
 bool NetworkGameSystem::Tessera_PilotageParEntrees(bool actif)
 {
     g_pilotageParEntrees = actif;
+    // ── LE VERDICT DOIT POUVOIR DIRE SI LE MODE ETAIT ACTIF ────────────────────────────────
+    //
+    // La sonde de determinisme du 2026-08-16 a rendu « 0,000 m » et conclu au succes, sur un
+    // dispositif qui ne mesurait rien. Sa garde verifiait la mauvaise grandeur. La lecon generale :
+    // un depouillement qui ne peut pas voir l'etat de l'interrupteur qu'il teste ne peut pas
+    // distinguer « le correctif marche » de « le mode n'etait pas allume ».
+    g_telemetrie.Evenement("pilotage_entrees", actif ? 1u : 0u, "");
     return g_pilotageParEntrees;
 }
 
