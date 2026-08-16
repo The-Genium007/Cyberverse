@@ -762,7 +762,9 @@ struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_MOVE_DIR = 10,
     VT_FLAGS = 12,
     VT_FRAME = 14,
-    VT_SLOT = 16
+    VT_SLOT = 16,
+    VT_LOOK_YAW = 18,
+    VT_LOOK_PITCH = 20
   };
   const cyberpunk_rp::protocol::QVec3 *position() const {
     return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
@@ -785,6 +787,12 @@ struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t slot() const {
     return GetField<uint64_t>(VT_SLOT, 0);
   }
+  uint16_t look_yaw() const {
+    return GetField<uint16_t>(VT_LOOK_YAW, 0);
+  }
+  int16_t look_pitch() const {
+    return GetField<int16_t>(VT_LOOK_PITCH, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -795,6 +803,8 @@ struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_FLAGS, 1) &&
            VerifyField<uint64_t>(verifier, VT_FRAME, 8) &&
            VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
+           VerifyField<uint16_t>(verifier, VT_LOOK_YAW, 2) &&
+           VerifyField<int16_t>(verifier, VT_LOOK_PITCH, 2) &&
            verifier.EndTable();
   }
 };
@@ -824,6 +834,12 @@ struct PositionUpdateBuilder {
   void add_slot(uint64_t slot) {
     fbb_.AddElement<uint64_t>(PositionUpdate::VT_SLOT, slot, 0);
   }
+  void add_look_yaw(uint16_t look_yaw) {
+    fbb_.AddElement<uint16_t>(PositionUpdate::VT_LOOK_YAW, look_yaw, 0);
+  }
+  void add_look_pitch(int16_t look_pitch) {
+    fbb_.AddElement<int16_t>(PositionUpdate::VT_LOOK_PITCH, look_pitch, 0);
+  }
   explicit PositionUpdateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -843,11 +859,15 @@ inline ::flatbuffers::Offset<PositionUpdate> CreatePositionUpdate(
     uint8_t move_dir = 0,
     uint8_t flags = 0,
     uint64_t frame = 0,
-    uint64_t slot = 0) {
+    uint64_t slot = 0,
+    uint16_t look_yaw = 0,
+    int16_t look_pitch = 0) {
   PositionUpdateBuilder builder_(_fbb);
   builder_.add_slot(slot);
   builder_.add_frame(frame);
   builder_.add_position(position);
+  builder_.add_look_pitch(look_pitch);
+  builder_.add_look_yaw(look_yaw);
   builder_.add_yaw(yaw);
   builder_.add_flags(flags);
   builder_.add_move_dir(move_dir);
@@ -867,7 +887,9 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_SUSTAINED = 16,
     VT_SPACE_ID = 18,
     VT_FRAME = 20,
-    VT_SLOT = 22
+    VT_SLOT = 22,
+    VT_LOOK_YAW = 24,
+    VT_LOOK_PITCH = 26
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -899,6 +921,12 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t slot() const {
     return GetField<uint64_t>(VT_SLOT, 0);
   }
+  uint16_t look_yaw() const {
+    return GetField<uint16_t>(VT_LOOK_YAW, 0);
+  }
+  int16_t look_pitch() const {
+    return GetField<int16_t>(VT_LOOK_PITCH, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -912,6 +940,8 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint32_t>(verifier, VT_SPACE_ID, 4) &&
            VerifyField<uint64_t>(verifier, VT_FRAME, 8) &&
            VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
+           VerifyField<uint16_t>(verifier, VT_LOOK_YAW, 2) &&
+           VerifyField<int16_t>(verifier, VT_LOOK_PITCH, 2) &&
            verifier.EndTable();
   }
 };
@@ -950,6 +980,12 @@ struct PlayerStateBuilder {
   void add_slot(uint64_t slot) {
     fbb_.AddElement<uint64_t>(PlayerState::VT_SLOT, slot, 0);
   }
+  void add_look_yaw(uint16_t look_yaw) {
+    fbb_.AddElement<uint16_t>(PlayerState::VT_LOOK_YAW, look_yaw, 0);
+  }
+  void add_look_pitch(int16_t look_pitch) {
+    fbb_.AddElement<int16_t>(PlayerState::VT_LOOK_PITCH, look_pitch, 0);
+  }
   explicit PlayerStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -972,7 +1008,9 @@ inline ::flatbuffers::Offset<PlayerState> CreatePlayerState(
     uint32_t sustained = 0,
     uint32_t space_id = 0,
     uint64_t frame = 0,
-    uint64_t slot = 0) {
+    uint64_t slot = 0,
+    uint16_t look_yaw = 0,
+    int16_t look_pitch = 0) {
   PlayerStateBuilder builder_(_fbb);
   builder_.add_slot(slot);
   builder_.add_frame(frame);
@@ -980,6 +1018,8 @@ inline ::flatbuffers::Offset<PlayerState> CreatePlayerState(
   builder_.add_space_id(space_id);
   builder_.add_sustained(sustained);
   builder_.add_position(position);
+  builder_.add_look_pitch(look_pitch);
+  builder_.add_look_yaw(look_yaw);
   builder_.add_yaw(yaw);
   builder_.add_flags(flags);
   builder_.add_move_dir(move_dir);

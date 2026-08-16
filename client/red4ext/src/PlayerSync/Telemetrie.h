@@ -237,12 +237,24 @@ public:
     }
 
     /// CE QUE J'ÉMETS — la pose du joueur local, au moment où elle part sur le fil.
-    void Emission(float x, float y, float z, float yaw, std::uint8_t locomotion) noexcept
+    ///
+    /// `lyaw`/`lpitch` : le REGARD (spec 2026-08-15 §5.1). ⚠️ Ils sont là pour TRANCHER une
+    /// hypothèse, pas seulement pour tracer. `ReadLookYaw` lit
+    /// `gameCameraSystem.GetActiveCameraForward()`, dont la convention d'axes n'est **pas mesurée**
+    /// (voir NetworkGameSystem.reds). Journaliser `yaw` et `lyaw` CÔTE À CÔTE rend la question
+    /// décidable depuis le journal seul, sans que personne n'ait à regarder l'écran :
+    ///   · joueur immobile regardant droit devant → `lyaw ≈ yaw` : la convention est bonne ;
+    ///   · écart CONSTANT (±90°, ±180°) → convention d'axes différente, corrigeable par un offset ;
+    ///   · écart ERRATIQUE → vecteur non normalisé, ou ce n'est pas la caméra attendue ;
+    ///   · `lyaw` toujours 0 → l'appel échoue et le repli s'applique (dégradation sûre, pas panne).
+    /// `lpitch` se lit pareil : lever la tête doit le faire monter, la baisser le faire descendre.
+    void Emission(float x, float y, float z, float yaw, std::uint8_t locomotion, float lookYaw,
+                  float lookPitch) noexcept
     {
         Ecrire("{\"t\":%lld,\"ts\":%lld,\"k\":\"tx\",\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
-               "\"yaw\":%.1f,\"loco\":%u}\n",
+               "\"yaw\":%.1f,\"loco\":%u,\"lyaw\":%.1f,\"lpitch\":%.1f}\n",
                static_cast<long long>(Maintenant()), static_cast<long long>(TempsServeur()), x, y,
-               z, yaw, static_cast<unsigned>(locomotion));
+               z, yaw, static_cast<unsigned>(locomotion), lookYaw, lookPitch);
     }
 
     /// CE QUE JE RENDS — la pose à laquelle un avatar distant est effectivement placé, plus l'état

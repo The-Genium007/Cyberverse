@@ -408,6 +408,71 @@ public native class NetworkGameSystem extends IGameSystem {
         return moveDir * 256 + state;
     }
 
+    // ── LE REGARD, distinct de l'orientation du CORPS ──────────────────────────────────────────
+    //
+    // `lookState.lookDir` de `gameMuppetState` — le seul champ de la checklist multijoueur de CDPR
+    // qui n'existait nulle part chez nous (spec 2026-08-15 §2). Un avatar qui fixe droit devant
+    // pendant que le joueur regarde ailleurs ne trompe personne.
+    //
+    // Source : `gameCameraSystem.GetActiveCameraForward() -> Vector4` (dump RTTI, vérifié). La
+    // caméra ACTIVE et non la caméra FPP : en troisième personne (chantier en cours) c'est encore
+    // elle qui dit où le joueur regarde, et l'appel ne change pas.
+    //
+    // ⚠️ **NON MESURÉ — HYPOTHÈSE** (doctrine D2). Le dump RTTI fait foi sur la SIGNATURE, jamais
+    // sur l'effet : il dit que la méthode existe et rend un Vector4, pas que ce vecteur est
+    // normalisé, ni dans quelle convention d'axes. Deux inconnues concrètes :
+    //   · la CONVENTION DE YAW (0° = +Y nord ? sens horaire ?) — si elle diffère de celle du corps,
+    //     le regard partira à angle droit ou en miroir ;
+    //   · la NORMALISATION — si le vecteur ne l'est pas, `AsinF(Z)` rend n'importe quoi.
+    //
+    // **La sonde qui tranche, et elle est gratuite** : `ReadLookYaw` doit valoir le yaw du CORPS,
+    // à quelques degrés près, quand le joueur se tient immobile et regarde droit devant. C'est
+    // exactement ce que compare la sonde `regard` du harnais — un écart constant révèle la
+    // convention, un écart aléatoire révèle la normalisation. Coût : une commande, aucune session
+    // dédiée.
+    //
+    // Le repli est SÛR : (0, 0) = « aucun regard rapporté », et le consommateur retombe alors sur
+    // le yaw du corps, tête à l'horizontale (cf. `PositionUpdate` dans protocol.fbs). Un appel qui
+    // échoue dégrade donc vers le comportement actuel, jamais vers un regard faux.
+    //
+    // Deux lecteurs plutôt qu'un entier empaqueté : redscript n'a ni `<<` ni `|` (cf.
+    // `ReadLocomotionPacked`), et deux valeurs 16 bits ne tiennent pas dans un Int32 par
+    // multiplication sans déborder. La quantization reste côté C++, où `QuantYaw` vit déjà —
+    // un seul module porte les constantes du fil (quant.rs et son miroir).
+    private func LookForward() -> Vector4 {
+        let cam = GameInstance.GetCameraSystem(GetGameInstance());
+        if !IsDefined(cam) {
+            return new Vector4(0.0, 0.0, 0.0, 0.0);
+        }
+        return cam.GetActiveCameraForward();
+    }
+
+    /// Yaw du REGARD en degrés [0, 360). 0 si indisponible → le serveur retombe sur le yaw du corps.
+    public func ReadLookYaw() -> Float {
+        let f = this.LookForward();
+        // Plan horizontal uniquement : un regard vers le sol ne doit pas tordre le yaw.
+        if AbsF(f.X) < 0.0001 && AbsF(f.Y) < 0.0001 {
+            return 0.0;
+        }
+        // Même forme qu'`AtanF(droite, avant)` dans ReadLocomotionPacked — X = est, Y = nord.
+        let degrees = Rad2Deg(AtanF(f.X, f.Y));
+        if degrees < 0.0 {
+            degrees += 360.0;
+        }
+        return degrees;
+    }
+
+    /// Pitch du REGARD en degrés, POSITIF vers le haut. Indépendant de la convention de yaw : sur
+    /// un vecteur normalisé, Z est l'élévation quel que soit le sens des axes horizontaux.
+    public func ReadLookPitch() -> Float {
+        let f = this.LookForward();
+        let longueur = Vector4.Length(f);
+        if longueur < 0.0001 {
+            return 0.0;
+        }
+        return Rad2Deg(AsinF(ClampF(f.Z / longueur, -1.0, 1.0)));
+    }
+
     // Applique la météo décidée par le SERVEUR (`WorldState.weather`).
     //
     // ✅ MESURÉ le 2026-08-04 (F-MND-043, sonde `weather_probe`) : `SetWeather` existe et agit

@@ -154,6 +154,24 @@ static inline float DequantYaw(uint16_t q)
     return static_cast<float>(q) * (360.0f / 65536.0f);
 }
 
+// Pitch du REGARD : meme echelle que le yaw (65536 crans pour 360 deg) mais SIGNE, donc +-180 deg
+// exprimables la ou la camera du jeu ne depasse pas +-80 deg. On SATURE au lieu de replier : un
+// pitch qui wrappe retourne la tete a l'envers, un pitch sature la laisse au maximum plausible.
+//
+// Mesure cote serveur (quant.rs, 2026-08-15) : `QuantYaw(x) as int16_t` donne EXACTEMENT le meme
+// motif binaire que ceci pour |x| <= 180, par le complement a deux. La fonction separee existe donc
+// pour la SATURATION (hors plage) et pour la lisibilite du site d'appel, pas pour l'arithmetique.
+static inline int16_t QuantPitch(float degrees)
+{
+    if (std::isnan(degrees))
+    {
+        return 0;
+    }
+    const float clamped = degrees < -180.0f ? -180.0f : (degrees > 180.0f ? 180.0f : degrees);
+    const long q = std::lround(clamped * (65536.0f / 360.0f));
+    return static_cast<int16_t>(q < -32768 ? -32768 : (q > 32767 ? 32767 : q));
+}
+
 // --- Détection « modset non compilé » (incident playtest 2026-07-20, cf. NetworkGameSystem.h) ---
 // Nombre d'échecs de spawn avant d'alerter le joueur. Le débit dépend du nombre de joueurs visibles
 // et de la cadence des snapshots (20 Hz) : un seul joueur en vue produit déjà ~20 échecs/s. 40
@@ -945,15 +963,37 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
     const auto locomotion = locomotionForcee >= 0
                                 ? static_cast<uint8_t>(locomotionForcee)
                                 : static_cast<uint8_t>(packedLocomotion & 0xFF);
-    // La pose EXACTE qui part sur le fil, horodatée sur l'horloge murale — c'est la moitié
-    // « émission » de la mesure de latence bout-en-bout (voir Telemetrie.h).
-    g_telemetrie.Emission(x, y, z, yaw, locomotion);
     const auto moveDir = static_cast<uint8_t>((packedLocomotion >> 8) & 0xFF);
+
+    // Le REGARD (spec 2026-08-15 §5.1) — `lookState.lookDir` de gameMuppetState. Lu en redscript
+    // pour la meme raison que la locomotion : l'API camera y est accessible et la conversion
+    // vecteur->angles y vit deja (cf. `ReadLookYaw`/`ReadLookPitch`). La QUANTIZATION reste ici,
+    // parce qu'un seul module porte les constantes du fil (miroir de quant.rs).
+    //
+    // Un appel qui echoue laisse 0/0 — soit exactement « aucun regard rapporte », que le
+    // consommateur traduit par « regarde droit devant, tete a l'horizontale ». Degrader vers le
+    // comportement d'avant ce changement, jamais vers un regard faux.
+    float lookYawDeg = 0.0f;
+    float lookPitchDeg = 0.0f;
+    if (!Red::CallVirtual(this, "ReadLookYaw", lookYawDeg))
+    {
+        lookYawDeg = 0.0f;
+    }
+    if (!Red::CallVirtual(this, "ReadLookPitch", lookPitchDeg))
+    {
+        lookPitchDeg = 0.0f;
+    }
+
+    // La pose EXACTE qui part sur le fil, horodatée sur l'horloge murale — c'est la moitié
+    // « émission » de la mesure de latence bout-en-bout (voir Telemetrie.h). Journalisée APRÈS la
+    // lecture du regard, pour que `yaw` et `lyaw` de la même ligne décrivent le même instant :
+    // c'est leur COMPARAISON qui tranche la convention d'axes non mesurée.
+    g_telemetrie.Emission(x, y, z, yaw, locomotion, lookYawDeg, lookPitchDeg);
 
     const cyberpunk_rp::protocol::QVec3 pos(QuantPos(x), QuantPos(y), QuantPos(z));
     const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
         builder, &pos, QuantYaw(yaw), locomotion, moveDir, /*flags=*/0,
-        /*frame=*/0, /*slot=*/0);
+        /*frame=*/0, /*slot=*/0, QuantYaw(lookYawDeg), QuantPitch(lookPitchDeg));
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_PositionUpdate, pu.Union());
     builder.Finish(env);
@@ -4027,7 +4067,48 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const float ey = positionVoulue.Y - placeActuelle.Y;
         const float ez = positionVoulue.Z - placeActuelle.Z;
         const float deriveImmobile = std::sqrt(ex * ex + ey * ey + ez * ez);
-        if (deriveImmobile > kBandeMorteImmobileM)
+
+        // ── UN AVATAR IMMOBILE QUI PIVOTE NE TOURNAIT JAMAIS (corrigé le 2026-08-15) ───────
+        //
+        // La bande morte ci-dessus est juste, et elle reste. Le défaut était ailleurs : `pose.yaw`
+        // n'était appliqué qu'en **effet de bord** d'une correction de POSITION. Un joueur qui
+        // pivote sur place ne franchit donc jamais les 5 cm — et son avatar ne tourne **jamais**
+        // chez les autres. Il reste planté dans la direction qu'il avait en s'arrêtant.
+        //
+        // C'est le défaut le plus visible qui soit en RP, parce que c'est le cas NOMINAL : deux
+        // joueurs debout qui se parlent. L'un se tourne vers un troisième, et personne ne le voit.
+        //
+        // Trouvé le 2026-08-15 par une passe adversariale sur la spec du regard des avatars — qui
+        // s'apprêtait à répliquer une direction de REGARD par-dessus un corps qui, lui, ne tournait
+        // pas. Répliquer plus finement un signal qu'on n'applique pas est un travail perdu.
+        //
+        // LE CORRECTIF : la bande morte devient bidimensionnelle. On replace si la position OU
+        // l'orientation a dérivé. L'orientation courante se lit sur l'entité, exactement comme la
+        // position juste au-dessus — donc aucun état à mémoriser, et le test se corrige tout seul si
+        // quelque chose d'autre tourne l'avatar.
+        //
+        // ⚠️ `EcartAngulaire` et pas une soustraction. Sans lui, un avatar qui passe par le nord
+        // verrait un écart de 358° au lieu de 2° et se ferait replacer à chaque frame. Le helper
+        // existe déjà (`PlayerSync/TamponInterpolation.h`) et documente précisément ce piège.
+        //
+        // 2° : choisi pour produire, à distance de conversation (~2 m), le MÊME déplacement
+        // perceptible que la bande morte linéaire — 2 × tan(2°) ≈ 7 cm à l'épaule, contre 5 cm. Les
+        // deux seuils disent donc la même chose dans deux unités, au lieu d'être réglés séparément.
+        //
+        // ⚠️ CE QUE ÇA COÛTE, ET POURQUOI CE N'EST PAS LE DÉFAUT DU 2026-08-06. Le pire cas reste
+        // **un appel par avatar et par frame** — exactement le pire cas d'aujourd'hui, qu'un avatar
+        // oscillant autour de 5 cm atteint déjà. On ajoute une RAISON d'y être, pas un plafond plus
+        // haut. Et le chemin employé est `PlacerSansCommande`, c'est-à-dire un `Teleport` seul :
+        // **aucune commande d'IA n'est empilée**. L'effondrement des ~3 120 commandes/s venait de
+        // `SetEntityPosition`, qui n'est pas appelé ici.
+        static constexpr float kBandeMorteYawDeg = 2.0f;
+        const auto orientationActuelle =
+            Cyberverse::Utils::Entity_GetWorldOrientation(entite.value());
+        const float yawActuel =
+            Cyberverse::Utils::Quaternion_ToEulerAngles(orientationActuelle).Yaw;
+        const float deriveYaw = std::fabs(Tessera::Sync::EcartAngulaire(yawActuel, pose.yaw));
+
+        if (deriveImmobile > kBandeMorteImmobileM || deriveYaw > kBandeMorteYawDeg)
         {
             PlacerSansCommande(entityId, positionVoulue, pose.yaw);
         }
