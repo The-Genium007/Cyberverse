@@ -691,6 +691,13 @@ std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 bool g_suspendreCommandes = false;
 bool g_suspendreCorrections = false;
+bool g_pilotageParEntrees = false;
+
+bool NetworkGameSystem::Tessera_PilotageParEntrees(bool actif)
+{
+    g_pilotageParEntrees = actif;
+    return g_pilotageParEntrees;
+}
 
 bool NetworkGameSystem::Tessera_SuspendreCorrections(bool actif)
 {
@@ -4686,7 +4693,28 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         return; // il est deja en route, dans la bonne direction : on le laisse marcher.
     }
 
-    const RED4ext::Vector4 visee = { cx, cy, cz, 1.0f };
+    RED4ext::Vector4 visee = { cx, cy, cz, 1.0f };
+
+    // ── PILOTAGE PAR LES ENTREES (ADR 0032) ────────────────────────────────────────────────
+    //
+    // La destination ne vient plus de la position INTERPOLEE du serveur, mais du couple
+    // (`yaw`, `move_dir`) applique a la position ou l'avatar se trouve DEJA. `move_dir` est la
+    // direction du deplacement RELATIVE au regard, sur 256 crans (protocol.fbs) — c'est donc
+    // exactement une entree de joueur, et elle voyage depuis le gel du palier 2 sans avoir jamais
+    // ete consommee ici.
+    //
+    // `move_dir == 0` signifie IMMOBILE (et non « droit devant ») : dans ce cas on ne vise rien de
+    // neuf, la branche « locomotion == 0 » plus haut a deja fige l'avatar.
+    if (g_pilotageParEntrees && pose.moveDir != 0)
+    {
+        const auto ici = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+        const float capMonde = pose.yaw + static_cast<float>(pose.moveDir) * (360.0f / 256.0f);
+        const float rad = capMonde * 3.14159265f / 180.0f;
+        // 6 m : assez loin pour que l'allure s'exprime (mesure du 2026-07-23 : `movementType` ne
+        // montre son effet qu'avec de la distance a couvrir), assez court pour que la direction
+        // reste fraiche entre deux snapshots.
+        visee = { ici.X + std::sin(rad) * 6.0f, ici.Y + std::cos(rad) * 6.0f, ici.Z, 1.0f };
+    }
     bool enRoute = false;
     // `pose.yaw` en quatrieme argument : la direction du REGARD, distincte de celle du
     // deplacement. C'est ce qui donne la marche arriere et le pas de cote — voir

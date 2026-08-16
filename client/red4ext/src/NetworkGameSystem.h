@@ -204,6 +204,24 @@ extern bool g_suspendreCommandes;
 /// les melanger produirait un avatar immobile dans les deux cas — donc un resultat ininterpretable.
 extern bool g_suspendreCorrections;
 
+/// PILOTAGE PAR LES ENTREES (ADR 0032, prototype minimal).
+///
+/// Quand ce drapeau est pose, la destination de la commande de marche n'est plus derivee de la
+/// position INTERPOLEE recue du serveur, mais du couple (`yaw`, `move_dir`) — c'est-a-dire des
+/// ENTREES du joueur distant, relativement a la position ou l'avatar se trouve DEJA.
+///
+/// C'est le prototype que l'ADR 0032 reclame, et il est bon marche parce que le canal existe deja :
+/// `locomotion` et `move_dir` voyagent depuis le gel du palier 2 et n'etaient presque pas lus.
+///
+/// ⚠️ A COMBINER AVEC `g_suspendreCorrections`. Sinon la correction ramene l'avatar sur la position
+/// autoritaire et masque tout : on mesurerait le correcteur, comme trois fois le 2026-08-16.
+///
+/// LA MESURE TOMBE ALORS TOUTE SEULE : l'ecart entre l'avatar pilote par les entrees et la position
+/// autoritaire (que le serveur continue d'envoyer sans qu'on l'applique) EST le determinisme. Un
+/// seul observateur suffit — le protocole a trois instances etait inutilement lourd, et il produisait
+/// un zero parfait parce que les deux observateurs lisaient le meme fil.
+extern bool g_pilotageParEntrees;
+
 /// Pose voulue par le serveur pour une entite qui n'etait PAS ENCORE RESOLVABLE quand elle est
 /// arrivee — a rejouer des que `GetDynamicEntity` repond enfin.
 ///
@@ -1148,6 +1166,9 @@ public:
     /// la mesure de determinisme (ADR 0032). Inverse de `Tessera_SuspendreCommandes`.
     bool Tessera_SuspendreCorrections(bool actif);
 
+    /// Bascule le pilotage par les ENTREES (ADR 0032). Voir `g_pilotageParEntrees`.
+    bool Tessera_PilotageParEntrees(bool actif);
+
     int32_t Tessera_CompteAvatarsJoueurs() const
     {
         int32_t n = 0;
@@ -1383,6 +1404,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     // ⚠️ Ces deux-là comptent des JOUEURS, contrairement aux deux ci-dessus (F-PLY-047).
     RTTI_METHOD(Tessera_SuspendreCommandes);
     RTTI_METHOD(Tessera_SuspendreCorrections);
+    RTTI_METHOD(Tessera_PilotageParEntrees);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);
     RTTI_METHOD(Tessera_AvatarJoueurParIndex);
     RTTI_METHOD(Tessera_SacRecu);
