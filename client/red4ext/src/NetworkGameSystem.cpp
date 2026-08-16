@@ -689,6 +689,13 @@ StatsRoster g_statsRoster;
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
+bool g_suspendreCommandes = false;
+
+bool NetworkGameSystem::Tessera_SuspendreCommandes(bool actif)
+{
+    g_suspendreCommandes = actif;
+    return g_suspendreCommandes;
+}
 /// Ecart entre la position DEMANDEE au dernier placement et celle relue dans la MEME
 /// frame. Non nul = notre placement n'a pas pris (F-PLY-066, candidat 2).
 static float g_ecartApresPose = -1.0f;
@@ -1727,6 +1734,10 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             pose.z = positionMonde.Z;
             pose.yaw = DequantYaw(ps->yaw());
             pose.locomotion = ps->locomotion();
+            // Le REGARD (spec 2026-08-15 §5.1). Defaut (0,0) = non rapporte par ce client :
+            // le consommateur retombe alors sur le yaw du corps.
+            pose.lookYaw = DequantYaw(ps->look_yaw());
+            pose.lookPitch = static_cast<float>(ps->look_pitch()) * (360.0f / 65536.0f);
             // `move_dir` voyage depuis le gel du palier 2 et n'etait lu nulle part : un joueur qui
             // marche en crabe ou a reculons etait rendu de face. On le RANGE des maintenant ; ce
             // qu'on saura en faire depend du backlog Q7.
@@ -4543,7 +4554,26 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // (`pose` 1,34 -> 1,64 m, inchange). L'hypothese « le systeme de mouvement ecrase
         // notre Teleport tant qu'une commande tourne » est donc REFUTEE — et figer a chaque
         // correction hacherait l'animation pour un gain nul. Voir F-PLY-068.
-        PlacerSansCommande(entityId, pas, pose.yaw);
+        // ── LE SEUL CHEMIN DE PLACEMENT DONT ON AIT LA PREUVE QU'IL APPLIQUE ──────────────
+        //
+        // `PlacerSansCommande` (TeleportationFacility::Teleport) n'applique RIEN sur nos avatars :
+        // prouve sur 3048 echantillons (F-PLY-070), et le cast de handle n'y a rien change
+        // (F-PLY-071, refute en regime etabli sur 956 echantillons). `SetEntityPosition`, lui,
+        // passe par un `AITeleportCommand` — mecanisme different, employe par le recalage franc
+        // au-dela de 15 m, et qui fonctionne.
+        //
+        // ⚠️ C'EST PRECISEMENT CE QU'ON AVAIT RETIRE, ET IL FAUT SAVOIR POURQUOI. Ce chemin
+        // empile une commande dans la file de l'IA. Appele A CHAQUE FRAME sur chaque avatar (ce que
+        // faisait la branche « immobile »), il a produit l'effondrement des ~3120 commandes/s du
+        // 2026-08-06. Ici c'est different sur deux points, mesures : il ne se declenche qu'au-dela
+        // de 25 cm de derive, et la cadence reelle des corrections est de 25 a 68 ms — soit 15 a
+        // 40 appels/s par avatar, pas 60.
+        //
+        // ⚠️ NON MESURE, et c'est la borne a garder en tete : le cout a 200 voisins. 40 appels/s
+        // x 200 = 8000 commandes/s, ce qui est DANS la zone qui a fait tomber le jeu. Une commande
+        // de teleport n'est pas une commande de marche et rien ne dit qu'elle coute pareil — mais
+        // tant que ce n'est pas mesure, ce chemin n'est valide qu'a faible densite.
+        SetEntityPosition(entityId, pas, pose.yaw);
         { auto& s = g_suiviAvatars[networkId];
           s.placeX = pas.X; s.placeY = pas.Y; s.depuisPlaceS = 0.0f; s.placeZ = pas.Z; s.placeValide = true;
           const auto relupas = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
@@ -4653,6 +4683,28 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // `pose.yaw` en quatrieme argument : la direction du REGARD, distincte de celle du
     // deplacement. C'est ce qui donne la marche arriere et le pas de cote — voir
     // `TesseraSuivreAvatar` cote redscript.
+    // ── LE REGARD, POUSSE A CHAQUE PASSAGE ────────────────────────────────────────────────
+    //
+    // Le seuil de re-pose (8 deg) vit cote redscript, la ou l'etat precedent est memorise : on
+    // appelle donc sans condition et c'est le consommateur qui decide s'il y a lieu d'agir.
+    // Cout d'un appel qui ne fait rien : une comparaison d'angles.
+    //
+    // Pose AVANT la garde de suspension : le regard n'a rien a voir avec la commande de marche, et
+    // suspendre l'une ne doit pas eteindre l'autre — sinon un test de placement rendrait aussi les
+    // avatars aveugles, et on melangerait deux effets.
+    if (pose.lookYaw != 0.0f || pose.lookPitch != 0.0f)
+    {
+        bool poseOk = false;
+        Red::CallVirtual(this, "TesseraPousserRegard", poseOk, entityId, pose.lookYaw,
+                         pose.lookPitch);
+    }
+
+    // ⚠️ Suspension de mesure (voir `g_suspendreCommandes`) : on n'emet plus la commande de
+    // marche, pour qu'un test de placement ne soit pas defait par notre propre boucle.
+    if (g_suspendreCommandes)
+    {
+        return;
+    }
     if (Red::CallVirtual(this, "TesseraSuivreAvatar", enRoute, entityId, visee,
                          static_cast<int32_t>(pose.locomotion), pose.yaw)
         && enRoute)

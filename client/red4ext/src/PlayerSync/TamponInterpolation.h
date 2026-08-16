@@ -124,6 +124,10 @@ struct Pose
     float yaw = 0.0f; // degrés
     std::uint8_t locomotion = 0;
     std::uint8_t moveDir = 0;
+    /// Le REGARD, en degres — distinct de `yaw`, qui est l'orientation du CORPS.
+    /// C'est `lookState.lookDir` de gameMuppetState (spec 2026-08-15). (0,0) = non rapporte.
+    float lookYaw = 0.0f;
+    float lookPitch = 0.0f;
 };
 
 /// Ce que le tampon rend pour un instant donné.
@@ -133,6 +137,11 @@ struct PoseRendue
     float y = 0.0f;
     float z = 0.0f;
     float yaw = 0.0f;
+    /// Le REGARD, transporte jusqu'a la boucle de rendu. Interpole comme le yaw : c'est un angle
+    /// continu, et un regard qui saute d'un snapshot a l'autre se verrait autant qu'un corps qui
+    /// saute. Non interpole = pas la peine de le repliquer finement.
+    float lookYaw = 0.0f;
+    float lookPitch = 0.0f;
     /// Vitesse monde en m/s, dérivée de deux échantillons consécutifs. C'est elle qui
     /// donne gratuitement l'extrapolation bornée ET le point de visée devant l'avatar —
     /// l'équivalent joueur de `NpcState.move_target`, sans nouveau champ de protocole
@@ -501,6 +510,8 @@ private:
         r.y = p.y;
         r.z = p.z;
         r.yaw = NormaliserDegres(p.yaw);
+        r.lookYaw = NormaliserDegres(p.lookYaw);
+        r.lookPitch = p.lookPitch;
         r.locomotion = p.locomotion;
         r.moveDir = p.moveDir;
         return r;
@@ -516,6 +527,10 @@ private:
         r.y = a.pose.y + (b.pose.y - a.pose.y) * t;
         r.z = a.pose.z + (b.pose.z - a.pose.z) * t;
         r.yaw = LerpAngle(a.pose.yaw, b.pose.yaw, t);
+        // Le regard s'interpole comme le corps : c'est un angle continu, et un regard qui saute
+        // d'un snapshot a l'autre se verrait autant qu'un corps qui saute.
+        r.lookYaw = LerpAngle(a.pose.lookYaw, b.pose.lookYaw, t);
+        r.lookPitch = a.pose.lookPitch + (b.pose.lookPitch - a.pose.lookPitch) * t;
         r.locomotion = a.pose.locomotion;
         r.moveDir = a.pose.moveDir;
         PoserVitesse(r, a, b, duree);

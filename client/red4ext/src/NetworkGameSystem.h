@@ -182,6 +182,16 @@ struct SuiviAvatar
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 
+/// SUSPEND la reemission de la commande de marche sur les avatars distants.
+///
+/// ⚠️ EXISTE POUR RENDRE LES MESURES INTERPRETABLES, pas pour la production. Trois tests du
+/// 2026-08-16 ont ete invalides par le meme confondeur : on mesure le placement pendant que notre
+/// propre boucle de rendu reemet la commande de marche toutes les ~25 ms. Annuler la commande
+/// depuis Lua ne sert a rien — elle revient avant que le placement n'arrive.
+///
+/// Bascule par la sonde `suspendre` du harnais. Par defaut faux : aucun effet en jeu normal.
+extern bool g_suspendreCommandes;
+
 /// Pose voulue par le serveur pour une entite qui n'etait PAS ENCORE RESOLVABLE quand elle est
 /// arrivee — a rejouer des que `GetDynamicEntity` repond enfin.
 ///
@@ -1116,6 +1126,12 @@ public:
     // ⚠️ Même avertissement que ci-dessus : l'index n'est PAS un identifiant. `g_tamponsJoueurs`
     // est un `std::map` dont l'ordre change quand un joueur entre ou sort de portée. Énumérer dans
     // la foulée, mémoriser l'`EntityID`, jamais l'index.
+    /// Suspend/reprend la reemission de la commande de marche sur les avatars distants.
+    /// Outil de MESURE (voir `g_suspendreCommandes`), jamais un mecanisme de production : sans lui
+    /// aucun test de placement n'est interpretable, notre boucle reemettant l'ordre toutes les
+    /// ~25 ms — trois tests du 2026-08-16 en sont morts.
+    bool Tessera_SuspendreCommandes(bool actif);
+
     int32_t Tessera_CompteAvatarsJoueurs() const
     {
         int32_t n = 0;
@@ -1349,6 +1365,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_EnvoyerAction);
     RTTI_METHOD(Tessera_AvatarParIndex);
     // ⚠️ Ces deux-là comptent des JOUEURS, contrairement aux deux ci-dessus (F-PLY-047).
+    RTTI_METHOD(Tessera_SuspendreCommandes);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);
     RTTI_METHOD(Tessera_AvatarJoueurParIndex);
     RTTI_METHOD(Tessera_SacRecu);

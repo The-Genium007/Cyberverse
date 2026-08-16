@@ -492,6 +492,118 @@ public native class NetworkGameSystem extends IGameSystem {
         return Rad2Deg(AsinF(ClampF(f.Z / longueur, -1.0, 1.0)));
     }
 
+// ── LE REGARD D'UN AVATAR DISTANT ────────────────────────────────────────────────────────
+    //
+    // `lookDir` de `gameMuppetState` traverse le fil depuis le 2026-08-16 ; il n'avait pas de
+    // consommateur. Le voici.
+    //
+    // POURQUOI CETTE VOIE ET PAS UNE AUTRE. `AIActionLookat` est le chemin que le moteur emploie
+    // LUI-MEME pour les PNJ du solo (F-PLY-057) : on ne dispute pas le pantin, on lui parle dans sa
+    // langue. C'est la seule piece du chantier qui n'ait jamais eu besoin qu'on neutralise quoi que
+    // ce soit.
+    //
+    // La recette est celle du jeu VIVANT — `ActivateReactionLookAt` (`reactionComponent.script:4648`)
+    // — et non celle du code CPO orphelin : `bodyPart = 'Eyes'`, part `Head` poids 0.1, part `Chest`
+    // poids 2.0, limites en dur, AUCUN record TweakDB. C'est ce qui rend la question « les records
+    // LookatPreset existent-ils encore ? » sans objet (addendum F-PLY-057, correction 2).
+    //
+    // ⚠️ CIBLE STATIQUE, ET RE-POSEE SUR CHANGEMENT SEULEMENT. Aucun fournisseur de position
+    // scriptable n'existe (`IPositionProvider` est `importonly`, correction 3) : pour une cible
+    // mobile il faut retirer puis re-poser. A 25 Hz la tete resterait perpetuellement en transition
+    // — d'ou le seuil de 8 degres, qui ne re-pose que sur un mouvement de regard reel.
+    //
+    // ⚠️ PRIORITE POSEE EXPLICITEMENT (correction 4). Personne ne la pose dans tout le jeu, et un
+    // pantin de foule porte un `reactionComponent` que le client LOCAL stimule : deux LookAt
+    // concurrents a priorite egale seraient arbitres par du C++ illisible, et l'avatar pourrait
+    // fixer le joueur local sur decision locale — un regard que le joueur distant n'a jamais eu.
+    // Tableaux paralleles : redscript n'a pas de table associative. Indexes par le hash de
+    // l'EntityID, quelques dizaines d'entrees au plus.
+    private let m_regardCles: array<Uint32>;
+    private let m_regardYaw: array<Float>;
+    private let m_regardPitch: array<Float>;
+    private let m_regardEvent: array<ref<LookAtAddEvent>>;
+
+    public func TesseraPousserRegard(entityId: EntityID, lookYaw: Float, lookPitch: Float) -> Bool {
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let puppet = ent as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+
+        // (0,0) = aucun regard rapporte (client anterieur au champ) : on ne pose rien, l'avatar
+        // garde son comportement d'avant. Degrader vers l'existant, jamais vers un regard faux.
+        if AbsF(lookYaw) < 0.001 && AbsF(lookPitch) < 0.001 {
+            return false;
+        }
+
+        let cle = EntityID.GetHash(entityId);
+        let i = 0;
+        let trouve = -1;
+        while i < ArraySize(this.m_regardCles) {
+            if Equals(this.m_regardCles[i], cle) { trouve = i; }
+            i += 1;
+        }
+        if trouve >= 0 {
+            if AbsF(this.EcartAngulaireDeg(this.m_regardYaw[trouve], lookYaw)) < 8.0
+               && AbsF(this.m_regardPitch[trouve] - lookPitch) < 8.0 {
+                return true;   // rien n'a bouge : on laisse la tete finir sa transition
+            }
+            if IsDefined(this.m_regardEvent[trouve]) {
+                LookAtRemoveEvent.QueueRemoveLookatEvent(puppet, this.m_regardEvent[trouve]);
+            }
+        }
+
+        // Le point vise : 12 m devant, dans la direction du regard. Assez loin pour que l'angle
+        // domine la distance, assez pres pour rester dans le monde charge.
+        let origine = puppet.GetWorldPosition();
+        let cosP = CosF(Deg2Rad(lookPitch));
+        let cible = new Vector4(
+            origine.X + SinF(Deg2Rad(lookYaw)) * 12.0 * cosP,
+            origine.Y + CosF(Deg2Rad(lookYaw)) * 12.0 * cosP,
+            origine.Z + 1.6 + SinF(Deg2Rad(lookPitch)) * 12.0,   // +1.6 : hauteur des yeux
+            1.0);
+
+        let ev = new LookAtAddEvent();
+        ev.SetStaticTarget(cible);
+        ev.SetStyle(animLookAtStyle.Normal);
+        ev.request.limits.softLimitDegrees = 360.0;
+        ev.request.limits.hardLimitDegrees = 270.0;
+        ev.request.limits.backLimitDegrees = 210.0;
+        ev.request.calculatePositionInParentSpace = false;   // cible en espace MONDE
+        ev.request.priority = 100;                            // au-dessus des reactions locales
+        ev.bodyPart = n"Eyes";
+
+        let parts: array<LookAtPartRequest>;
+        let tete: LookAtPartRequest;
+        tete.partName = n"Head";  tete.weight = 0.1;  tete.suppress = 1.0;  tete.mode = 0;
+        ArrayPush(parts, tete);
+        let buste: LookAtPartRequest;
+        buste.partName = n"Chest"; buste.weight = 2.0; buste.suppress = 0.0; buste.mode = 0;
+        ArrayPush(parts, buste);
+        ev.SetAdditionalPartsArray(parts);
+
+        puppet.QueueEvent(ev);
+
+        if trouve >= 0 {
+            this.m_regardYaw[trouve] = lookYaw;
+            this.m_regardPitch[trouve] = lookPitch;
+            this.m_regardEvent[trouve] = ev;
+        } else {
+            ArrayPush(this.m_regardCles, cle);
+            ArrayPush(this.m_regardYaw, lookYaw);
+            ArrayPush(this.m_regardPitch, lookPitch);
+            ArrayPush(this.m_regardEvent, ev);
+        }
+        return true;
+    }
+
+    private func EcartAngulaireDeg(de: Float, vers: Float) -> Float {
+        let d = (vers - de) % 360.0;
+        if d > 180.0 { d -= 360.0; }
+        if d < -180.0 { d += 360.0; }
+        return d;
+    }
+
     // Applique la météo décidée par le SERVEUR (`WorldState.weather`).
     //
     // ✅ MESURÉ le 2026-08-04 (F-MND-043, sonde `weather_probe`) : `SetWeather` existe et agit
