@@ -4753,8 +4753,30 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     if (g_pilotageParEntrees)
     {
         const auto ici = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
-        const float capMonde = pose.yaw + static_cast<float>(pose.moveDir) * (360.0f / 256.0f);
-        const float rad = capMonde * 3.14159265f / 180.0f;
+
+        // ── LE SIGNE DU YAW, ET C'EST TOUT LE BUG ──────────────────────────────────────────
+        //
+        // `pose.yaw` est le yaw d'EULER du moteur : il tourne dans le sens TRIGONOMETRIQUE, donc
+        // l'avant vaut `(-sin(yaw), cos(yaw))` et non `(+sin(yaw), cos(yaw))`. La premiere version
+        // de ce calcul prenait `+sin` : elle visait le point SYMETRIQUE par rapport a l'axe nord.
+        // L'ordre partait, il etait accepte, le corps marchait — dans une direction miroir qui
+        // changeait avec le regard du joueur. D'ou 903 commandes acceptees pour 5,3 m parcourus,
+        // un symptome qui ressemblait a s'y meprendre a une cadence trop rapide.
+        //
+        // MESURE (2026-08-17, telemetrie deja au disque, sans relancer le jeu) : cap boussole reel
+        // du deplacement compare au cap predit, sur 1298 pas de marche —
+        //   ecart median  +sin : 154,4 deg      -sin : 0,2 deg
+        // Et le signe de `move_dir`, sur 214 echantillons de strafe/recul (|move_dir| > 25 deg) :
+        //   `-yaw + move_dir` : 0,6 deg   ·   `-yaw - move_dir` : 90,6   ·   sans : 45,6
+        //
+        // Le meme resultat se lit sur la premiere ligne de n'importe quel journal : `yaw` et
+        // `lyaw` (le cap boussole de la camera, `atan2(f.X, f.Y)`) somment a 360,0 exactement.
+        // Et `PointDeRegard` cote redscript, ecrit bien avant, fait deja
+        // `RotByAngleXY((0,1,0), yaw)` — c'est-a-dire exactement `(-sin, cos)`. Trois sources
+        // concordantes, dont deux anterieures : c'etait ce calcul-ci qui etait seul de son cote.
+        const float capBoussole =
+            -pose.yaw + static_cast<float>(pose.moveDir) * (360.0f / 256.0f);
+        const float rad = capBoussole * 3.14159265f / 180.0f;
         // 6 m : assez loin pour que l'allure s'exprime (mesure du 2026-07-23 : `movementType` ne
         // montre son effet qu'avec de la distance a couvrir), assez court pour que la direction
         // reste fraiche entre deux snapshots.
