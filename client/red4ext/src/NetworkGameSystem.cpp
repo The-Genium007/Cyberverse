@@ -4469,7 +4469,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         g_telemetrie.Rendu(networkId, position.X, position.Y, position.Z, pose.locomotion, derive,
                            tampon != g_tamponsJoueurs.end() ? tampon->second.Nombre() : 0u,
                            pose.extrapolee, g_horlogeRendu.DelaiCourant(), g_horlogeRendu.Gigue(),
-                           recalageFranc, libre, depuisPlace, ecartPose, pose.moveDir);
+                           recalageFranc, libre, depuisPlace, ecartPose, pose.moveDir,
+                           g_suiviAvatars[networkId].commandesEmises,
+                           g_suiviAvatars[networkId].dernierRetourCommande);
     }
 
     // ⚠️ LA VERTICALE APPARTIENT AU MOTEUR, PAS À NOUS.
@@ -4750,13 +4752,33 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // fait plus haut dans cette fonction.
     if (g_pilotageParEntrees)
     {
+        auto& se = g_suiviAvatars[networkId];
+
+        // ── LA CIBLE EST PERSISTANTE, ET C'EST LE POINT ────────────────────────────────────
+        //
+        // Recalculee a chaque passage, elle se rapprochait de l'avatar a mesure qu'il avancait :
+        // l'ordre repartait de zero 7,5 fois par seconde et le pas ne s'engageait jamais. C'est la
+        // pathologie deja mesuree sur les PNJ le 2026-08-06 et decrite dans `protocol.fbs` — « il
+        // recoit l'ordre d'avancer de cinq centimetres, l'atteint, et la commande suivante arrive
+        // avant qu'une marche ait pu s'amorcer : il fremit sur place ». Mesure du 2026-08-16 :
+        // 903 commandes acceptees en 120 s pour 5,3 m parcourus.
+        //
+        // On ne la renouvelle donc que sur un CHANGEMENT D'ENTREE — le meme evenement qui autorise
+        // la reemission — et on vise 25 m au lieu de 6 : assez loin pour que la marche ait le temps
+        // de s'etablir, et de toute facon remplacee des que le joueur tourne.
         const auto ici = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
         const float capMonde = pose.yaw + static_cast<float>(pose.moveDir) * (360.0f / 256.0f);
         const float rad = capMonde * 3.14159265f / 180.0f;
         // 6 m : assez loin pour que l'allure s'exprime (mesure du 2026-07-23 : `movementType` ne
         // montre son effet qu'avec de la distance a couvrir), assez court pour que la direction
         // reste fraiche entre deux snapshots.
-        visee = { ici.X + std::sin(rad) * 6.0f, ici.Y + std::cos(rad) * 6.0f, ici.Z, 1.0f };
+        if (entreeAChange || !se.cibleEntreeValide)
+        {
+            se.cibleEntreeX = ici.X + std::sin(rad) * 25.0f;
+            se.cibleEntreeY = ici.Y + std::cos(rad) * 25.0f;
+            se.cibleEntreeValide = true;
+        }
+        visee = { se.cibleEntreeX, se.cibleEntreeY, ici.Z, 1.0f };
     }
     bool enRoute = false;
     // `pose.yaw` en quatrieme argument : la direction du REGARD, distincte de celle du
@@ -4784,9 +4806,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     {
         return;
     }
+    ++suivi.commandesEmises;
     if (Red::CallVirtual(this, "TesseraSuivreAvatar", enRoute, entityId, visee,
                          static_cast<int32_t>(pose.locomotion), pose.yaw)
-        && enRoute)
+        && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
     {
         // ── L'INSTRUMENT ───────────────────────────────────────────────────────────────────
         //

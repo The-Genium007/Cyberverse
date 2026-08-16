@@ -252,7 +252,7 @@ public:
                   float lookPitch, std::uint8_t moveDir = 0) noexcept
     {
         Ecrire("{\"t\":%lld,\"ts\":%lld,\"k\":\"tx\",\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
-               "\"yaw\":%.1f,\"loco\":%u,\"lyaw\":%.1f,\"lpitch\":%.1f,\"mdir\":%u}\n",
+               "\"yaw\":%.1f,\"loco\":%u,\"lyaw\":%.1f,\"lpitch\":%.1f,\"mdir\":%u,\"cmds\":%u,\"ret\":%d}\n",
                static_cast<long long>(Maintenant()), static_cast<long long>(TempsServeur()), x, y,
                z, yaw, static_cast<unsigned>(locomotion), lookYaw, lookPitch,
                static_cast<unsigned>(moveDir));
@@ -272,15 +272,15 @@ public:
     void Rendu(std::uint64_t id, float x, float y, float z, std::uint8_t locomotion, float derive,
                std::size_t echantillons, bool extrapole, double delai, double gigue,
                bool recalage, float libre = -1.0f, float depuisPlace = -1.0f, float ecartPose = -1.0f,
-               std::uint8_t moveDir = 0) noexcept
+               std::uint8_t moveDir = 0, std::uint32_t cmds = 0, int retCmd = -1) noexcept
     {
         Ecrire("{\"t\":%lld,\"ts\":%lld,\"k\":\"rx\",\"id\":%llu,\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
                "\"loco\":%u,\"derive\":%.3f,\"ech\":%zu,\"ext\":%d,\"delai\":%.4f,\"gigue\":%.4f,"
-               "\"recal\":%d,\"libre\":%.3f,\"dtcorr\":%.4f,\"pose\":%.4f,\"mdir\":%u}\n",
+               "\"recal\":%d,\"libre\":%.3f,\"dtcorr\":%.4f,\"pose\":%.4f,\"mdir\":%u,\"cmds\":%u,\"ret\":%d}\n",
                static_cast<long long>(Maintenant()), static_cast<long long>(TempsServeur()),
                static_cast<unsigned long long>(id), x, y, z,
                static_cast<unsigned>(locomotion), derive, echantillons, extrapole ? 1 : 0, delai,
-               gigue, recalage ? 1 : 0, libre, depuisPlace, ecartPose, static_cast<unsigned>(moveDir));
+               gigue, recalage ? 1 : 0, libre, depuisPlace, ecartPose, static_cast<unsigned>(moveDir), cmds, retCmd);
     }
 
     /// Faut-il écrire une ligne `rx` pour cette entité maintenant ?
