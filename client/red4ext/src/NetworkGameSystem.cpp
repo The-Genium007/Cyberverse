@@ -4688,7 +4688,36 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     const bool allureAChange = suivi.commande && suivi.derniereLocomotion != pose.locomotion;
     suivi.derniereLocomotion = pose.locomotion;
 
-    if (suivi.commande && !cibleABouge && !allureAChange && suivi.depuisS < kReemissionMaxS)
+    // ── EN PILOTAGE PAR ENTREES, C'EST L'ENTREE QUI DECIDE DE LA REEMISSION ────────────────
+    //
+    // La garde d'origine compare la CIBLE a la precedente. Elle est juste quand la cible vient de
+    // la position recue : celle-ci avance avec le joueur, donc la garde s'ouvre. Mais en pilotage
+    // par entrees la cible est calculee depuis la position COURANTE de l'avatar — tant qu'il
+    // n'avance pas, elle ne bouge pas, la garde se referme sur elle-meme et l'avatar ne recoit
+    // qu'UNE seule commande. Mesure du 2026-08-16 : 4,4 m parcourus en ligne droite, sinuosite 1,0,
+    // pour 88,8 m de marche reelle.
+    //
+    // On compare donc les ENTREES : un changement de direction (move_dir) ou de regard (yaw) est
+    // un evenement qui doit reemettre, meme si la cible calculee se ressemble.
+    bool entreeAChange = false;
+    if (g_pilotageParEntrees)
+    {
+        const int ecartDir = std::abs(static_cast<int>(pose.moveDir)
+                                      - static_cast<int>(suivi.derniereMoveDir));
+        // 8 crans sur 256 = ~11 degres. Sous ce seuil, c'est du bruit de quantization.
+        const bool dirAChange = std::min(ecartDir, 256 - ecartDir) > 8;
+        const bool yawAChange =
+            std::fabs(Tessera::Sync::EcartAngulaire(suivi.dernierYawEntree, pose.yaw)) > 10.0f;
+        entreeAChange = dirAChange || yawAChange;
+        if (entreeAChange || !suivi.commande)
+        {
+            suivi.derniereMoveDir = pose.moveDir;
+            suivi.dernierYawEntree = pose.yaw;
+        }
+    }
+
+    if (suivi.commande && !entreeAChange && !cibleABouge && !allureAChange
+        && suivi.depuisS < kReemissionMaxS)
     {
         return; // il est deja en route, dans la bonne direction : on le laisse marcher.
     }

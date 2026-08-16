@@ -155,6 +155,13 @@ struct SuiviAvatar
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai
     /// avant que ça se déclenche » signalé le 2026-08-13.
     std::uint8_t derniereLocomotion = 0;
+    /// Derniere ENTREE de direction commandee (pilotage par entrees, ADR 0032). La garde
+    /// d'anti-reemission doit porter sur le changement d'ENTREE, pas sur le deplacement de la
+    /// cible : celle-ci etant calculee depuis la position courante de l'avatar, elle ne bouge
+    /// presque pas tant qu'il n'avance pas — le garde se refermait sur lui-meme et l'avatar ne
+    /// recevait qu'UNE commande (mesure : 4,4 m en ligne droite pour 88,8 m de marche reelle).
+    std::uint8_t derniereMoveDir = 0;
+    float dernierYawEntree = 0.0f;
 
     /// ── OU ON A LAISSE L'AVATAR A LA FRAME PRECEDENTE ────────────────────────────────────────
     ///
