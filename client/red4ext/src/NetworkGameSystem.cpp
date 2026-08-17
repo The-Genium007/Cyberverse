@@ -50,6 +50,9 @@ int g_robotPhase = -1;
 // base ne se lie pas et echoue en SILENCE (lecon de `SystemeWorkspot`, mesuree le 2026-08-14).
 #include "RED4ext/Scripting/Natives/Generated/game/ui/ICharacterCustomizationState.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/ui/ICharacterCustomizationSystem.hpp"
+// La classe CONCRETE, telle que le releve en jeu la nomme (F-PLY-103) :
+// `gameuiCharacterCustomizationSystem`. Le handle se calque sur elle.
+#include "RED4ext/Scripting/Natives/Generated/game/ui/CharacterCustomizationSystem.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/mounting/IMountingFacility.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/mounting/MountingRequest.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/mounting/UnmountingRequest.hpp"
@@ -772,13 +775,50 @@ Red::CString NetworkGameSystem::Tessera_LireTableAlias()
         // et l'INSTANCIATION (releve refait avec le miroir de l'appartement OUVERT, meme echec).
         // Il ne restait que le type. D3 du CLAUDE.md — on consulte avant d'agir, y compris son propre
         // code.
-        Red::Handle<RED4ext::game::ui::ICharacterCustomizationSystem> systeme;
-        if (!Red::CallStatic("ScriptGameInstance", "GetCharacterCustomizationSystem", systeme)
-            || !systeme)
+        // ── TROIS VOIES, ET ON JOURNALISE LAQUELLE PASSE ────────────────────────────────────────
+        //
+        // Mesure du 2026-08-17 (F-PLY-103) : le Lua CET atteint ce systeme sans peine par
+        // `Game.GetCharacterCustomizationSystem()`, et `GetState()` y rend le VRAI V en session
+        // NORMALE, sans aucun menu ouvert. Ma route C++ etait donc seule en cause — et mon
+        // hypothese d'instanciation etait fausse (elle est refutee, pas confirmee).
+        //
+        // Le releve donne aussi la classe REELLE : `gameuiCharacterCustomizationSystem`, la
+        // **concrete**, alors que j'avais type l'interface.
+        //
+        // Deux inconnues restaient, et on ne les tranche pas en choisissant : `Game.X()` de CET mappe
+        // vers un GLOBAL, alors que le script declare une statique sur `GameInstance`
+        // (`core/systems/gameInstance.script:87`) que le RTTI expose sous `ScriptGameInstance`. On
+        // essaie donc les trois, et le releve NOMME la gagnante — au lieu d'un cycle de build de plus
+        // par supposition.
+        Red::Handle<RED4ext::game::ui::CharacterCustomizationSystem> systeme;
         {
-            dire("GetCharacterCustomizationSystem : ECHEC (systeme injoignable).");
-            dire("Hors d'un menu de customisation, ce systeme peut ne pas etre instancie —");
-            dire("dans ce cas la sonde doit se relancer pendant que le miroir est ouvert.");
+            using Poignee = Red::Handle<RED4ext::game::ui::CharacterCustomizationSystem>;
+            struct Voie { const char* etiquette; bool (*tenter)(Poignee&); };
+            static const Voie voies[] = {
+                {"CallGlobal(GetCharacterCustomizationSystem)",
+                 [](Poignee& s) { return Red::CallGlobal("GetCharacterCustomizationSystem", s); }},
+                {"CallStatic(ScriptGameInstance)",
+                 [](Poignee& s) {
+                     return Red::CallStatic("ScriptGameInstance", "GetCharacterCustomizationSystem", s);
+                 }},
+                {"CallStatic(GameInstance)",
+                 [](Poignee& s) {
+                     return Red::CallStatic("GameInstance", "GetCharacterCustomizationSystem", s);
+                 }},
+            };
+            for (const auto& v : voies)
+            {
+                const bool ok = v.tenter(systeme);
+                dire(std::string("  voie ") + v.etiquette + " : appel="
+                     + (ok ? "true" : "false") + "  systeme=" + (systeme ? "NON NUL" : "nul"));
+                if (ok && systeme) break;
+            }
+        }
+        if (!systeme)
+        {
+            dire("GetCharacterCustomizationSystem : ECHEC sur les TROIS voies.");
+            dire("L'instanciation n'est PAS en cause (F-PLY-103 : le Lua y accede en session");
+            dire("normale) — c'est donc la liaison C++ du parametre de sortie qu'il faut revoir.");
             dire("");
             // ── ON ENUMERE AU LIEU DE DEVINER ───────────────────────────────────────────────────
             //
