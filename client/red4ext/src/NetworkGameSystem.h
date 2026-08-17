@@ -192,6 +192,15 @@ struct SuiviAvatar
     /// Secondes ecoulees depuis ce placement. Dit a quelle CADENCE le correcteur
     /// passe reellement — la variable manquante de F-PLY-065.
     float depuisPlaceS = 0.0f;
+
+    /// Secondes ecoulees depuis le dernier replacement d'un avatar IMMOBILE.
+    ///
+    /// Compteur distinct de `depuisPlaceS` a dessein : la branche « immobile » de `PiloterAvatar`
+    /// sort AVANT le bloc qui incremente celui-la, donc le reutiliser ne mesurerait rien. Il borne
+    /// la cadence de `SetEntityPosition` sur cette branche — le seul chemin de placement dont on
+    /// ait la preuve qu'il applique (F-PLY-085), mais aussi celui qui avait fait tomber le jeu en
+    /// etant appele a chaque frame (2026-08-06).
+    float depuisPlacementImmobileS = 0.0f;
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 

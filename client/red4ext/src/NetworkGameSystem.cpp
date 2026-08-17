@@ -4343,9 +4343,48 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             Cyberverse::Utils::Quaternion_ToEulerAngles(orientationActuelle).Yaw;
         const float deriveYaw = std::fabs(Tessera::Sync::EcartAngulaire(yawActuel, pose.yaw));
 
-        if (deriveImmobile > kBandeMorteImmobileM || deriveYaw > kBandeMorteYawDeg)
+        // ── LE MECANISME CHOISI ICI N'APPLIQUE RIEN — ET C'EST LA BRANCHE LA PLUS FREQUENTE ───
+        //
+        // ⚠️ Le raisonnement du bloc ci-dessus est juste sur le COUT et faux sur l'EFFET.
+        // `PlacerSansCommande` (TeleportationFacility::Teleport) ne deplace PAS nos avatars :
+        // prouve sur 3048 echantillons (F-PLY-070), et le cast de handle cense le reparer n'y a
+        // rien change (F-PLY-071, refute en regime etabli sur 956 echantillons). Le seul chemin
+        // dont on ait la preuve qu'il applique est `SetEntityPosition`, via `AITeleportCommand`
+        // (F-PLY-085, A/B franc : corrections coupees, la derive va jusqu'a 43,8 m ; actives, la
+        // mediane est a 0,00 m).
+        //
+        // On avait donc remplace un mecanisme couteux mais QUI MARCHE par un mecanisme gratuit et
+        // INERTE. Deux consequences, et Lucas a rapporte les deux sans qu'on fasse le lien :
+        //
+        //   1. un avatar qui s'arrete en etant decale y reste — DEFINITIVEMENT. Mesure du
+        //      2026-08-17 : 12,22 m de derive, corrections reactivees, personne au clavier,
+        //      derive INCHANGEE pendant 10 s. Cette branche sort avant les correcteurs qui, eux,
+        //      auraient ferme l'ecart.
+        //   2. le correctif du 2026-08-15 (« un avatar immobile qui pivote ne tournait jamais »)
+        //      n'a jamais pu fonctionner non plus : il passait le yaw a ce meme appel inerte.
+        //      D'ou « la tete ne tourne pas quand on tourne la souris ni le corps complet »
+        //      (2026-08-16).
+        //
+        // ── COMMENT ON REPREND LE MECANISME QUI MARCHE SANS REPRENDRE SON COUT ─────────────
+        //
+        // Le danger de `SetEntityPosition` ici etait reel : appele A CHAQUE FRAME sur chaque avatar
+        // immobile, c'est 50 joueurs x 60 fps = 3 000 commandes d'IA par seconde, la zone qui a fait
+        // tomber le jeu le 2026-08-06.
+        //
+        // Mais un avatar IMMOBILE n'a pas besoin d'etre replace soixante fois par seconde : il a
+        // besoin de l'etre UNE fois. Rien ne le deplace ensuite — c'est la definition d'immobile.
+        // La bande morte de 5 cm garde donc le cas nominal a ZERO appel, et le plafond ci-dessous
+        // borne le cas anormal a 4 appels/s et par avatar. Cinquante avatars TOUS decales en meme
+        // temps couteraient 200 commandes/s, soit un ordre de grandeur sous le seuil d'effondrement
+        // — et ils convergent en moins d'une seconde, apres quoi la bande morte les rend gratuits.
+        static constexpr float kPeriodePlacementImmobileS = 0.25f;
+        auto& suiviImmobile = g_suiviAvatars[networkId];
+        suiviImmobile.depuisPlacementImmobileS += deltaTime;
+        if ((deriveImmobile > kBandeMorteImmobileM || deriveYaw > kBandeMorteYawDeg)
+            && suiviImmobile.depuisPlacementImmobileS >= kPeriodePlacementImmobileS)
         {
-            PlacerSansCommande(entityId, positionVoulue, pose.yaw);
+            suiviImmobile.depuisPlacementImmobileS = 0.0f;
+            SetEntityPosition(entityId, positionVoulue, pose.yaw);
         }
 
         // ── T10 bis : L'INSTRUMENT ÉTAIT AVEUGLE SUR UN AVATAR IMMOBILE ────────────────────
