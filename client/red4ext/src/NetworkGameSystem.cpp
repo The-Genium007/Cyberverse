@@ -4377,10 +4377,32 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // borne le cas anormal a 4 appels/s et par avatar. Cinquante avatars TOUS decales en meme
         // temps couteraient 200 commandes/s, soit un ordre de grandeur sous le seuil d'effondrement
         // — et ils convergent en moins d'une seconde, apres quoi la bande morte les rend gratuits.
-        static constexpr float kPeriodePlacementImmobileS = 0.25f;
+        // ── UN SEUL PLACEMENT EN VOL A LA FOIS — LA FILE REJOUE DES CIBLES PERIMEES ────────
+        //
+        // ⚠️ La premiere version plafonnait a 4/s, en supposant qu'un placement qui n'aboutit pas
+        // est simplement perdu. Il ne l'est pas : `SetEntityPosition` empile un
+        // `AITeleportCommand`, et une commande d'IA ne se remplace pas — **elle s'execute**, avec
+        // la destination qu'elle portait AU MOMENT OU ELLE A ETE EMPILEE.
+        //
+        // Mesure du 2026-08-17 (fantome en maintien, personne au clavier), profil pose par pose :
+        // apres l'arret, l'avatar derive lentement pendant ~5 s, puis fait un saut de **13 m vers
+        // un point FAUX** (derive 17,9 -> 30,4 m), puis 3 m de plus, et seulement ensuite atterrit
+        // sur la bonne cible. Ce sont nos propres placements qui se rejouent dans l'ordre, chacun
+        // vers la position autoritaire d'il y a une seconde.
+        //
+        // Emettre plus vite AGGRAVE donc le probleme. On n'en garde qu'un en vol : le suivant
+        // n'est emis que si le precedent n'a pas abouti apres un delai franc.
+        static constexpr float kPeriodePlacementImmobileS = 2.0f;
         auto& suiviImmobile = g_suiviAvatars[networkId];
         suiviImmobile.depuisPlacementImmobileS += deltaTime;
-        if ((deriveImmobile > kBandeMorteImmobileM || deriveYaw > kBandeMorteYawDeg)
+        // ⚠️ La garde `g_suspendreCorrections` porte ici AUSSI, et elle manquait.
+        //
+        // Sans elle, `corrections off` eteignait les trois correcteurs de la branche mobile et
+        // laissait celui-ci tourner : un test qui croit avoir tout coupe mesure encore un
+        // correcteur actif. C'est exactement la confusion qui a produit un premier verdict faux le
+        // 2026-08-17 (F-PLY-085) — un instrument qui n'eteint pas tout ce qu'il pretend eteindre.
+        if (!g_suspendreCorrections
+            && (deriveImmobile > kBandeMorteImmobileM || deriveYaw > kBandeMorteYawDeg)
             && suiviImmobile.depuisPlacementImmobileS >= kPeriodePlacementImmobileS)
         {
             suiviImmobile.depuisPlacementImmobileS = 0.0f;
