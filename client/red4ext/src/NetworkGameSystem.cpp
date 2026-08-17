@@ -763,6 +763,57 @@ Red::CString NetworkGameSystem::Tessera_LireTableAlias()
             dire("GetCharacterCustomizationSystem : ECHEC (systeme injoignable).");
             dire("Hors d'un menu de customisation, ce systeme peut ne pas etre instancie —");
             dire("dans ce cas la sonde doit se relancer pendant que le miroir est ouvert.");
+            dire("");
+            // ── ON ENUMERE AU LIEU DE DEVINER ───────────────────────────────────────────────────
+            //
+            // Deux causes produisent le meme echec, et il faut les separer : soit le NOM de la
+            // statique est faux, soit le systeme n'est pas instancie. Un second nom devine ne
+            // trancherait rien — donc on liste ce que le RTTI porte reellement.
+            //
+            // Le script declare `GameInstance.GetCharacterCustomizationSystem(self : GameInstance)`
+            // (`core/systems/gameInstance.script:87`), et le patron qui marche dans ce fichier passe
+            // par la classe `ScriptGameInstance`. Si le nom court ne resout pas, le vrai est dans
+            // cette liste — sinon c'est bien l'instanciation qui manque, et le releve le dira par
+            // l'absence d'echec de nom.
+            dire("--- statiques de ScriptGameInstance contenant 'Customization' ---");
+            if (rtti != nullptr)
+            {
+                auto* cls = rtti->GetClass("ScriptGameInstance");
+                if (cls == nullptr)
+                {
+                    dire("  ScriptGameInstance ABSENTE du RTTI — le patron lui-meme est a revoir.");
+                }
+                else
+                {
+                    uint32_t vues = 0;
+                    for (auto* fn : cls->staticFuncs)
+                    {
+                        if (fn == nullptr) continue;
+                        const char* nom = fn->fullName.ToString();
+                        if (nom == nullptr) continue;
+                        if (std::string(nom).find("Customization") != std::string::npos)
+                        {
+                            dire(std::string("  ") + nom);
+                            ++vues;
+                        }
+                    }
+                    dire("  total trouve : " + std::to_string(vues)
+                         // ⚠️ `DynArray::size` est une METHODE ici, pas un champ — sans les
+                         // parentheses, MSVC rend C3867 (« utilisez '&' »), qui ressemble a un
+                         // probleme de pointeur alors que c'est un appel oublie.
+                         + "  (sur " + std::to_string(cls->staticFuncs.size()) + " statiques)");
+                    if (vues == 0)
+                    {
+                        dire("  AUCUNE : la statique n'existe pas sous ce nom sur cette classe.");
+                        dire("  Alors le systeme s'obtient autrement — et pas par un nom devine.");
+                    }
+                    else
+                    {
+                        dire("  Le nom existe donc. L'echec vient de l'INSTANCIATION, pas du nom :");
+                        dire("  relancer cette sonde pendant qu'un menu de customisation est ouvert.");
+                    }
+                }
+            }
         }
         else
         {
