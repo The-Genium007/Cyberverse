@@ -1176,7 +1176,25 @@ public native class NetworkGameSystem extends IGameSystem {
         teleportCommand.rotation = rotation;
         teleportCommand.doNavTest = false;
 
-        puppet.GetAIControllerComponent().SendCommand(teleportCommand);
+        // ── ANNULER LE PLACEMENT PRÉCÉDENT — TROISIÈME ET DERNIER ENDROIT OÙ LA RÈGLE MANQUAIT ──
+        //
+        // *Une commande d'IA ne se remplace pas : elle s'exécute*, avec la destination qu'elle
+        // portait AU MOMENT DE L'EMPILAGE. Un placement qui n'a pas encore été consommé va donc
+        // téléporter l'avatar vers une position **périmée**, et il le fera même si nous en avons
+        // envoyé un meilleur entre-temps.
+        //
+        // MESURE (2026-08-17, fantôme rejoueur en maintien, personne au clavier) : après l'arrêt,
+        // l'avatar dérive lentement pendant ~5 s, **saute de 13 m vers un point FAUX** (dérive
+        // 17,9 → 30,4 m), fait 3 m de plus, et n'atterrit qu'ensuite sur la bonne cible. Ce sont
+        // nos propres placements qui se rejouent dans l'ordre d'émission.
+        //
+        // C'est le même défaut que pour le gel et pour la marche (`TesseraFigerAvatar`,
+        // `TesseraSuivreAvatar`) — quatre symptômes rapportés séparément, une seule cause.
+        // Ici, le fait d'annuler d'abord rend l'excursion impossible : au pire on annule un
+        // placement qui allait de toute façon être remplacé par celui qu'on envoie.
+        let controleur = puppet.GetAIControllerComponent();
+        controleur.CancelOrInterruptCommand(n"AITeleportCommand", true, false);
+        controleur.SendCommand(teleportCommand);
         // ⚠️ `DisableCollider()` ÉTAIT ICI, ET C'ÉTAIT LA CAUSE DE « impossible de tirer dessus ».
         //
         // Bricolage de confort hérité du fork Cyberverse, marqué temporaire par son auteur lui-même
