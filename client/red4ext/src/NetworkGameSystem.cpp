@@ -744,42 +744,40 @@ Red::CString NetworkGameSystem::Tessera_LireTableAlias()
         dire("CRTTISystem::Get() rend nullptr — rien de lisible.");
     }
 
-    // ── Trouver l'etat de customisation, par voies successives et journalisees ──────────────────
+    // ── Obtenir l'etat de customisation SANS AUCUNE OFFSET DEVINEE ──────────────────────────────
+    //
+    // Le chemin est celui du script : `GameInstance.GetCharacterCustomizationSystem(gi)` puis
+    // `GetState()` (declares dans `characterCreationMenu.script:96-105`). On passe par le patron
+    // deja PROUVE dans ce fichier pour les systemes de jeu — `Red::CallStatic("ScriptGameInstance",
+    // "GetWorkspotSystem", ...)` — plutot que d'inventer une resolution d'instance.
+    //
+    // ⚠️ Chaque etape journalise son echec. Un `return` muet ici rendrait « ETAT NON OBTENU » sans
+    // dire LAQUELLE des deux etapes a lache, et c'est exactement le defaut de diagnostic qui a
+    // coute deux jours sur ce chantier.
     void* etat = nullptr;
-    const char* voieRetenue = nullptr;
-    if (rtti != nullptr)
     {
-        // Les noms candidats de la classe du systeme, dans l'ordre du plus probable au moins.
-        static const char* const candidats[] = {
-            "gameuiICharacterCustomizationSystem",
-            "gameuiCharacterCustomizationSystem",
-            "CharacterCustomizationSystem",
-        };
-        for (const char* nom : candidats)
+        Red::Handle<Red::IScriptable> systeme;
+        if (!Red::CallStatic("ScriptGameInstance", "GetCharacterCustomizationSystem", systeme)
+            || !systeme)
         {
-            auto* cls = rtti->GetClass(nom);
-            if (cls == nullptr)
-            {
-                dire(std::string("classe absente du RTTI : ") + nom);
-                continue;
-            }
-            dire(std::string("classe TROUVEE : ") + nom);
-            // `GetState()` est expose au script (characterCreationMenu.script:105) : c'est notre
-            // chemin vers l'etat, et il ne demande aucun offset.
-            auto* fnEtat = cls->GetFunction("GetState");
-            if (fnEtat == nullptr)
-            {
-                dire("  mais GetState introuvable sur cette classe");
-                continue;
-            }
-            dire("  GetState present — reste a obtenir l'INSTANCE du systeme");
-            voieRetenue = nom;
-            break;
+            dire("GetCharacterCustomizationSystem : ECHEC (systeme injoignable).");
+            dire("Hors d'un menu de customisation, ce systeme peut ne pas etre instancie —");
+            dire("dans ce cas la sonde doit se relancer pendant que le miroir est ouvert.");
         }
-        if (voieRetenue == nullptr)
+        else
         {
-            dire("AUCUNE voie de classe n'a abouti. La suite est impossible : on s'arrete ici,");
-            dire("plutot que de dereferencer un pointeur devine.");
+            dire("GetCharacterCustomizationSystem : OK");
+            Red::Handle<Red::IScriptable> poigneeEtat;
+            if (!Red::CallVirtual(systeme, "GetState", poigneeEtat) || !poigneeEtat)
+            {
+                dire("GetState : ECHEC (le systeme repond, mais aucun etat).");
+                dire("Un etat nul signifie qu'aucune customisation n'est chargee pour cette session.");
+            }
+            else
+            {
+                etat = poigneeEtat.instance;
+                dire("GetState : OK — etat obtenu, aucune offset devinee pour y arriver.");
+            }
         }
     }
 
