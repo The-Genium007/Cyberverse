@@ -1191,6 +1191,30 @@ public:
     /// Bascule le pilotage par les ENTREES (ADR 0032). Voir `g_pilotageParEntrees`.
     bool Tessera_PilotageParEntrees(bool actif);
 
+    /// SONDE (F-PLY-101, etape 1) — LIT la table d'alias FPP/TPP de l'etat de customisation, sans
+    /// rien modifier. Ecrit le releve dans `TesseraLogs\alias-apparence.txt` et rend un resume.
+    ///
+    /// POURQUOI. La decompilation de `FUN_14038582c` (RVA 0x38582C, resolution de groupe commune aux
+    /// trois sections Head/Body/Arms) montre que `isFPP` ne fait que CHOISIR UNE COLONNE dans une
+    /// table de remappage portee par l'etat :
+    ///
+    ///     table  = *(etat + 0xa0)                  entrees de 3 longlong
+    ///     nombre = *(uint32_t*)(etat + 0xac)
+    ///     si table[i][0] == groupe : groupe = table[i][(isFPP & 0xff ^ 1) + 1]
+    ///
+    /// soit la colonne 1 quand `isFPP` est VRAI, la colonne 2 quand il est FAUX. La table est donc
+    /// une DONNEE lisible, et cette sonde la lit AVANT qu'on ecrive le moindre detour.
+    ///
+    /// Elle tranche deux choses d'un coup : (a) que les colonnes se lisent bien `nom | FPP | TPP`,
+    /// sans quoi l'interpretation serait fausse et le detour inutile ; (b) le nom de la variante TPP
+    /// des deux groupes qui nous manquent — la peau du visage et celle des bras (F-PLY-100).
+    ///
+    /// ⚠️ LECTURE SEULE, et par des voies MULTIPLES journalisees. Le nom exact de l'accesseur du
+    /// systeme de customisation ne se verifie pas depuis l'exterieur du jeu : la sonde en essaie
+    /// plusieurs et ECRIT laquelle passe. Un echec muet est precisement ce qui a coute deux jours sur
+    /// ce chantier — ici chaque voie ratee laisse une ligne.
+    Red::CString Tessera_LireTableAlias();
+
     int32_t Tessera_CompteAvatarsJoueurs() const
     {
         int32_t n = 0;
@@ -1427,6 +1451,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_SuspendreCommandes);
     RTTI_METHOD(Tessera_SuspendreCorrections);
     RTTI_METHOD(Tessera_PilotageParEntrees);
+    RTTI_METHOD(Tessera_LireTableAlias);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);
     RTTI_METHOD(Tessera_AvatarJoueurParIndex);
     RTTI_METHOD(Tessera_SacRecu);

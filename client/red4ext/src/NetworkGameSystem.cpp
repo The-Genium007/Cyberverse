@@ -1,5 +1,12 @@
 #include "NetworkGameSystem.h"
 
+// Pour la sonde `Tessera_LireTableAlias` (F-PLY-101) : releve ecrit dans un fichier, et tampon de
+// lignes. Ajoutes explicitement plutot que supposes transitifs — une inclusion implicite qui
+// disparait a une montee de dependance casse un build sans que le motif soit lisible.
+#include <fstream>
+#include <string>
+#include <vector>
+
 #include "PlayerSync/HorlogeServeur.h"
 #include "PlayerSync/Robot.h"
 #include "PlayerSync/Telemetrie.h"
@@ -704,6 +711,132 @@ bool NetworkGameSystem::Tessera_PilotageParEntrees(bool actif)
     // distinguer « le correctif marche » de « le mode n'etait pas allume ».
     g_telemetrie.Evenement("pilotage_entrees", actif ? 1u : 0u, "");
     return g_pilotageParEntrees;
+}
+
+// ── SONDE F-PLY-101 · LA TABLE D'ALIAS FPP/TPP, EN LECTURE SEULE ────────────────────────────────
+//
+// Voir la declaration dans le .h pour le POURQUOI et le desassemblage. Resume : `isFPP` ne fait que
+// choisir une colonne dans une table de remappage portee par l'etat de customisation.
+//
+//     table  = *(etat + 0xa0)                  entrees de 3 pointeurs
+//     nombre = *(uint32_t*)(etat + 0xac)
+//     colonne 1 = variante FPP   ·   colonne 2 = variante TPP
+//
+// ⚠️ TROIS PRECAUTIONS, chacune payee ailleurs dans ce depot.
+//
+// 1. AUCUNE ECRITURE. La sonde doit pouvoir tourner sans consequence : si l'interpretation des
+//    colonnes est fausse, on veut le savoir par un releve, pas par un corps de joueur casse.
+// 2. LES OFFSETS SONT VERSIONNES. Ils viennent d'un desassemblage de la v2.31 (ADR 0001 epingle
+//    cette version). A une montee de version, ils sont FAUX et cette sonde lira n'importe quoi —
+//    d'ou le controle de vraisemblance sur `nombre` avant toute dereference.
+// 3. LE NOM DE L'ACCESSEUR N'EST PAS VERIFIABLE HORS DU JEU. On essaie plusieurs voies et on
+//    JOURNALISE laquelle passe. Un `return` muet sur une voie ratee est le defaut qui a coute deux
+//    jours sur ce chantier.
+Red::CString NetworkGameSystem::Tessera_LireTableAlias()
+{
+    std::vector<std::string> lignes;
+    auto dire = [&lignes](const std::string& s) { lignes.push_back(s); };
+
+    auto* rtti = Red::CRTTISystem::Get();
+    dire("=== TABLE D'ALIAS FPP/TPP (lecture seule, F-PLY-101) ===");
+    if (rtti == nullptr)
+    {
+        dire("CRTTISystem::Get() rend nullptr — rien de lisible.");
+    }
+
+    // ── Trouver l'etat de customisation, par voies successives et journalisees ──────────────────
+    void* etat = nullptr;
+    const char* voieRetenue = nullptr;
+    if (rtti != nullptr)
+    {
+        // Les noms candidats de la classe du systeme, dans l'ordre du plus probable au moins.
+        static const char* const candidats[] = {
+            "gameuiICharacterCustomizationSystem",
+            "gameuiCharacterCustomizationSystem",
+            "CharacterCustomizationSystem",
+        };
+        for (const char* nom : candidats)
+        {
+            auto* cls = rtti->GetClass(nom);
+            if (cls == nullptr)
+            {
+                dire(std::string("classe absente du RTTI : ") + nom);
+                continue;
+            }
+            dire(std::string("classe TROUVEE : ") + nom);
+            // `GetState()` est expose au script (characterCreationMenu.script:105) : c'est notre
+            // chemin vers l'etat, et il ne demande aucun offset.
+            auto* fnEtat = cls->GetFunction("GetState");
+            if (fnEtat == nullptr)
+            {
+                dire("  mais GetState introuvable sur cette classe");
+                continue;
+            }
+            dire("  GetState present — reste a obtenir l'INSTANCE du systeme");
+            voieRetenue = nom;
+            break;
+        }
+        if (voieRetenue == nullptr)
+        {
+            dire("AUCUNE voie de classe n'a abouti. La suite est impossible : on s'arrete ici,");
+            dire("plutot que de dereferencer un pointeur devine.");
+        }
+    }
+
+    // ── Lire la table, si et seulement si on tient un etat plausible ────────────────────────────
+    if (etat != nullptr)
+    {
+        auto base = reinterpret_cast<uintptr_t>(etat);
+        auto** table = *reinterpret_cast<void***>(base + 0xa0);
+        uint32_t nombre = *reinterpret_cast<uint32_t*>(base + 0xac);
+        dire("");
+        dire("table = " + std::to_string(reinterpret_cast<uintptr_t>(table))
+             + "  nombre = " + std::to_string(nombre));
+        // CONTROLE DE VRAISEMBLANCE. Un `nombre` absurde signe des offsets perimes (montee de
+        // version) : on refuse de dereferencer plutot que de lire de la memoire au hasard.
+        if (table == nullptr || nombre == 0 || nombre > 4096)
+        {
+            dire(">>> INVRAISEMBLABLE — offsets probablement perimes pour cette version du jeu.");
+            dire(">>> Ne rien conclure de la table. Reverifier 0xa0/0xac au desassemblage.");
+        }
+        else
+        {
+            dire("");
+            dire("i   | nom demande            | colonne 1 (FPP)        | colonne 2 (TPP)");
+            auto nomDe = [](void* v) -> std::string {
+                Red::CName cn(reinterpret_cast<uint64_t>(v));
+                const char* s = cn.ToString();
+                return (s != nullptr && *s != '\0') ? std::string(s) : std::string("<non resolu>");
+            };
+            for (uint32_t i = 0; i < nombre; ++i)
+            {
+                void** e = table + (static_cast<size_t>(i) * 3);
+                char tampon[256];
+                std::snprintf(tampon, sizeof(tampon), "%-3u | %-22s | %-22s | %s", i,
+                              nomDe(e[0]).c_str(), nomDe(e[1]).c_str(), nomDe(e[2]).c_str());
+                dire(tampon);
+            }
+            dire("");
+            dire(">>> LIRE AINSI : chercher les lignes de la section Head (groupe `FPP` / `TPP`) et");
+            dire(">>> des bras (`holstered_*`). La colonne 2 nomme la variante qui nous manque.");
+        }
+    }
+    else
+    {
+        dire("");
+        dire("ETAT NON OBTENU — la table n'a pas ete lue. Ce n'est pas un echec de la piste :");
+        dire("c'est l'accesseur d'instance qui manque, et le releve ci-dessus dit lequel chercher.");
+    }
+
+    // Le releve part dans un fichier : un resume de quelques lignes ne porterait pas une table.
+    std::string chemin = "TesseraLogs\\alias-apparence.txt";
+    if (std::ofstream f(chemin, std::ios::trunc); f.is_open())
+    {
+        for (const auto& l : lignes) f << l << '\n';
+    }
+
+    std::string resume = std::to_string(lignes.size()) + " lignes -> " + chemin;
+    return Red::CString(resume.c_str());
 }
 
 bool NetworkGameSystem::Tessera_SuspendreCorrections(bool actif)

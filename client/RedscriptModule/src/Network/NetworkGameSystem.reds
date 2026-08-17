@@ -571,17 +571,36 @@ public native class NetworkGameSystem extends IGameSystem {
         ev.request.limits.backLimitDegrees = 210.0;
         ev.request.calculatePositionInParentSpace = false;   // cible en espace MONDE
         ev.request.priority = 100;                            // au-dessus des reactions locales
-        ev.bodyPart = n"Eyes";
-
-        let parts: array<LookAtPartRequest>;
-        let tete: LookAtPartRequest;
-        tete.partName = n"Head";  tete.weight = 0.1;  tete.suppress = 1.0;  tete.mode = 0;
-        ArrayPush(parts, tete);
-        let buste: LookAtPartRequest;
-        buste.partName = n"Chest"; buste.weight = 2.0; buste.suppress = 0.0; buste.mode = 0;
-        ArrayPush(parts, buste);
-        ev.SetAdditionalPartsArray(parts);
-
+        // ── ON AVAIT COPIÉ LA MAUVAISE RECETTE, ET ELLE SUPPRIME LA TÊTE EXPRÈS ───────────────
+        //
+        // La version précédente reprenait `ActivateReactionLookAt`
+        // (`reactionComponent.script:4650-4672`) : `bodyPart = 'Eyes'`, puis deux parties
+        // additionnelles — **`Head` avec `weight = 0.1` et `suppress = 1.0`**, et `Chest` avec
+        // `weight = 2.0`.
+        //
+        // C'est la recette d'un COUP D'ŒIL DE RÉACTION : un passant qui remarque quelque chose
+        // sans cesser de marcher. CDPR y **supprime délibérément la tête** et fait pivoter le
+        // buste à la place. Appliquée à l'avatar d'un joueur, elle produit exactement ce que Lucas
+        // a rapporté le 2026-08-16 : « la tête ne tourne pas quand on tourne la souris ».
+        //
+        // ⚠️ Et cette recette-là vise une ENTITÉ (`SetEntityTarget(targetEntity,
+        // 'pla_default_tgt', …)`), pas un point du monde : ses réglages de parties sont accordés à
+        // ce cas-là. Nous visons un point statique — ce n'était donc pas seulement le mauvais
+        // dosage, c'était le mauvais patron.
+        //
+        // LA BONNE RÉFÉRENCE est la seule invocation CDPR à cible statique :
+        // `AIGenericStaticLookatTask.ActivateLookat` (`ai/Tasks/aiLookats.script:269-291`). Elle
+        // pose la cible, les limites, le style — **et rien d'autre**. Ni `bodyPart`, ni parties
+        // additionnelles. Sans partie suppressive, le moteur applique son look-at standard, celui
+        // qui tourne la tête.
+        //
+        // On garde `priority = 100` : c'est un besoin propre au multijoueur (passer devant les
+        // réactions locales du pantin, qui lui feraient sinon regarder ailleurs), et il est absent
+        // chez CDPR parce que leur tâche EST la réaction locale.
+        //
+        // ⚠️ NON MESURÉ. L'effet d'un regard ne se lit sur aucun compteur, il se voit. Consigne
+        // d'observation : « regarde la TÊTE de l'avatar d'en face pendant que je tourne la souris
+        // sans bouger le corps » — le seul geste qui sépare `lookDir` du yaw du corps.
         puppet.QueueEvent(ev);
 
         if trouve >= 0 {
