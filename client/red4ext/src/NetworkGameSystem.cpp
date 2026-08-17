@@ -46,6 +46,10 @@ int g_robotPhase = -1;
 // Asseoir les avatars distants sur les sieges (F-VEH-031, mesure en jeu le 2026-08-14).
 #include "RED4ext/Scripting/Natives/Generated/game/MountEventData.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/WorkspotGameSystem.hpp"
+// Sonde F-PLY-101 : les types DECLARES par le script pour la customisation. Un handle de type de
+// base ne se lie pas et echoue en SILENCE (lecon de `SystemeWorkspot`, mesuree le 2026-08-14).
+#include "RED4ext/Scripting/Natives/Generated/game/ui/ICharacterCustomizationState.hpp"
+#include "RED4ext/Scripting/Natives/Generated/game/ui/ICharacterCustomizationSystem.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/mounting/IMountingFacility.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/mounting/MountingRequest.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/mounting/UnmountingRequest.hpp"
@@ -756,7 +760,19 @@ Red::CString NetworkGameSystem::Tessera_LireTableAlias()
     // coute deux jours sur ce chantier.
     void* etat = nullptr;
     {
-        Red::Handle<Red::IScriptable> systeme;
+        // ⚠️⚠️ LE TYPE DU PARAMETRE DE SORTIE SE CALQUE SUR LE TYPE **DECLARE**, jamais sur ce qu'on
+        // croit compatible par heritage. La lecon est deja ecrite dans ce fichier, a `SystemeWorkspot`
+        // (mesuree le 2026-08-14) : un `Handle<IGameSystem>` ne se lie PAS a un systeme declare deux
+        // crans plus bas, et l'echec est SILENCIEUX — le handle rend nul, ce qui se lit comme
+        // « systeme injoignable ».
+        //
+        // Ma premiere version declarait `Handle<IScriptable>` et a produit exactement ce faux
+        // diagnostic. Deux causes ont ete eliminees par mesure avant que je relise le fichier que je
+        // modifiais : le NOM (enumeration des statiques de `ScriptGameInstance` : 1 trouvee sur 119)
+        // et l'INSTANCIATION (releve refait avec le miroir de l'appartement OUVERT, meme echec).
+        // Il ne restait que le type. D3 du CLAUDE.md — on consulte avant d'agir, y compris son propre
+        // code.
+        Red::Handle<RED4ext::game::ui::ICharacterCustomizationSystem> systeme;
         if (!Red::CallStatic("ScriptGameInstance", "GetCharacterCustomizationSystem", systeme)
             || !systeme)
         {
@@ -818,7 +834,7 @@ Red::CString NetworkGameSystem::Tessera_LireTableAlias()
         else
         {
             dire("GetCharacterCustomizationSystem : OK");
-            Red::Handle<Red::IScriptable> poigneeEtat;
+            Red::Handle<RED4ext::game::ui::ICharacterCustomizationState> poigneeEtat;
             if (!Red::CallVirtual(systeme, "GetState", poigneeEtat) || !poigneeEtat)
             {
                 dire("GetState : ECHEC (le systeme repond, mais aucun etat).");
