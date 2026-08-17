@@ -805,6 +805,25 @@ Red::CString NetworkGameSystem::Tessera_LireTableAlias()
                  [](Poignee& s) {
                      return Red::CallStatic("GameInstance", "GetCharacterCustomizationSystem", s);
                  }},
+                // -- LES DEUX FORMES QUI PASSENT L'INSTANCE DE JEU ------------------------------
+                //
+                // Le releve precedent a rendu `appel=false` sur les trois formes ci-dessus : ce n'est
+                // donc pas la liaison du parametre de SORTIE qui rate, c'est l'invocation. Or la
+                // statique declare `self : GameInstance` (core/systems/gameInstance.script:87) et
+                // aucune des trois ne le passait. `ScriptGameInstance` se construit avec un pointeur
+                // nul par defaut et le moteur le resout — c'est la forme que le RTTI attend pour une
+                // statique de GameInstance.
+                {"CallStatic(ScriptGameInstance) + instance",
+                 [](Poignee& s) {
+                     RED4ext::ScriptGameInstance gi;
+                     return Red::CallStatic("ScriptGameInstance", "GetCharacterCustomizationSystem",
+                                            s, gi);
+                 }},
+                {"CallGlobal + instance",
+                 [](Poignee& s) {
+                     RED4ext::ScriptGameInstance gi;
+                     return Red::CallGlobal("GetCharacterCustomizationSystem", s, gi);
+                 }},
             };
             for (const auto& v : voies)
             {
