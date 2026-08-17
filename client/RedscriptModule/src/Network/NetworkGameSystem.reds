@@ -1517,6 +1517,28 @@ public native class NetworkGameSystem extends IGameSystem {
         if !IsDefined(controller) {
             return false;
         }
+        // ── ANNULER LA MARCHE AVANT DE GELER — SINON LE GEL FAIT LA QUEUE DERRIÈRE ELLE ────
+        //
+        // Le miroir exact de ce que `TesseraSuivreAvatar` fait déjà dans l'autre sens, et il
+        // manquait ici. Une commande d'IA ne se REMPLACE pas : elle s'exécute. Envoyer un
+        // `AIHoldPositionCommand` pendant qu'un `AIMoveToCommand` tourne ne l'interrompt donc pas
+        // — le gel se met EN FILE, et le pantin finit tranquillement sa marche vers le point de
+        // visée d'avant, à six mètres devant.
+        //
+        // C'est très précisément le symptôme rapporté par Lucas le 2026-08-13 : « quand on arrête
+        // de marcher, après quelques mètres le PNJ reprend ses droits et se met à marcher tout
+        // seul ». Le gel avait été ajouté POUR ça, et il ne pouvait pas y suffire.
+        //
+        // MESURE (2026-08-17, fantôme rejoueur en maintien, personne au clavier) : à l'arrêt,
+        // l'avatar continue de s'éloigner à ~0,8 m/s pendant **1,8 s** — 1,2 m parcourus après
+        // l'ordre d'arrêt — puis saute d'un coup sur sa cible et y reste parfaitement immobile.
+        // Ce profil ne s'explique que par une file : notre placement attendait son tour derrière
+        // la marche, exactement comme le gel.
+        //
+        // `useInheritance = true` couvre les sous-classes ; `success = false` dit que la marche
+        // n'a pas abouti — c'est exact, on l'interrompt.
+        controller.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
+
         let cmd = new AIHoldPositionCommand();
         cmd.duration = 1.0;
         controller.SendCommand(cmd);
