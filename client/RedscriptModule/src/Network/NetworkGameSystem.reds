@@ -1444,6 +1444,28 @@ public native class NetworkGameSystem extends IGameSystem {
         // on l'interrompt.
         controller.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
 
+        // ── ET ANNULER LA MARCHE PRÉCÉDENTE, POUR EXACTEMENT LA MÊME RAISON ────────────────
+        //
+        // La ligne au-dessus annule le gel parce qu'« une commande d'IA ne se remplace pas : elle
+        // s'exécute ». Le raisonnement vaut mot pour mot pour la commande de marche elle-même, et
+        // il n'avait pas été appliqué : chaque réémission s'empilait DERRIÈRE la précédente.
+        //
+        // À 10 Hz, on construisait donc une file d'ordres de marche vers des points périmés, que
+        // le pantin parcourait l'un après l'autre — un chemin d'il y a une seconde, à une vitesse
+        // effective bien inférieure à l'allure demandée.
+        //
+        // MESURE (2026-08-17, fantôme rejoueur, personne au clavier) : allure commandée **Run**
+        // (~4 m/s), vitesse réellement parcourue par l'avatar **1,37 m/s médiane** — une vitesse
+        // de marche — et une dérive qui se creuse de **+0,17 m/s**, jusqu'à 19 m en 40 s. Le
+        // symptôme est exactement celui décrit dans `protocol.fbs` pour les PNJ le 2026-08-06
+        // (« la commande suivante arrive avant qu'une marche ait pu s'amorcer »), et c'est la
+        // quatrième fois de la journée que la même file explique un défaut différent.
+        //
+        // ⚠️ Ce que ça ne dit pas : que réémettre à 10 Hz soit devenu gratuit. La garde
+        // d'anti-réémission reste indispensable — annuler puis rejouer soixante fois par seconde
+        // hacherait l'animation. Elle borne la casse ; cette ligne empêche l'accumulation.
+        controller.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
+
         let cmd = new AIMoveToCommand();
         let cible: AIPositionSpec;
         let wp: WorldPosition;
