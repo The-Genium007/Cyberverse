@@ -62,6 +62,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
+#include <vector>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -140,13 +141,56 @@ public:
         // collecte aurait simplement rendu « aucun journal », ce qui est exactement ce que dit une
         // machine où personne n'a joué.
         //
-        // On ne DEVINE donc plus l'emplacement : on essaie d'abord la racine du jeu explicitement
-        // (`../../` depuis `bin/x64`, le répertoire de travail imposé au lancement), et on ne
-        // retombe sur le chemin nu que si celui-là échoue — c'est-à-dire si le jeu a été lancé
-        // depuis sa racine.
-        for (const char* prefixe : {"../../", ""})
+        // ── ⚠️ ET LE CORRECTIF DU 2026-08-15 ÉTAIT LUI-MÊME FAUX (mesuré le 2026-08-19) ────
+        //
+        // Il reposait sur « `../../` depuis `bin/x64`, le répertoire de travail imposé au
+        // lancement ». **Le répertoire de travail n'est pas ce qu'on croit.** `Demarrer` est
+        // appelé bien après le démarrage, et Cyber Engine Tweaks a changé le CWD entre-temps : le
+        // journal atterrissait dans
+        //
+        //     bin/x64/plugins/cyber_engine_tweaks/TesseraLogs/
+        //
+        // c'est-à-dire trois dossiers plus bas que la racine, là où ni le launcher ni aucun de nos
+        // scripts ne regarde. Et le mode de panne est le pire possible : `Active()` rend **true**,
+        // `CheminUtilise()` rend un chemin **relatif** qui a l'air juste, et toutes les campagnes
+        // concluent « aucun journal neuf » — le symptôme exact d'un jeu qui ne démarre pas.
+        //
+        // Le 2026-08-19, ça a coûté plusieurs campagnes et **un diagnostic entièrement faux**
+        // consigné au chantier (« la machine ne rejoint plus le monde »), alors que le jeu tournait,
+        // était connecté au serveur et écrivait sa télémétrie sans interruption.
+        //
+        // *Un chemin relatif est une supposition sur l'état d'un processus qu'on ne contrôle pas.*
+        //
+        // On dérive donc la racine du jeu du chemin de l'EXÉCUTABLE, qui ne dépend d'aucun CWD :
+        // `<jeu>/bin/x64/Cyberpunk2077.exe` → deux remontées. Le chemin nu reste en dernier
+        // recours, pour qu'un environnement inattendu écrive quelque part plutôt que nulle part.
+        std::vector<std::string> candidats;
         {
-            const std::string racine = std::string(prefixe) + dossier;
+            char exe[MAX_PATH] = {};
+            if (GetModuleFileNameA(nullptr, exe, MAX_PATH) > 0)
+            {
+                std::string chemin(exe);
+                for (int remontees = 0; remontees < 2; ++remontees)
+                {
+                    const auto coupe = chemin.find_last_of("\\/");
+                    if (coupe == std::string::npos)
+                    {
+                        break;
+                    }
+                    chemin.resize(coupe);
+                }
+                if (!chemin.empty())
+                {
+                    candidats.push_back(chemin + "/");
+                }
+            }
+        }
+        candidats.emplace_back("../../");
+        candidats.emplace_back("");
+
+        for (const std::string& prefixe : candidats)
+        {
+            const std::string racine = prefixe + dossier;
             // ⚠️ CRÉER LE DOSSIER, ET NE PAS SUPPOSER QU'IL EXISTE. C'est la différence avec
             // `red4ext/logs`, qui existait forcément puisque le chargeur de mods y écrivait déjà.
             // Un dossier À NOUS n'a personne pour le créer : sans cet appel, `fopen` rendrait
