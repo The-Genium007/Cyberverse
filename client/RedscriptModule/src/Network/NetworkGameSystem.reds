@@ -1399,37 +1399,16 @@ public native class NetworkGameSystem extends IGameSystem {
     // marche arrière et le pas de côté (`locomotion.directionAngle`) — c'est-à-dire les deux
     // gestes qui portent la moitié des recalages mesurés le 2026-08-14.
     // SI ÇA NE MARCHE PAS, on l'apprend en une session au lieu de bâtir dessus.
-    // ── SECONDE PASSE, 2026-08-15 : LA VOIE « SIGNAL DE COMPORTEMENT » ────────────────────
+    // ── TROISIÈME PASSE, 2026-08-19 (soir) : LE CONSOMMATEUR, ENFIN ──────────────────────
     //
-    // La première passe a rendu son verdict, et il est négatif : `ApplyFeature` sur
-    // `stanceState` ne montre RIEN (F-PLY-053 — avatar observé DEBOUT par Lucas alors que la
-    // sonde tirait toutes les 2 s et rendait `true`). C'est le troisième refus de la même
-    // famille, avec F-PLY-036 (l'arme ne s'affiche que par une commande d'IA) et le backlog Q7.
+    // Les deux premières passes ont mesuré l'ÉCRITURE et conclu à l'impasse : `ApplyFeature`
+    // (F-PLY-053, F-PLY-120), `SetInputInt` (F-PLY-127), `ChangeStanceState` (voie B). Aucune
+    // n'avait ouvert le CONSOMMATEUR — ce que le graphe FAIT de la valeur une fois écrite.
     //
-    // La règle qui s'en dégage : **sur un pantin de foule, ce qui se voit passe par un
-    // COMPORTEMENT, jamais par une écriture d'état.**
-    //
-    // `NPCPuppet.ChangeStanceState` appartient justement à l'autre famille, et c'est pour ça
-    // qu'elle vaut d'être essayée : elle n'écrit pas une donnée d'animation, elle **émet un
-    // signal** (`NPCStateChangeSignal`) dans la table de signaux du pantin, que la machine à
-    // états de comportement consomme (`NPCPuppet.script:1360-1380`). C'est la seule voie de la
-    // famille « posture » jamais tentée — F-PLY-009, restée en `hypothèse` depuis le 2026-07-23.
-    //
-    // ⚠️ LE CONTRÔLE EST LA SESSION PRÉCÉDENTE, et c'est ce qui rend la comparaison valide.
-    // `ApplyFeature` est conservé ci-dessous, inchangé, et il a été prouvé INERTE une demi-heure
-    // plus tôt dans exactement ce montage. Si l'avatar s'accroupit maintenant, le delta n'est
-    // imputable qu'à `ChangeStanceState`. Le retirer aurait changé deux choses à la fois.
-    //
-    // Deux bornes connues, lues au script décompilé :
-    //   · la fonction sort tôt si la stance demandée est déjà celle du blackboard — rejouer la
-    //     sonde toutes les 2 s est donc sans effet de bord : elle ne fait rien après le premier
-    //     coup, et c'est voulu ;
-    //   · elle exige un cast vers `NPCPuppet`. Notre avatar est un pantin de foule (F-PLY-007),
-    //     donc il devrait passer — mais si le cast échoue, la voie B n'est PAS tentée. D'où le
-    //     `return false` distinct : sans lui, « envoye » mentirait sur ce qui a été fait.
-    //
-    // `NPCPuppet` est bien l'alias redscript (`NPCPuppet.script:119` : `class NPCPuppet extends
-    // ScriptedPuppet`), pas un nom natif du dump RTTI — piège documenté dans la skill.
+    // Il en fait une chose, et toujours la même : `stanceState.state` alimente **13
+    // `animAnimNode_Switch` à DEUX entrées** (F-PLY-133). D'où le seul changement de fond de
+    // cette passe — l'ÉCHELLE. Les deux défauts qui se masquaient, et ce qui gêne encore
+    // l'hypothèse, sont dans le corps de la fonction.
     public func TesseraPousserPosture(entityId: EntityID, accroupi: Bool) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
@@ -1437,73 +1416,155 @@ public native class NetworkGameSystem extends IGameSystem {
             return false;
         }
 
-        // ── DEPUIS AOÛT, C'ÉTAIT LA MAUVAISE CLASSE (corrigé le 2026-08-19, F-PLY-116) ─────────
+        // ── LES VOIES B ET C SONT RETIRÉES (2026-08-19, second passage) ────────────────────
         //
-        // Le nom du trait était bon (`stanceState`), la cible aussi. Ce qu'on y poussait ne l'était
-        // pas : `AnimFeature_Stance` (via `SetStanceState`, échelle `animStanceState`) quand
-        // l'entrée `stanceState` du graphe déclare `animAnimFeature_NPCState` — une AUTRE classe,
-        // avec un simple `Int32 state` sur l'échelle `gamedataNPCStanceState`. Deux classes, deux
-        // échelles : l'appel était accepté et ne décrivait rien.
+        // ⛔ Voie C — `SetInputInt(n"stanceState", …)`. Mesurée inerte (F-PLY-127), et de toute
+        // façon redondante : le graphe n'expose qu'UN nœud sous ce groupe (`stanceState.state`),
+        // que les deux écritures visaient toutes les deux.
         //
-        // La recette ci-dessous n'est pas déduite : c'est mot pour mot ce que le jeu lui-même fait
-        // dans `npcStateComponent.script:1152` (`UpdateStanceState`), y compris le nom du trait
-        // (`m_stanceAnimFeatureName`, dont le défaut EST 'stanceState') et la cible (`GetOwner()`).
+        // ⛔ Voie B — `NPCPuppet.ChangeStanceState`. Retirée non parce qu'elle a échoué, mais
+        // parce qu'elle NE CHANGE AUCUN ÉTAT — et ça se lit dans le script décompilé, sans le
+        // jeu. `NPCPuppet.script:1360` écrit un SIGNAL dans le `gameBoolSignalTable` du pantin.
+        // Son unique lecteur est `NPCStatesComponent.OnNPCStateChangeSignalReceived`
+        // (`npcStateComponent.script:278`) — un rappel de composant, invoqué par la machine d'IA.
+        // Rien n'établit qu'il tourne sur nos avatars, et `UpdateStanceState()` — la fonction
+        // qu'on croyait déclencher — n'a donc peut-être jamais tourné une seule fois. C'est
+        // l'explication littérale de « accepté, aucun effet » : une intention déposée dans une
+        // boîte aux lettres dont on n'a jamais vérifié qu'elle est relevée.
         //
-        // ⚠️ Le piège de nommage, dans les DEUX sens, et il a coûté trois lancements. Le dump RTTI
-        // ne connaît que `animAnimFeature_NPCState` — c'est ce nom-là qu'il faut donner à
-        // `NewObject` depuis Lua. redscript, lui, ne connaît que l'alias court
-        // `AnimFeature_NPCState` (`animFeature.script:20`). Chercher la classe dans le dump menait
-        // à croire qu'elle était inaccessible au script ; elle y est depuis toujours.
-        let posture = new AnimFeature_NPCState();
-        posture.state = EnumInt(accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
-        AnimationControllerComponent.ApplyFeature(puppet, n"stanceState", posture);
+        // ⚠️ Le nom exact du composant est `NPCStatesComponent`, au PLURIEL. Chercher
+        // « NPCStateComponent » ne rend rien et fait conclure qu'il n'existe pas.
 
-        // ── VOIE C — LA SECONDE PORTE DU MÊME COMPOSANT (2026-08-19) ───────────────────────
+        // ── ⭐ CE QUE LE GRAPHE FAIT DE LA VALEUR (extraction du 2026-08-19) ────────────────
         //
-        // `ApplyFeature` est ÉLIMINÉ pour la posture (F-PLY-120) : bonne classe, recette du jeu
-        // copiée verbatim, pantin debout. Mais `AnimationControllerComponent` expose une SECONDE
-        // API que notre code n'avait jamais appelée une seule fois — recherche exhaustive du
-        // 2026-08-19 sur tout `Cyberverse/client`.
+        // Trois campagnes ont mesuré l'ÉCRITURE et conclu à l'impasse. Aucune n'avait ouvert le
+        // CONSOMMATEUR. Extraction de `humanoid.animgraph` (WolvenKit 8.19.0, CP2077 v2.31) puis
+        // dépouillement en flux du JSON de 420 Mo — le nœud N'EST PAS MORT, il est lu 14 fois :
         //
-        // La différence est structurelle, pas cosmétique :
-        //   · `ApplyFeature(obj, groupe, feature)` empile un `AnimInputSetterAnimFeature` et écrit
-        //     TOUS les nœuds du groupe, en lisant les champs de la feature par leur `name` ;
-        //   · `SetInputInt(obj, clé, v)` empile un `AnimInputSetterInt` et écrit UN nœud.
-        // Deux événements différents, donc deux chemins différents dans le moteur.
+        //     animAnimNode_IntInput(group=stanceState, name=state)
+        //       → animAnimNode_IntToFloatConverter        (conversion nue, aucune échelle)
+        //         → weightNode d'un animAnimNode_Switch    ·  numInputs = 2   ← 13 fois
         //
-        // ⚠️ POURQUOI ICI ET PAS DANS UNE SONDE LUA. Essayé le 2026-08-19 par le pont du harnais :
-        // l'avatar se résout, `NewObject(entAnimInputSetterInt)` réussit, `key` et `value` se
-        // posent — et **`QueueEvent` rend `false`**. Le bac à sable CET ne livre pas l'événement,
-        // exactement comme pour `ApplyFeature` la veille. Le redscript, lui, y arrive : c'est la
-        // même fonction qui pousse la voie A juste au-dessus, tous les jours.
+        // ⚠️⚠️ ET LE CONTRÔLE NÉGATIF QUI M'A ÉVITÉ D'Y CROIRE (F-PLY-135). J'ai d'abord lu
+        // « aiguillage à 2 entrées, donc il attend 0 ou 1, donc Crouch=2 et Stand=3 sont hors
+        // bornes » — et poussé l'échelle `animStanceState` à la place. **C'est faux.** Le groupe
+        // `highLevelState` est câblé À L'IDENTIQUE (7 aiguillages, `numInputs = 2` eux aussi) et
+        // son énumération monte à 8 : le jeu y pousse `Relaxed = 5` et `Stealth = 6` sur chaque
+        // PNJ de la ville, et ça marche. `numInputs` n'est donc PAS le domaine accepté, et le
+        // `weightNode` d'un `animAnimNode_Switch` n'est pas un indice d'entrée.
         //
-        // ⚠️ LA CLÉ NE SE DÉDUIT PAS, elle se mesure — d'où deux écritures et non une. Extraction
-        // du graphe humanoïde livré (2026-08-19) : 187 couples `(groupe, champ)` uniques, aucun
-        // sans groupe, et **18 nœuds s'appellent `state`**. Le jeu, lui, passe des noms plats
-        // (`twitch_hit_scale` sur un NPCPuppet) qui n'existent pas dans ce graphe. On ne peut donc
-        // pas savoir si la clé attendue est le GROUPE ou le CHAMP.
+        // On reste donc sur l'échelle du JEU — celle de `npcStateComponent.script:1155`.
         //
-        // ⚠️ SEULEMENT LA FORME « GROUPE ». J'avais d'abord poussé les deux, en écrivant que « le
-        // groupe `stanceState` n'a qu'un nœud, donc aucune ambiguïté ». C'était juste pour la clé
-        // GROUPE et **faux dans l'autre sens** : si la clé attendue est le NOM, alors
-        // `SetInputInt(n"state", 2)` vise les **dix-huit** nœuds du graphe qui s'appellent `state`
-        // — `ShootAction`, `ReloadAction`, `Equip`, `Unequip`, `CoverStance`, `highLevelState`,
-        // `Carry`, `SE_WeaponJammed`… On écrirait « 2 » dans dix-sept machines d'état qui n'ont
-        // rien demandé, et le résultat serait un pantin dans un état incohérent — c'est-à-dire un
-        // défaut bien pire, et bien plus difficile à lire, que l'accroupi qui manque.
+        // ⚠️ Ce que le contrôle négatif change vraiment, et c'est plus utile que l'échelle :
+        // `stanceState` et `highLevelState` partagent la MÊME classe, la MÊME API, le MÊME type de
+        // consommateur. L'un marche en natif, l'autre ne produit rien chez nous. La différence
+        // n'est donc pas dans le câblage du graphe — elle est dans NOTRE PANTIN. D'où
+        // `TesseraPousserTrait` ci-dessous : le contrôle positif qui manquait depuis trois
+        // semaines se tire sur un AUTRE groupe du même canal.
+        // ── LES TROIS MÉCANISMES DU JEU, ET LEUR BISSECTION ÉCRITE D'AVANCE ───────────────
         //
-        // La convention de clé se teste donc sur un nom **unique** dans le graphe, jamais sur un
-        // nom partagé. `TesseraPousserFranchissement` le fait déjà avec `explorationType` et
-        // `action`, qui n'existent qu'à un seul endroit : l'information est obtenue sans le risque.
-        let etatPosture = EnumInt(accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
-        AnimationControllerComponent.SetInputInt(puppet, n"stanceState", etatPosture);
+        // `UpdateStanceState` et `UpdateHighLevelState` (`npcStateComponent.script:1151` et `:443`)
+        // n'emploient pas UNE voie mais TROIS, et nous n'en copiions qu'une depuis août :
+        //
+        //   1. `stanceState`       — la posture. Lu par 13 aiguillages du graphe humanoïde.
+        //   2. `highLevelState`    — le JEU D'ANIMATIONS. Lu par 7 aiguillages + un mélange.
+        //   3. le POIDS DE WRAPPER — `stealthLocomotion`, lu par 18 nœuds `WrapperValue`.
+        //
+        // ⚠️ Le wrapper est le 3ᵉ, et c'est un TYPE D'ÉVÉNEMENT que nous n'avions jamais émis :
+        // `AnimWrapperWeightSetter`, ni `AnimInputSetterAnimFeature` (F-PLY-120) ni
+        // `AnimInputSetterInt` (F-PLY-127). C'est chez CDPR la ligne qui bascule vraiment le jeu
+        // d'animations d'un pantin.
+        //
+        // ⚠️ `stealthLocomotion` et NON `inCrouch`. `inCrouch` est ce que renvoie
+        // `GetAnimWrapperNameBasedOnStanceState(Crouch)` — mais il **n'existe pas** dans
+        // `humanoid.animgraph` : sur les 63 noms de wrapper du graphe, des cinq de la posture seul
+        // `inVehicle` y figure (F-PNJ-165). Le pousser serait un no-op par construction. Les
+        // wrappers de locomotion de ce graphe sont indexés sur le HAUT NIVEAU, d'où le choix du
+        // furtif — qui est aussi, visuellement, la démarche accroupie d'un PNJ.
+        //
+        // ── POURQUOI TROIS D'UN COUP, ALORS QUE L'ADR 0034 DIT « UNE CHOSE À LA FOIS » ─────
+        //
+        // Parce que l'ADR l'autorise quand la bissection est écrite AVANT, et qu'ici les trois
+        // signatures sont distinctes à la lecture :
+        //
+        //   · la HAUTEUR DE TÊTE change (1,64 m → ~1,20 m)  → la voie 1 a atteint le graphe
+        //   · la DÉMARCHE change sans que la tête descende  → la voie 2 ou 3 a atteint le graphe
+        //   · RIEN ne bouge, les trois acceptées            → ce n'est aucune API : c'est NOTRE
+        //     PANTIN. Prochaine étape nommée et courte : a-t-il seulement un `NPCStatesComponent`
+        //     (F-PLY-134) — le contrôle par `politique|autour`, écrit et jamais tiré.
+        //
+        // Ce troisième cas est la vraie raison de tout pousser ensemble. `stanceState` et
+        // `highLevelState` partagent la même classe, la même API et le même type de consommateur ;
+        // l'un marche en natif, l'autre ne produit rien chez nous. **Le contrôle positif qui
+        // manquait depuis trois semaines n'est pas une valeur de plus sur `stanceState`, c'est un
+        // AUTRE GROUPE du même canal.**
+        // ── BISSECTÉ LE 2026-08-19 : UNE SEULE DES TROIS VOIES AGIT ───────────────────────
+        //
+        // Les trois mécanismes ont été poussés ensemble pour obtenir l'effet — c'était le bon
+        // choix pour SORTIR de trois semaines d'impasse. Mais « ça marche » ne dit pas « lequel »,
+        // et la question n'était pas cosmétique : `highLevelState = Stealth` change l'état de
+        // COMPORTEMENT du pantin, ce qui déborde très largement d'une posture.
+        //
+        // Trois tours, un mécanisme actif par tour, rechargement à chaud entre chaque (~10 s),
+        // fantôme `--allure 4`, verdict sur capture au même cadrage :
+        //
+        //   | tour | voie active                       | avatar   |
+        //   | A    | `stanceState`                     | DEBOUT   |
+        //   | B    | `highLevelState`                  | DEBOUT   |
+        //   | C    | poids du wrapper `stealthLocomotion` | **ACCROUPI** |
+        //
+        // **C'est le poids du wrapper, et lui seul.** Les deux écritures de trait — celles-là
+        // mêmes qu'on a passé trois semaines à faire aboutir — n'y sont pour rien.
+        //
+        // ⚠️ CE QUE ÇA DIT DU GRAPHE, ET QUI VAUT AU-DELÀ DE L'ACCROUPI. `stanceState` et
+        // `highLevelState` sont des ENTRÉES D'ÉTAT : elles renseignent une machine qui décide
+        // ensuite. Un `AnimWrapper` est une COUCHE D'ANIMATION dont on règle le poids — il ne
+        // demande rien à personne, il se mélange. Sur un pantin que nous pilotons de l'extérieur,
+        // aucune machine d'état ne tourne pour consommer les premières ; la seconde, elle,
+        // s'applique parce qu'elle ne dépend de rien.
+        //
+        // C'est la réponse à F-PLY-115 (« la tenaille ») : le corps qui se rend n'accepte aucune
+        // pose **par entrée d'état**, et il en accepte par **poids de wrapper**. La frontière
+        // n'était pas entre deux corps, elle était entre deux natures de commande.
+        //
+        // ⚠️ L'accroupi EST la locomotion furtive dans ce jeu — le wrapper porte le jeu
+        // d'animations correspondant, et c'est ce qu'on veut. La différence avec la voie B est
+        // qu'on n'a PAS touché à l'état de comportement de l'avatar : il ne « devient » pas
+        // furtif, il en emprunte la silhouette.
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(
+            puppet, n"stealthLocomotion", accroupi ? 1.0 : 0.0);
+        return true;
+    }
 
-        // Voie B — signal de comportement. C'est celle qu'on teste maintenant.
-        let pantin = entity as NPCPuppet;
-        if !IsDefined(pantin) {
-            return false; // cast échoué : la voie B n'a pas été tentée, et il faut le savoir.
+    // Pousse UN entier dans UN groupe du graphe d'animation, par la recette du jeu.
+    //
+    // ── POURQUOI GÉNÉRIQUE, ET POURQUOI C'EST L'INSTRUMENT QUI MANQUAIT ────────────────────
+    //
+    // Trois semaines de sondes sur `stanceState` n'ont jamais pu distinguer « cette entrée-là ne
+    // répond pas » de « ce canal est mort sur nos pantins ». Il fallait pour ça pousser un AUTRE
+    // groupe — contrôle qu'aucune sonde ne permettait, parce que chaque voie était écrite en dur.
+    //
+    // `AnimFeature_NPCState` ne porte qu'un `Int32 state`, et c'est la classe que le graphe déclare
+    // pour `stanceState`, `highLevelState` ET `upperBodyState` (lu dans les `animAnimFeatureEntry`
+    // du graphe livré). Une seule fonction couvre donc les trois, et tout groupe futur de la même
+    // forme. `reds_reload` la rend rejouable en ~10 s, sans relancer le jeu.
+    //
+    // ⚠️ LE NOM DU CHAMP EST LA CLÉ, PAS SEULEMENT LE NOM DU GROUPE. `ApplyFeature` apparie
+    // champ ↔ nœud PAR LE NOM : la classe doit exposer un champ nommé comme le nœud visé
+    // (`state`). C'est ce qui a fait échouer `AnimFeature_Stance` d'août au 2026-08-18 — son seul
+    // champ s'appelle `stanceState`, jamais `state`, donc rien ne s'écrivait (F-PLY-133).
+    //
+    // ⚠️ NE PAS APPELER PAR FRAME. Une écriture de graphe par avatar et par frame est le régime
+    // qui a fait tomber le jeu deux fois le 2026-08-06 : les appelants poussent SUR CHANGEMENT.
+    public func TesseraPousserTrait(entityId: EntityID, groupe: CName, valeur: Int32) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
         }
-        NPCPuppet.ChangeStanceState(pantin, accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
+        let trait = new AnimFeature_NPCState();
+        trait.state = valeur;
+        AnimationControllerComponent.ApplyFeature(puppet, groupe, trait);
         return true;
     }
 
@@ -1615,6 +1676,37 @@ public native class NetworkGameSystem extends IGameSystem {
     // Rend -1.0 si l'entité, le composant ou le slot manquent — ce qui est un résultat, pas une
     // absence de résultat : un avatar sans `SlotComponent` est un fait qu'on veut lire.
     public func TesseraZTete(entityId: EntityID) -> Float {
+        // ── ⚠️ CET INSTRUMENT A RENDU `z=0.00` LE 2026-08-19, ET 0 N'EST PAS UNE DE SES SORTIES ──
+        //
+        // Relevé dans `tessera-telemetrie-3460.jsonl` : `hauteur_echec | appel=1,z=0.00`. Le C++
+        // initialise `zTete` à **-1.0** et `Red::CallVirtual` a rendu **true**. Quelque chose a
+        // donc bien écrit 0 — alors qu'aucun chemin de cette fonction ne rend 0.
+        //
+        // DEUX CAUSES POSSIBLES, ET ELLES APPELLENT DES CORRECTIFS OPPOSÉS :
+        //
+        //   H1 — le MARSHALLING du retour `Float`. `TesseraZTete` est le SEUL des quatorze appels
+        //        C++→redscript de `NetworkGameSystem.cpp` à rendre un `Float` ; les treize autres
+        //        rendent `Bool` ou `Int32`. Ce type n'a donc jamais été prouvé sur ce chemin, et
+        //        un retour non marshallé arrive naturellement à zéro.
+        //   H2 — `GetSlotTransform('Head')` rend **true** avec une transform nulle sur un pantin
+        //        distant (slot déclaré, jamais résolu).
+        //
+        // ⚠️ LE CORRECTIF NE TRANCHE PAS, IL FAIT PARLER — c'est délibéré. Corriger au hasard
+        // l'une des deux aurait produit, en cas d'échec, exactement le même `z=0.00` : le piège
+        // des deux défauts qui se masquent (ADR 0034, décision nº 3). Les trois sorties d'échec
+        // deviennent donc DISTINCTES, et la prochaine campagne tranche toute seule :
+        //
+        //     z = -1.00  → l'entité ne se résout pas          ) H2 confirmée : le marshalling
+        //     z = -2.00  → pas de SlotComponent               ) marche, la cause est le slot
+        //     z = -3.00  → slot 'Head' non résolu             )
+        //     z =  0.00  → AUCUN de ces chemins n'a pu écrire → H1 : c'est le retour `Float`,
+        //                  et le correctif est de passer à `Int32` en centimètres (le type que
+        //                  `TesseraLireLocomotion` prouve tous les jours), ce qui supprime au
+        //                  passage la conversion `×100` déjà faite côté C++.
+        //
+        // Le C++ n'a pas besoin de changer : sa branche d'échec teste `zTete <= 0.0f`, donc les
+        // trois sentinelles ressortent telles quelles dans `hauteur_echec`, et son `%.2f` les
+        // affiche. Aucun rebuild de DLL — donc aucune collision avec l'agent qui tient le jeu.
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -1622,11 +1714,11 @@ public native class NetworkGameSystem extends IGameSystem {
         }
         let slots = puppet.GetSlotComponent();
         if !IsDefined(slots) {
-            return -1.0;
+            return -2.0;
         }
         let transformation: WorldTransform;
         if !slots.GetSlotTransform(n"Head", transformation) {
-            return -1.0;
+            return -3.0;
         }
         // ⚠️ ON REND LE Z ABSOLU, ET LA SOUSTRACTION SE FAIT CÔTÉ C++.
         //
