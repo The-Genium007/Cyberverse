@@ -1614,7 +1614,7 @@ public native class NetworkGameSystem extends IGameSystem {
     //
     // Rend -1.0 si l'entité, le composant ou le slot manquent — ce qui est un résultat, pas une
     // absence de résultat : un avatar sans `SlotComponent` est un fait qu'on veut lire.
-    public func TesseraHauteurTete(entityId: EntityID) -> Float {
+    public func TesseraZTete(entityId: EntityID) -> Float {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -1628,8 +1628,19 @@ public native class NetworkGameSystem extends IGameSystem {
         if !slots.GetSlotTransform(n"Head", transformation) {
             return -1.0;
         }
-        let tete = WorldPosition.ToVector4(WorldTransform.GetWorldPosition(transformation));
-        return tete.Z - puppet.GetWorldPosition().Z;
+        // ⚠️ ON REND LE Z ABSOLU, ET LA SOUSTRACTION SE FAIT CÔTÉ C++.
+        //
+        // La première version rendait `tete.Z - puppet.GetWorldPosition().Z`, et le relevé donnait
+        // **2 468 cm** — vingt-quatre mètres, c'est-à-dire le Z monde de la tête tout entier.
+        // `GetWorldPosition()` rend donc **zéro** sur un pantin distant : la soustraction ne
+        // soustrayait rien, et le chiffre restait pourtant parfaitement plausible tant qu'on ne
+        // le rapprochait pas de l'altitude du sol.
+        //
+        // Le C++, lui, lit la position de l'entité de façon fiable (`Entity_GetWorldPosition`) et
+        // la lit déjà partout ailleurs. On lui laisse la soustraction plutôt que de chercher
+        // pourquoi l'accesseur scripté ment — c'est la même donnée, obtenue par le chemin dont
+        // l'effet est établi.
+        return WorldPosition.ToVector4(WorldTransform.GetWorldPosition(transformation)).Z;
     }
 
     public func TesseraLireLocomotion(entityId: EntityID) -> Int32 {
@@ -1644,6 +1655,22 @@ public native class NetworkGameSystem extends IGameSystem {
         }
         return EnumInt(politiques.GetCurrentLocomotionAction()) * 10
              + EnumInt(politiques.GetExplorationOffMeshLinkType());
+    }
+
+    // L'allure du fil traduite en `moveMovementType`, pour la commande ET pour la mutation.
+    //
+    // ⚠️ Un seul endroit, délibérément : ces deux chemins doivent toujours dire la même chose.
+    // Les valeurs accroupies (4, 5) et l'air (6) n'ont pas d'équivalent dans `moveMovementType` —
+    // elles retombent sur la marche, le moins faux des choix tant que la posture n'a pas de voie
+    // (F-PLY-127 : les deux portes du composant d'animation sont fermées).
+    private func AllureDepuisLocomotion(locomotion: Int32) -> moveMovementType {
+        if locomotion == 3 {
+            return moveMovementType.Sprint;
+        }
+        if locomotion == 2 {
+            return moveMovementType.Run;
+        }
+        return moveMovementType.Walk;
     }
 
     public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float) -> Bool {
@@ -1695,6 +1722,27 @@ public native class NetworkGameSystem extends IGameSystem {
         // ⚠️ Ce que ça ne dit pas : que réémettre à 10 Hz soit devenu gratuit. La garde
         // d'anti-réémission reste indispensable — annuler puis rejouer soixante fois par seconde
         // hacherait l'animation. Elle borne la casse ; cette ligne empêche l'accumulation.
+        // ── LA MUTATION DE POLITIQUE A ÉTÉ ESSAYÉE ICI, ET ELLE EST RÉFUTÉE ───────────────
+        //
+        // F-PLY-130 a mesuré qu'un avatar qui marche n'atteint **jamais** `Move` : sa machine
+        // oscille entre `Idle` et `Start`, parce que l'annulation ci-dessous la redémarre à chaque
+        // cycle. L'inférence semblait évidente — muter la destination en place
+        // (`MovePolicies.SetDestinationPosition` + `ChangeMovementType`, F-PLY-123) au lieu de
+        // réémettre, pour que la machine entre en régime.
+        //
+        // ⚠️ ELLE A ÉTÉ IMPLÉMENTÉE, MESURÉE, ET ELLE DÉGRADE TOUT (F-PLY-131) :
+        //
+        //     |            | réémission | mutation |
+        //     | allure     | 3,40 m/s   | 1,51 m/s |
+        //     | dérive méd | 1,84 m     | 17,27 m  |
+        //
+        // …et la machine atteignait bien `Move` (6 relevés, `Idle` disparu). **Le proxy était
+        // faux** : `Move` n'est pas l'objectif, c'est une conséquence d'un régime qu'on ne veut
+        // pas. Repose `SetIgnoreNavigation(true)` à la mutation n'y change rien (1,47 m/s,
+        // 18,44 m) — donc ce n'est pas la navigation qui se perdait.
+        //
+        // Ce que la réémission apporte et que la mutation ne reproduit pas n'est **pas identifié**.
+        // Ne pas re-tenter sans avoir d'abord répondu à ça : la voie a coûté deux campagnes.
         controller.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
 
         let cmd = new AIMoveToCommand();
@@ -1714,13 +1762,7 @@ public native class NetworkGameSystem extends IGameSystem {
         // 2026-07-23) : tout près, le pantin marchote quelle que soit l'allure. C'est ce piège qui
         // a produit un premier verdict « allure ignorée » entièrement faux. Le point de visée à 3 m
         // est précisément ce qui donne cette distance.
-        if locomotion == 3 {
-            cmd.movementType = moveMovementType.Sprint;
-        } else if locomotion == 2 {
-            cmd.movementType = moveMovementType.Run;
-        } else {
-            cmd.movementType = moveMovementType.Walk;
-        }
+        cmd.movementType = this.AllureDepuisLocomotion(locomotion);
 
         // Où il REGARDE, distinct de où il VA. C'est ce qui donne la marche arrière et le pas de
         // côté : le graphe d'animation compare les deux et choisit l'allure lui-même.
