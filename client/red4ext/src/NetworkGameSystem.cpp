@@ -4515,19 +4515,22 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
             // Seuil de 5 cm : sous cette valeur c'est la respiration de l'animation, pas une
             // posture. Sans seuil, la hauteur bougerait a chaque frame et le journal ne dirait
             // plus rien -- le meme piege que la bande morte des placements.
-            float zTete = -1.0f;
+            std::int32_t zTeteCm = -1;
             // ⚠️ L'ECHEC EST JOURNALISE, PAS AVALE. Sans cette ligne, « aucun evenement `hauteur` »
             // ne distingue PAS trois causes : l'appel qui ne resout pas, la fonction qui rend -1
             // (slot absent), et la valeur qui n'a pas bouge de 5 cm. Trois verdicts opposes, un
             // seul silence — c'est exactement la famille de defaut que ce depot paye le plus cher.
-            const bool appelOk = Red::CallVirtual(this, "TesseraZTete", zTete, entite);
-            if (!appelOk || zTete <= 0.0f)
+            // ⚠️ `Int32` et non `Float` : le retour flottant rendait 0.00 quelle que soit la
+            // branche prise cote redscript, sentinelles comprises (F-PLY-141). On emprunte le type
+            // dont l'effet est etabli sur les quatorze autres appels de ce fichier.
+            const bool appelOk = Red::CallVirtual(this, "TesseraZTeteCm", zTeteCm, entite);
+            if (!appelOk || zTeteCm <= 0)
             {
                 if (suivi.derniereHauteurTeteCm != -1)
                 {
                     suivi.derniereHauteurTeteCm = -1;
                     char pourquoi[64];
-                    std::snprintf(pourquoi, sizeof(pourquoi), "appel=%d,z=%.2f", appelOk ? 1 : 0, zTete);
+                    std::snprintf(pourquoi, sizeof(pourquoi), "appel=%d,cm=%d", appelOk ? 1 : 0, zTeteCm);
                     g_telemetrie.Evenement("hauteur_echec", networkId, pourquoi);
                 }
             }
@@ -4550,7 +4553,7 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
                 // pas dans la sonde ce que le journal permet de calculer apres coup.* Un calcul
                 // fait a la mesure peut echouer en silence ; un calcul fait a l'analyse se
                 // rejoue autant de fois qu'on veut, sur des donnees deja acquises.
-                const int cm = static_cast<int>(zTete * 100.0f);
+                const int cm = zTeteCm;   // deja en centimetres — plus de conversion ici
                 if (std::abs(cm - suivi.derniereHauteurTeteCm) >= 5)
                 {
                     suivi.derniereHauteurTeteCm = cm;
@@ -4726,6 +4729,28 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             g_telemetrie.Evenement("posture", networkId,
                                    accroupi ? (pousse ? "accroupi" : "accroupi_refuse")
                                             : (pousse ? "debout" : "debout_refuse"));
+        }
+
+        // -- L'ARME EN MAIN, SUR CHANGEMENT (F-PLY-138 : une COUCHE, pas un etat) -----------
+        //
+        // `m_appearances` porte deja l'arme degainee de cet avatar — le fil la transporte et
+        // `HandleAppearanceSync` la range. Elle n'avait aucun consommateur.
+        //
+        // Meme discipline que la posture : SUR CHANGEMENT, jamais en continu, et l'etat initial
+        // est `false` — un pantin naît les mains vides, donc aucune ecriture dans la frame de sa
+        // naissance (F-PLY-119, qui rendait les corps invisibles).
+        {
+            const auto apparence = m_appearances.find(networkId);
+            const bool degainee = apparence != m_appearances.end() && apparence->second.arme != 0;
+            if (suiviPosture.derniereArmeDegainee != degainee)
+            {
+                suiviPosture.derniereArmeDegainee = degainee;
+                bool pousse = false;
+                Red::CallVirtual(this, "TesseraPousserArme", pousse, entityId, degainee);
+                g_telemetrie.Evenement("arme_posture", networkId,
+                                       degainee ? (pousse ? "degainee" : "degainee_refuse")
+                                                : (pousse ? "rangee" : "rangee_refuse"));
+            }
         }
 
         // -- L'ANIMATION DU SAUT, AU DECOLLAGE ET A L'ATTERRISSAGE (F-PNJ-164) ---------------

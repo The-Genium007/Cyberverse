@@ -1595,6 +1595,38 @@ public native class NetworkGameSystem extends IGameSystem {
     // résultat. Le verdict est à l'œil, sur un avatar EN L'AIR. Si elle échoue, la suite est
     // nommée : `ExplorationEnteredEvent { type : moveExplorationType }`, un événement natif du
     // moteur, instanciable par son nom RTTI comme `entAnimInputSetterAnimFeature` l'a été.
+    // ── L'ARME EN MAIN : LA POSTURE, PAR LA MÊME PORTE QUE L'ACCROUPI ──────────────────────
+    //
+    // L'arme du joueur voyage déjà sur le fil (`AppearanceSpec.garments`, un `EquippedItem` avec
+    // son `drawn`) et **arrive** chez l'observateur : `HandleAppearanceSync` renseigne
+    // `appearance.arme`. Personne ne la consommait — troisième fois de la journée qu'une donnée
+    // traverse tout le fil pour mourir à l'arrivée, après la posture (poussée par personne hors de
+    // la sonde T7) et le canal d'événements (reçu et jeté).
+    //
+    // ⚠️ ON POUSSE UNE COUCHE, PAS UN ÉTAT — et c'est le résultat de la bissection du même jour
+    // (F-PLY-138). `upperBodyState`, que la spec du matin désignait pour ce geste, est une
+    // **entrée d'état** : elle renseigne une machine qui, sur nos pantins, ne tourne pas. Le
+    // wrapper `WeaponRight` est une **couche** dont on règle le poids — il ne demande rien à
+    // personne. C'est la voie qui a produit l'accroupi, et c'est celle du jeu lui-même
+    // (`NPCPuppet.SetAnimWrapperBasedOnEquippedItem`, `NPCPuppet.script:1080`).
+    //
+    // ⚠️ CE QUE ÇA DONNE, ET CE QUE ÇA NE DONNE PAS. Le poids du wrapper pose la **tenue** — bras,
+    // buste, port de l'arme. Il ne fait pas apparaître l'objet dans la main : ça, c'est la chaîne
+    // d'apparence, et elle n'attache aucun item aujourd'hui. Un avatar dégainé aura donc la
+    // silhouette juste et les mains vides tant que l'attachement n'est pas fait. C'est un progrès
+    // partiel assumé, pas un oubli — et il vaut mieux qu'un avatar au repos pendant que son joueur
+    // vise.
+    public func TesseraPousserArme(entityId: EntityID, degainee: Bool) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(
+            puppet, n"WeaponRight", degainee ? 1.0 : 0.0);
+        return true;
+    }
+
     public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
@@ -1675,7 +1707,22 @@ public native class NetworkGameSystem extends IGameSystem {
     //
     // Rend -1.0 si l'entité, le composant ou le slot manquent — ce qui est un résultat, pas une
     // absence de résultat : un avatar sans `SlotComponent` est un fait qu'on veut lire.
-    public func TesseraZTete(entityId: EntityID) -> Float {
+    // ⚠️ `Int32`, ET C'EST LE CORRECTIF LUI-MÊME — pas un choix de confort.
+    //
+    // Cette fonction rendait un `Float`, et le C++ relisait **0.00** quelle que soit la branche
+    // prise : ni la valeur, ni aucune des trois sentinelles (-1 entité, -2 composant, -3 slot) ne
+    // ressortait. Trois échecs distincts derrière un seul zéro, et l'instrument muet pendant toute
+    // la journée du 2026-08-19 — ce qui a forcé à juger l'accroupi **à l'œil** alors qu'il avait
+    // été conçu pour ne plus l'être (F-PLY-129).
+    //
+    // Le suspect : `TesseraZTete` est le **seul** des quinze appels C++→redscript de
+    // `NetworkGameSystem.cpp` à renvoyer un `Float`. Les quatorze autres rendent `Bool` ou `Int32`
+    // et fonctionnent. On ne cherche pas pourquoi le marshalling du flottant échoue : on emprunte
+    // le type dont l'effet est établi.
+    //
+    // En **centimètres**, ce qui supprime au passage la conversion `× 100` que le C++ faisait —
+    // une multiplication en moins et une unité dans le nom.
+    public func TesseraZTeteCm(entityId: EntityID) -> Int32 {
         // ── ⚠️ CET INSTRUMENT A RENDU `z=0.00` LE 2026-08-19, ET 0 N'EST PAS UNE DE SES SORTIES ──
         //
         // Relevé dans `tessera-telemetrie-3460.jsonl` : `hauteur_echec | appel=1,z=0.00`. Le C++
@@ -1710,15 +1757,15 @@ public native class NetworkGameSystem extends IGameSystem {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
-            return -1.0;
+            return -1;
         }
         let slots = puppet.GetSlotComponent();
         if !IsDefined(slots) {
-            return -2.0;
+            return -2;
         }
         let transformation: WorldTransform;
         if !slots.GetSlotTransform(n"Head", transformation) {
-            return -3.0;
+            return -3;
         }
         // ⚠️ ON REND LE Z ABSOLU, ET LA SOUSTRACTION SE FAIT CÔTÉ C++.
         //
@@ -1732,7 +1779,10 @@ public native class NetworkGameSystem extends IGameSystem {
         // la lit déjà partout ailleurs. On lui laisse la soustraction plutôt que de chercher
         // pourquoi l'accesseur scripté ment — c'est la même donnée, obtenue par le chemin dont
         // l'effet est établi.
-        return WorldPosition.ToVector4(WorldTransform.GetWorldPosition(transformation)).Z;
+        // Le Z ABSOLU de la tête, en centimètres. La soustraction du sol se fait à l'ANALYSE,
+        // qui lit le Z des lignes `rx` du même intervalle — un calcul fait à la mesure peut
+        // échouer en silence, un calcul fait à l'analyse se rejoue sur des données acquises.
+        return Cast<Int32>(WorldPosition.ToVector4(WorldTransform.GetWorldPosition(transformation)).Z * 100.0);
     }
 
     // ── LE CONTRÔLE QUI MANQUAIT, SANS AVOIR À VISER QUI QUE CE SOIT ───────────────────────

@@ -232,6 +232,11 @@ struct SuiviAvatar
     /// (F-PLY-119, qui rendait les corps invisibles).
     bool dernierEnVol = false;
 
+    /// L'arme de cet avatar etait-elle DEGAINEE au dernier passage ? Sert a ne pousser la couche
+    /// `WeaponRight` qu'aux transitions. `false` initial sans risque : un pantin naît les mains
+    /// vides, donc rien n'est ecrit dans la frame de sa naissance (F-PLY-119).
+    bool derniereArmeDegainee = false;
+
     /// Derniere valeur lue de `TesseraLireLocomotion` (`action * 10 + exploration`), pour
     /// n'ecrire au journal que les CHANGEMENTS d'etat de la machine de deplacement.
     ///

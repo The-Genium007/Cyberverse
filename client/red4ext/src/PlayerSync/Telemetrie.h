@@ -170,7 +170,12 @@ public:
             if (GetModuleFileNameA(nullptr, exe, MAX_PATH) > 0)
             {
                 std::string chemin(exe);
-                for (int remontees = 0; remontees < 2; ++remontees)
+                // TROIS remontées, pas deux : le chemin est `<jeu>/bin/x64/Cyberpunk2077.exe`,
+                // donc il faut retirer le fichier, PUIS `x64`, PUIS `bin`. Compté à deux au
+                // premier jet, ce qui écrivait dans `<jeu>/bin/TesseraLogs` — introuvable de la
+                // même façon que le défaut qu'on répare, et visible seulement parce que le journal
+                // annonce désormais un chemin ABSOLU qu'on peut lire en entier.
+                for (int remontees = 0; remontees < 3; ++remontees)
                 {
                     const auto coupe = chemin.find_last_of("\\/");
                     if (coupe == std::string::npos)
