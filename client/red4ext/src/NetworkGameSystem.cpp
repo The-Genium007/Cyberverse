@@ -703,6 +703,10 @@ StatsRoster g_statsRoster;
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
+
+/// Dernier masque d'etats de locomotion releve sur la population NATIVE autour du
+/// joueur. -2 = jamais releve (-1 est une valeur legitime : joueur injoignable).
+static std::int32_t g_dernierMasqueLocoNatif = -2;
 bool g_suspendreCommandes = false;
 bool g_suspendreCorrections = false;
 bool g_pilotageParEntrees = false;
@@ -4358,6 +4362,23 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
                       g_tamponsJoueurs.size(), avecCorps, regressions);
         g_telemetrie.Evenement("voisins", 0, detail);
 
+        // -- L'ENUMERATION PAR RAYON N'A RIEN A FAIRE ICI (incident du 2026-08-19) -----------
+        //
+        // J'ai place `TesseraEtatsLocomotionAutour` dans cette passe, qui tourne toutes les deux
+        // secondes. Elle balaie 40 m de PNJ natifs, resout un composant et lit un enum sur chacun.
+        // Le jeu s'est fige et le WATCHDOG DU MOTEUR l'a tue :
+        //
+        //     engineWatchdog.cpp:198 — Watchdog timeout! (120 seconds)
+        //
+        // Le cout exact n'est pas etabli (une seule occurrence), mais la lecon ne depend pas de
+        // lui : **une enumeration spatiale est une operation a la demande, pas une passe de fond.**
+        // Le controle qu'elle sert est un tir unique — savoir si l'etat `Move` existe dans la
+        // population — pas une surveillance. Elle vit donc dans la sonde du pont
+        // (`politique|autour`), ou elle ne s'execute que quand on la demande.
+        //
+        // C'est la meme famille que le defaut du 2026-08-06 : ce qui coute cher par entite ne se
+        // met pas dans une boucle qui voit toutes les entites.
+
         // -- CE QUE LE MOTEUR CROIT ETRE EN TRAIN DE FAIRE (F-PLY-123) ----------------------
         //
         // Tout ce qu'on savait d'un avatar distant se deduisait de l'EXTERIEUR : position relue,
@@ -4406,10 +4427,42 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
             // Seuil de 5 cm : sous cette valeur c'est la respiration de l'animation, pas une
             // posture. Sans seuil, la hauteur bougerait a chaque frame et le journal ne dirait
             // plus rien -- le meme piege que la bande morte des placements.
-            float hauteur = -1.0f;
-            if (Red::CallVirtual(this, "TesseraHauteurTete", hauteur, entite))
+            float zTete = -1.0f;
+            // ⚠️ L'ECHEC EST JOURNALISE, PAS AVALE. Sans cette ligne, « aucun evenement `hauteur` »
+            // ne distingue PAS trois causes : l'appel qui ne resout pas, la fonction qui rend -1
+            // (slot absent), et la valeur qui n'a pas bouge de 5 cm. Trois verdicts opposes, un
+            // seul silence — c'est exactement la famille de defaut que ce depot paye le plus cher.
+            const bool appelOk = Red::CallVirtual(this, "TesseraZTete", zTete, entite);
+            if (!appelOk || zTete <= 0.0f)
             {
-                const int cm = static_cast<int>(hauteur * 100.0f);
+                if (suivi.derniereHauteurTeteCm != -1)
+                {
+                    suivi.derniereHauteurTeteCm = -1;
+                    char pourquoi[64];
+                    std::snprintf(pourquoi, sizeof(pourquoi), "appel=%d,z=%.2f", appelOk ? 1 : 0, zTete);
+                    g_telemetrie.Evenement("hauteur_echec", networkId, pourquoi);
+                }
+            }
+            else
+            {
+                // La soustraction se fait ICI : l'accesseur scripte `GetWorldPosition()` rend zero
+                // sur un pantin distant (mesure du 2026-08-19 : la hauteur relevee valait 2 468 cm,
+                // soit le Z monde entier). `Entity_GetWorldPosition` est le chemin dont l'effet est
+                // etabli, et il est deja lu partout ailleurs dans ce fichier.
+                // ⚠️ ON JOURNALISE LE Z ABSOLU, LA SOUSTRACTION SE FAIT A L'ANALYSE.
+                //
+                // Premiere tentative : resoudre le handle ici pour lire les pieds. Mais
+                // `GetDynamicEntity` rend `nullopt` dans cette boucle — mesure du 2026-08-19 :
+                // `loco_moteur` sortait onze fois et `hauteur` **zero** fois, sur les memes
+                // entites et dans la meme iteration. On ne cherche pas pourquoi : le Z du sol est
+                // deja dans le journal (chaque ligne `rx` le porte), donc la soustraction ne
+                // coute rien a l'analyse et ne peut pas echouer.
+                //
+                // C'est la regle qui evite une classe entiere de bugs d'instrument : *ne calcule
+                // pas dans la sonde ce que le journal permet de calculer apres coup.* Un calcul
+                // fait a la mesure peut echouer en silence ; un calcul fait a l'analyse se
+                // rejoue autant de fois qu'on veut, sur des donnees deja acquises.
+                const int cm = static_cast<int>(zTete * 100.0f);
                 if (std::abs(cm - suivi.derniereHauteurTeteCm) >= 5)
                 {
                     suivi.derniereHauteurTeteCm = cm;

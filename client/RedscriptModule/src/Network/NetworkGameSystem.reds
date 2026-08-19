@@ -1643,6 +1643,52 @@ public native class NetworkGameSystem extends IGameSystem {
         return WorldPosition.ToVector4(WorldTransform.GetWorldPosition(transformation)).Z;
     }
 
+    // ── LE CONTRÔLE QUI MANQUAIT, SANS AVOIR À VISER QUI QUE CE SOIT ───────────────────────
+    //
+    // F-PLY-132 a laissé la question ouverte : *un piéton **natif** en marche atteint-il `Move` ?*
+    // Le premier essai désignait le sujet par `GetLookAtObject` — le seul désignateur du harnais —
+    // et attrapait donc statistiquement un badaud immobile. Il fallait une énumération.
+    //
+    // Elle existe, et depuis toujours : `GameObject.GetEntitiesAroundObject(rayon, filtre)`
+    // (`gameObject.script:935`), qui monte une `TargetSearchQuery` et rend les entités. Le filtre
+    // `TSF_NPC()` ne garde que les pantins.
+    //
+    // ⚠️ ON REND UN MASQUE, PAS UNE VALEUR. La question n'est pas « que fait ce PNJ-ci » mais
+    // « **l'état `Move` apparaît-il chez quelqu'un** ». Un masque de bits — un bit par valeur de
+    // `moveLocomotionAction` — répond à ça sur toute la population d'un coup, tient dans un entier,
+    // et se lit sans ambiguïté :
+    //
+    //     bit 0 Undefined · bit 1 Exploration · bit 2 Idle · bit 3 IdleTurn
+    //     bit 4 Reposition · bit 5 Start · **bit 6 Move** · bit 7 Stop
+    //
+    // Un masque qui ne contient jamais le bit 6 sur des centaines de relevés et des dizaines de
+    // piétons est une réponse ; un pantin unique qui rend `Undefined` n'en est pas une.
+    //
+    // Rend -1 si le joueur ou le système manquent — un résultat, pas une absence de résultat.
+    public func TesseraEtatsLocomotionAutour(rayon: Float) -> Int32 {
+        let joueur = GameInstance.GetPlayerSystem(GetGameInstance()).GetLocalPlayerControlledGameObject();
+        if !IsDefined(joueur) {
+            return -1;
+        }
+        let entites = joueur.GetEntitiesAroundObject(rayon, TSF_NPC());
+        let masque: Int32 = 0;
+        let i = 0;
+        while i < ArraySize(entites) {
+            let pantin = entites[i] as ScriptedPuppet;
+            if IsDefined(pantin) {
+                let politiques = pantin.GetMovePolicesComponent();
+                if IsDefined(politiques) {
+                    let action = EnumInt(politiques.GetCurrentLocomotionAction());
+                    if action >= 0 && action < 31 {
+                        masque = masque | (1 << action);
+                    }
+                }
+            }
+            i += 1;
+        }
+        return masque;
+    }
+
     public func TesseraLireLocomotion(entityId: EntityID) -> Int32 {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
