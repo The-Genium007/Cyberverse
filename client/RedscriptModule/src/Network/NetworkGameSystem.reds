@@ -1483,13 +1483,20 @@ public native class NetworkGameSystem extends IGameSystem {
         // (`twitch_hit_scale` sur un NPCPuppet) qui n'existent pas dans ce graphe. On ne peut donc
         // pas savoir si la clé attendue est le GROUPE ou le CHAMP.
         //
-        // Le groupe `stanceState` n'a qu'UN nœud (`Int stanceState state`) : quelle que soit la
-        // convention, l'une des deux lignes vise juste et aucune ne peut viser un autre nœud de ce
-        // groupe. Les pousser toutes les deux ne crée donc aucune ambiguïté d'interprétation — le
-        // verdict reste binaire, et il est à l'œil.
+        // ⚠️ SEULEMENT LA FORME « GROUPE ». J'avais d'abord poussé les deux, en écrivant que « le
+        // groupe `stanceState` n'a qu'un nœud, donc aucune ambiguïté ». C'était juste pour la clé
+        // GROUPE et **faux dans l'autre sens** : si la clé attendue est le NOM, alors
+        // `SetInputInt(n"state", 2)` vise les **dix-huit** nœuds du graphe qui s'appellent `state`
+        // — `ShootAction`, `ReloadAction`, `Equip`, `Unequip`, `CoverStance`, `highLevelState`,
+        // `Carry`, `SE_WeaponJammed`… On écrirait « 2 » dans dix-sept machines d'état qui n'ont
+        // rien demandé, et le résultat serait un pantin dans un état incohérent — c'est-à-dire un
+        // défaut bien pire, et bien plus difficile à lire, que l'accroupi qui manque.
+        //
+        // La convention de clé se teste donc sur un nom **unique** dans le graphe, jamais sur un
+        // nom partagé. `TesseraPousserFranchissement` le fait déjà avec `explorationType` et
+        // `action`, qui n'existent qu'à un seul endroit : l'information est obtenue sans le risque.
         let etatPosture = EnumInt(accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
         AnimationControllerComponent.SetInputInt(puppet, n"stanceState", etatPosture);
-        AnimationControllerComponent.SetInputInt(puppet, n"state", etatPosture);
 
         // Voie B — signal de comportement. C'est celle qu'on teste maintenant.
         let pantin = entity as NPCPuppet;
@@ -1548,9 +1555,14 @@ public native class NetworkGameSystem extends IGameSystem {
         //
         // `moveLocomotionAction` : Exploration = 1 · Idle = 2 (le retour au sol).
         // `moveExplorationType`  : Jump = 2 · None = 0.
+        //
+        // ⚠️ `action` et `explorationType` seulement — PAS `state`. Ces deux noms-là sont uniques
+        // dans le graphe ; `state` y apparaît **dix-huit fois**, réparti sur autant de machines
+        // d'état sans rapport. Le pousser reviendrait à écrire dans dix-sept d'entre elles au
+        // hasard (voir la note de `TesseraPousserPosture`). Le groupe `exploration` porte bien un
+        // `state`, mais on ne peut pas le viser par son nom sans viser tous les autres.
         AnimationControllerComponent.SetInputInt(puppet, n"action", enVol ? 1 : 2);
         AnimationControllerComponent.SetInputInt(puppet, n"explorationType", enVol ? 2 : 0);
-        AnimationControllerComponent.SetInputInt(puppet, n"state", enVol ? 1 : 0);
         return true;
     }
 
