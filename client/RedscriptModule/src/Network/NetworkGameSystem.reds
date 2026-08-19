@@ -1670,8 +1670,18 @@ public native class NetworkGameSystem extends IGameSystem {
         if !IsDefined(joueur) {
             return -1;
         }
+        // ⚠️ REDSCRIPT N'A PAS D'OPÉRATEUR DE DÉCALAGE. `1 << action` est une erreur de SYNTAXE,
+        // pas un avertissement — et une erreur de syntaxe fait tomber **tout** `r6/scripts`, donc
+        // le jeu ne finit jamais de charger et le watchdog du moteur le tue au bout de 120 s
+        // (`engineWatchdog.cpp:198`). Vécu deux fois le 2026-08-19, et le symptôme — « aucun
+        // journal neuf » — ne dit rien de sa cause : c'est `r6/logs/redscript_rCURRENT.log` qui la
+        // porte, et lui seul.
+        //
+        // On compose donc le masque en arithmétique pure : un tableau de drapeaux, puis une
+        // puissance de deux accumulée. Plus long, et sans opérateur exotique.
         let entites = joueur.GetEntitiesAroundObject(rayon, TSF_NPC());
-        let masque: Int32 = 0;
+        let vus: array<Bool>;
+        ArrayResize(vus, 8);
         let i = 0;
         while i < ArraySize(entites) {
             let pantin = entites[i] as ScriptedPuppet;
@@ -1679,12 +1689,22 @@ public native class NetworkGameSystem extends IGameSystem {
                 let politiques = pantin.GetMovePolicesComponent();
                 if IsDefined(politiques) {
                     let action = EnumInt(politiques.GetCurrentLocomotionAction());
-                    if action >= 0 && action < 31 {
-                        masque = masque | (1 << action);
+                    if action >= 0 && action < 8 {
+                        vus[action] = true;
                     }
                 }
             }
             i += 1;
+        }
+        let masque: Int32 = 0;
+        let puissance: Int32 = 1;
+        let k = 0;
+        while k < 8 {
+            if vus[k] {
+                masque += puissance;
+            }
+            puissance *= 2;
+            k += 1;
         }
         return masque;
     }
