@@ -1593,6 +1593,45 @@ public native class NetworkGameSystem extends IGameSystem {
     // Encodage du retour, pour ne coûter qu'un entier sur le fil de la télémétrie :
     //   `action * 10 + exploration`, et **-1** si le composant est injoignable — ce qui est un
     //   résultat, pas une absence de résultat.
+    // ── MESURER L'ACCROUPI AU LIEU DE LE REGARDER ─────────────────────────────────────────
+    //
+    // Le verdict « le pantin est-il accroupi ? » était jusqu'ici réputé inaccessible à un
+    // instrument : il fallait un œil. Le 2026-08-19 a montré que l'œil ne suffit pas non plus —
+    // les captures de l'avatar distant montrent ses CHEVEUX en travers de l'objectif, des mèches
+    // étirées jusqu'à la caméra, alors que l'entité est à 6,50 m, dead centre, écart au cap 0°.
+    // Quarante secondes de stabilisation n'y changent rien. Aucune image n'est exploitable, et
+    // aucun chiffre existant ne le signale : la garde de cadrage la déclare valide.
+    //
+    // Or la hauteur de la TÊTE est une grandeur, pas un jugement. `SlotComponent.GetSlotTransform`
+    // rend la transformation monde d'un slot nommé, et `'Head'` en est un (utilisé par le jeu pour
+    // viser la tête, `aiActionHelper.script:177`). La différence entre la tête et la racine de
+    // l'entité — c'est-à-dire les pieds — donne la hauteur du pantin :
+    //
+    //     debout    ~1,70 m        accroupi    ~1,20 m        écart attendu ~0,50 m
+    //
+    // C'est binaire, autonome, et immunisé contre tout défaut de rendu. Un pantin dont la tête ne
+    // descend pas n'est pas accroupi, quelle que soit l'image.
+    //
+    // Rend -1.0 si l'entité, le composant ou le slot manquent — ce qui est un résultat, pas une
+    // absence de résultat : un avatar sans `SlotComponent` est un fait qu'on veut lire.
+    public func TesseraHauteurTete(entityId: EntityID) -> Float {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return -1.0;
+        }
+        let slots = puppet.GetSlotComponent();
+        if !IsDefined(slots) {
+            return -1.0;
+        }
+        let transformation: WorldTransform;
+        if !slots.GetSlotTransform(n"Head", transformation) {
+            return -1.0;
+        }
+        let tete = WorldPosition.ToVector4(WorldTransform.GetWorldPosition(transformation));
+        return tete.Z - puppet.GetWorldPosition().Z;
+    }
+
     public func TesseraLireLocomotion(entityId: EntityID) -> Int32 {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;

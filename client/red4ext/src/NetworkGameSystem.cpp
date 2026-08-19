@@ -4391,6 +4391,33 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
                               lu < 0 ? -1 : lu / 10, lu < 0 ? -1 : lu % 10);
                 g_telemetrie.Evenement("loco_moteur", networkId, etat);
             }
+
+            // -- L'ACCROUPI, MESURE AU LIEU D'ETRE REGARDE --------------------------------
+            //
+            // « Le pantin est-il accroupi ? » passait pour inaccessible a un instrument. Le
+            // 2026-08-19 a montre que l'oeil ne suffit pas non plus : les captures de l'avatar
+            // distant montrent ses CHEVEUX en travers de l'objectif, alors que l'entite est a
+            // 6,50 m et parfaitement cadree. Quarante secondes de stabilisation n'y changent
+            // rien, et aucun chiffre existant ne le signale.
+            //
+            // La hauteur de la TETE, elle, est une grandeur. Debout ~1,70 m, accroupi ~1,20 m :
+            // un ecart d'un demi-metre, binaire, autonome, insensible a tout defaut de rendu.
+            //
+            // Seuil de 5 cm : sous cette valeur c'est la respiration de l'animation, pas une
+            // posture. Sans seuil, la hauteur bougerait a chaque frame et le journal ne dirait
+            // plus rien -- le meme piege que la bande morte des placements.
+            float hauteur = -1.0f;
+            if (Red::CallVirtual(this, "TesseraHauteurTete", hauteur, entite))
+            {
+                const int cm = static_cast<int>(hauteur * 100.0f);
+                if (std::abs(cm - suivi.derniereHauteurTeteCm) >= 5)
+                {
+                    suivi.derniereHauteurTeteCm = cm;
+                    char mesure[48];
+                    std::snprintf(mesure, sizeof(mesure), "tete=%dcm", cm);
+                    g_telemetrie.Evenement("hauteur", networkId, mesure);
+                }
+            }
         }
 
         // ── SONDE T7 ───────────────────────────────────────────────────────────────────────

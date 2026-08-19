@@ -229,6 +229,10 @@ struct SuiviAvatar
     /// dit qu'un avatar naît sans composant de mouvement, exactement le genre de fait qu'on
     /// cherche.
     std::int32_t derniereLocoMoteur = -2;
+
+    /// Derniere hauteur de tete relevee, en centimetres au-dessus de la racine de l'entite.
+    /// -9999 = jamais relevee, pour que le tout premier releve passe toujours le seuil.
+    std::int32_t derniereHauteurTeteCm = -9999;
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 
