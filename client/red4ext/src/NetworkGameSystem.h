@@ -213,6 +213,13 @@ struct SuiviAvatar
     /// Un avatar qui apparaît DEJA accroupi recoit quand meme sa pousse : son etat voulu vaut 1,
     /// donc different de 0. Le tri-etat ne servait a rien.
     std::int8_t dernierePostureAccroupie = 0;
+
+    /// L'avatar etait-il EN VOL au dernier passage ? Sert a ne pousser l'animation de
+    /// franchissement qu'aux deux transitions -- decollage et atterrissage -- et jamais entre les
+    /// deux. Un bool suffit ici, contrairement a la posture : un pantin naît AU SOL, donc l'etat
+    /// initial `false` est le bon et ne provoque aucune ecriture dans la frame de naissance
+    /// (F-PLY-119, qui rendait les corps invisibles).
+    bool dernierEnVol = false;
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 

@@ -4524,6 +4524,29 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                    accroupi ? (pousse ? "accroupi" : "accroupi_refuse")
                                             : (pousse ? "debout" : "debout_refuse"));
         }
+
+        // -- L'ANIMATION DU SAUT, AU DECOLLAGE ET A L'ATTERRISSAGE (F-PNJ-164) ---------------
+        //
+        // La POSITION du saut est repliquee depuis ce matin (F-PLY-117, amplitude relue 1,500 m).
+        // Ce qui manque est l'ANIMATION : le pantin monte et redescend en gardant sa pose debout.
+        //
+        // F-PNJ-163 disait le 2026-08-18 qu'aucune entree du graphe n'adresse le saut. C'etait
+        // vrai sur le NOM. Le groupe `exploration` etait pourtant dans sa propre liste, et son
+        // enumeration contient `Jump` -- le selecteur a donc un nom, un type et une echelle.
+        //
+        // MEME REGLE QUE LA POSTURE : sur CHANGEMENT, jamais en continu. Un saut dure moins d'une
+        // seconde ; le pousser a chaque frame ferait 60 ecritures de graphe pour un geste qui en
+        // demande deux -- et c'est le regime qui a fait tomber le jeu deux fois le 2026-08-06.
+        const bool enVolMaintenant = pose.locomotion == 6;
+        if (suiviPosture.dernierEnVol != enVolMaintenant)
+        {
+            suiviPosture.dernierEnVol = enVolMaintenant;
+            bool franchi = false;
+            Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, enVolMaintenant);
+            g_telemetrie.Evenement("franchissement", networkId,
+                                   enVolMaintenant ? (franchi ? "decollage" : "decollage_refuse")
+                                                   : (franchi ? "sol" : "sol_refuse"));
+        }
     }
     // ── IMMOBILE : rien a animer ───────────────────────────────────────────────────────────
     //

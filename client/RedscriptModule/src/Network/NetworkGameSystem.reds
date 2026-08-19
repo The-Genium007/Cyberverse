@@ -1458,12 +1458,99 @@ public native class NetworkGameSystem extends IGameSystem {
         posture.state = EnumInt(accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
         AnimationControllerComponent.ApplyFeature(puppet, n"stanceState", posture);
 
+        // ── VOIE C — LA SECONDE PORTE DU MÊME COMPOSANT (2026-08-19) ───────────────────────
+        //
+        // `ApplyFeature` est ÉLIMINÉ pour la posture (F-PLY-120) : bonne classe, recette du jeu
+        // copiée verbatim, pantin debout. Mais `AnimationControllerComponent` expose une SECONDE
+        // API que notre code n'avait jamais appelée une seule fois — recherche exhaustive du
+        // 2026-08-19 sur tout `Cyberverse/client`.
+        //
+        // La différence est structurelle, pas cosmétique :
+        //   · `ApplyFeature(obj, groupe, feature)` empile un `AnimInputSetterAnimFeature` et écrit
+        //     TOUS les nœuds du groupe, en lisant les champs de la feature par leur `name` ;
+        //   · `SetInputInt(obj, clé, v)` empile un `AnimInputSetterInt` et écrit UN nœud.
+        // Deux événements différents, donc deux chemins différents dans le moteur.
+        //
+        // ⚠️ POURQUOI ICI ET PAS DANS UNE SONDE LUA. Essayé le 2026-08-19 par le pont du harnais :
+        // l'avatar se résout, `NewObject(entAnimInputSetterInt)` réussit, `key` et `value` se
+        // posent — et **`QueueEvent` rend `false`**. Le bac à sable CET ne livre pas l'événement,
+        // exactement comme pour `ApplyFeature` la veille. Le redscript, lui, y arrive : c'est la
+        // même fonction qui pousse la voie A juste au-dessus, tous les jours.
+        //
+        // ⚠️ LA CLÉ NE SE DÉDUIT PAS, elle se mesure — d'où deux écritures et non une. Extraction
+        // du graphe humanoïde livré (2026-08-19) : 187 couples `(groupe, champ)` uniques, aucun
+        // sans groupe, et **18 nœuds s'appellent `state`**. Le jeu, lui, passe des noms plats
+        // (`twitch_hit_scale` sur un NPCPuppet) qui n'existent pas dans ce graphe. On ne peut donc
+        // pas savoir si la clé attendue est le GROUPE ou le CHAMP.
+        //
+        // Le groupe `stanceState` n'a qu'UN nœud (`Int stanceState state`) : quelle que soit la
+        // convention, l'une des deux lignes vise juste et aucune ne peut viser un autre nœud de ce
+        // groupe. Les pousser toutes les deux ne crée donc aucune ambiguïté d'interprétation — le
+        // verdict reste binaire, et il est à l'œil.
+        let etatPosture = EnumInt(accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
+        AnimationControllerComponent.SetInputInt(puppet, n"stanceState", etatPosture);
+        AnimationControllerComponent.SetInputInt(puppet, n"state", etatPosture);
+
         // Voie B — signal de comportement. C'est celle qu'on teste maintenant.
         let pantin = entity as NPCPuppet;
         if !IsDefined(pantin) {
             return false; // cast échoué : la voie B n'a pas été tentée, et il faut le savoir.
         }
         NPCPuppet.ChangeStanceState(pantin, accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
+        return true;
+    }
+
+    // ── LE SAUT A UN NOM, ET CE N'EST PAS « JUMP » (F-PNJ-164, 2026-08-19) ─────────────────
+    //
+    // F-PNJ-163 concluait le 2026-08-18 : « aucune des 51 entrées d'animation du graphe n'est un
+    // saut ». Vrai sur le NOM — ni `jump`, ni `inAir`, ni `fall`. Mais le groupe `exploration`
+    // était dans la liste, et personne n'avait ouvert son énumération :
+    //
+    //     moveExplorationType { None, Ladder, Jump = 2, Climb, Vault, ChargedJump, ThrusterJump }
+    //     moveLocomotionAction { Undefined, Exploration = 1, Idle, IdleTurn, Reposition, … }
+    //
+    // Le sélecteur que le graphe « ne laissait toucher à personne » s'appelle donc
+    // `exploration.explorationType`, et la classe qui le porte existe au RTTI :
+    // `animAnimFeature_NPCExploration { explorationType, state, movementType, isEvenLoop,
+    // playbackTime }`. Les clips, eux, étaient déjà là — `jump_walk_*`, `jump_sprint_*`,
+    // `jump_idle_*`, chacun en variante `low` ET `high`, ce qui donne raison à l'intuition de
+    // Lucas (« c'est peut-être en fonction de la hauteur »).
+    //
+    // La position du saut est répliquée depuis ce matin (F-PLY-117, amplitude relue 1,500 m) :
+    // ce qui manque est uniquement l'ANIMATION. On la demande donc au moment où l'avatar monte.
+    //
+    // ⚠️ DEUX ÉCRITURES, PAS UNE. Le graphe sélectionne sur `locomotion.action = Exploration`
+    // AVANT de regarder `exploration.explorationType` — annoncer le type de franchissement sans
+    // dire qu'on franchit ne devrait rien produire. Les deux partent ensemble ou ne servent à rien.
+    //
+    // ⚠️ NON MESURÉ. C'est une recette lue dans la donnée et les scripts décompilés, pas un
+    // résultat. Le verdict est à l'œil, sur un avatar EN L'AIR. Si elle échoue, la suite est
+    // nommée : `ExplorationEnteredEvent { type : moveExplorationType }`, un événement natif du
+    // moteur, instanciable par son nom RTTI comme `entAnimInputSetterAnimFeature` l'a été.
+    public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+
+        // ⚠️ PAS D'`ApplyFeature` ICI, ET CE N'EST PAS UN CHOIX — c'est une contrainte mesurée.
+        // Les classes que le graphe attend pour ces deux groupes, `animAnimFeature_NPCExploration`
+        // et `animAnimFeature_Locomotion`, existent au RTTI mais **ne sont déclarées dans AUCUN
+        // script décompilé** : redscript ne peut donc pas les construire. C'est le piège de
+        // nommage de la skill pris dans l'autre sens — le dump ne fait pas foi sur les noms
+        // scriptés, mais l'inverse est vrai aussi : ce qu'il liste n'est pas forcément scriptable.
+        // (`AnimFeature_NPCState`, elle, existait — d'où la voie A de la posture.)
+        //
+        // `SetInputInt` n'a besoin d'aucune classe : il écrit le nœud directement. C'est donc la
+        // SEULE voie scriptée vers ces deux groupes, et cela ne coûte rien puisqu'elle est de
+        // toute façon celle qu'on teste.
+        //
+        // `moveLocomotionAction` : Exploration = 1 · Idle = 2 (le retour au sol).
+        // `moveExplorationType`  : Jump = 2 · None = 0.
+        AnimationControllerComponent.SetInputInt(puppet, n"action", enVol ? 1 : 2);
+        AnimationControllerComponent.SetInputInt(puppet, n"explorationType", enVol ? 2 : 0);
+        AnimationControllerComponent.SetInputInt(puppet, n"state", enVol ? 1 : 0);
         return true;
     }
 
