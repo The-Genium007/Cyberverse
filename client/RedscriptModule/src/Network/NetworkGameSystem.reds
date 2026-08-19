@@ -1437,10 +1437,25 @@ public native class NetworkGameSystem extends IGameSystem {
             return false;
         }
 
-        // Voie A — écriture d'état dans le graphe d'animation. RÉFUTÉE (F-PLY-053), gardée comme
-        // TÉMOIN : c'est elle qui rend lisible la comparaison avec la session précédente.
-        let posture = new AnimFeature_Stance();
-        posture.SetStanceState(accroupi ? animStanceState.Crouch : animStanceState.Stand);
+        // ── DEPUIS AOÛT, C'ÉTAIT LA MAUVAISE CLASSE (corrigé le 2026-08-19, F-PLY-116) ─────────
+        //
+        // Le nom du trait était bon (`stanceState`), la cible aussi. Ce qu'on y poussait ne l'était
+        // pas : `AnimFeature_Stance` (via `SetStanceState`, échelle `animStanceState`) quand
+        // l'entrée `stanceState` du graphe déclare `animAnimFeature_NPCState` — une AUTRE classe,
+        // avec un simple `Int32 state` sur l'échelle `gamedataNPCStanceState`. Deux classes, deux
+        // échelles : l'appel était accepté et ne décrivait rien.
+        //
+        // La recette ci-dessous n'est pas déduite : c'est mot pour mot ce que le jeu lui-même fait
+        // dans `npcStateComponent.script:1152` (`UpdateStanceState`), y compris le nom du trait
+        // (`m_stanceAnimFeatureName`, dont le défaut EST 'stanceState') et la cible (`GetOwner()`).
+        //
+        // ⚠️ Le piège de nommage, dans les DEUX sens, et il a coûté trois lancements. Le dump RTTI
+        // ne connaît que `animAnimFeature_NPCState` — c'est ce nom-là qu'il faut donner à
+        // `NewObject` depuis Lua. redscript, lui, ne connaît que l'alias court
+        // `AnimFeature_NPCState` (`animFeature.script:20`). Chercher la classe dans le dump menait
+        // à croire qu'elle était inaccessible au script ; elle y est depuis toujours.
+        let posture = new AnimFeature_NPCState();
+        posture.state = EnumInt(accroupi ? gamedataNPCStanceState.Crouch : gamedataNPCStanceState.Stand);
         AnimationControllerComponent.ApplyFeature(puppet, n"stanceState", posture);
 
         // Voie B — signal de comportement. C'est celle qu'on teste maintenant.

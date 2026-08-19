@@ -4496,6 +4496,35 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         return; // on ne corrige pas non plus la position : sans nouvelles, on n'invente rien.
     }
 
+    // ── L'ACCROUPISSEMENT N'ETAIT POUSSE PAR PERSONNE (cable le 2026-08-19) ──────────────
+    //
+    // `TesseraPousserPosture` existe depuis aout et n'avait qu'UN SEUL appelant : la sonde T7,
+    // sous `g_sondeAccroupi`. En regime normal — celui d'un joueur, pas d'une mesure — personne
+    // ne la rappelait. On a donc passe trois semaines a se demander pourquoi l'accroupissement ne
+    // se voyait pas, en instrumentant une fonction que le jeu n'appelait jamais.
+    //
+    // C'est le meme defaut que le saut plus bas : un geste correct sur un canal qui ne part pas.
+    // L'allure porte deja l'information (4 = CrouchIdle, 5 = CrouchMove, mesures du 2026-07-23),
+    // elle voyage sur le fil depuis le gel du palier 2, et elle arrive ici intacte.
+    //
+    // ⚠️ SUR CHANGEMENT, jamais en continu. Une ecriture de graphe d'animation par avatar et par
+    // frame, c'est le regime qui a fait tomber le jeu deux fois le 2026-08-06. Un accroupissement
+    // est un EVENEMENT : il se pousse quand il arrive, et se tait ensuite. Le -1 initial garantit
+    // qu'un avatar qui naît deja accroupi recoive quand meme sa premiere pousse.
+    {
+        auto& suiviPosture = g_suiviAvatars[networkId];
+        const bool accroupi = pose.locomotion == 4 || pose.locomotion == 5;
+        const std::int8_t voulue = accroupi ? 1 : 0;
+        if (suiviPosture.dernierePostureAccroupie != voulue)
+        {
+            suiviPosture.dernierePostureAccroupie = voulue;
+            bool pousse = false;
+            Red::CallVirtual(this, "TesseraPousserPosture", pousse, entityId, accroupi);
+            g_telemetrie.Evenement("posture", networkId,
+                                   accroupi ? (pousse ? "accroupi" : "accroupi_refuse")
+                                            : (pousse ? "debout" : "debout_refuse"));
+        }
+    }
     // ── IMMOBILE : rien a animer ───────────────────────────────────────────────────────────
     //
     // Une commande de marche vers un point ou l'on est deja produit un pietinement. On place, et
@@ -4861,21 +4890,49 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // Un correcteur maximal qui ne rattrape toujours pas veut dire que le probleme n'est PAS sa
     // force : ce sont les passages qui sont trop espaces. On mesure donc ca, au lieu de le deviner.
 
+    // ── LE SAUT ÉTAIT ÉCRIT CONTRE UNE FONCTION INERTE (corrigé le 2026-08-19) ───────────
+    //
+    // Le raisonnement ci-dessus est juste — en l'air, la verticale nous revient — mais il
+    // s'appliquait par `PlacerSansCommande`, dont on a MESURÉ depuis qu'elle n'applique RIEN sur un
+    // avatar distant (F-PLY-073 : 10,000 m d'écart sur une cible arbitraire ; F-PLY-067 : la
+    // position relue dans la MÊME frame est déjà fausse). Le correctif du 2026-08-13 rendait donc la
+    // verticale à une fonction qui ne la posait pas : le pantin restait collé au sol, exactement
+    // comme avant le correctif, et la plainte de Lucas (« le saut ne se fait plus du tout ») n'a
+    // jamais cessé d'être vraie.
+    //
+    // C'est la famille de défaut du jour : un geste correct envoyé par un canal inerte. Même cause
+    // que la branche « immobile » quelques lignes plus haut, même correctif.
+    //
+    // `SetEntityPosition` est le seul placement dont l'effet soit mesuré (F-PLY-085). Il empile un
+    // `AITeleportCommand`, d'où la CADENCE, qui n'est pas une précaution de style : à 60 fps sans
+    // borne, 50 sauteurs simultanés referaient les ~3 000 commandes/s qui ont fait tomber le jeu
+    // deux fois le 2026-08-06. 10 Hz donne ~8 placements sur un saut de 0,8 s — assez pour dessiner
+    // l'arc — et plafonne ce même pire cas à 500/s.
+    //
+    // `depuisPlaceS` est réutilisé tel quel : il est incrémenté à chaque passage juste au-dessus et
+    // remis à zéro par tout placement, donc il dit déjà exactement « depuis combien de temps cet
+    // avatar n'a pas été posé ». La branche immobile, elle, a besoin de son propre compteur parce
+    // qu'elle sort AVANT l'incrément (voir `depuisPlacementImmobileS`).
+    static constexpr float kPeriodePlacementVolS = 0.1f;
     if (!g_suspendreCorrections && enLair && derive <= kSautFrancM)
     {
-        // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On suit
-        // donc la verticale SANS lissage, et on garde l'amortissement sur l'horizontale.
-        const RED4ext::Vector4 vol{
-            position.X + dx * kFractionCorrection,
-            position.Y + dy * kFractionCorrection,
-            positionVoulue.Z,
-            1.0f};
-        PlacerSansCommande(entityId, vol, pose.yaw);
-        { auto& s = g_suiviAvatars[networkId];
-          s.placeX = vol.X; s.placeY = vol.Y; s.depuisPlaceS = 0.0f; s.placeZ = vol.Z; s.placeValide = true;
-          const auto reluvol = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
-          const float rvolx = reluvol.X - vol.X, rvoly = reluvol.Y - vol.Y, rvolz = reluvol.Z - vol.Z;
-          g_ecartApresPose = std::sqrt(rvolx * rvolx + rvoly * rvoly + rvolz * rvolz); }
+        auto& s = g_suiviAvatars[networkId];
+        if (s.depuisPlaceS >= kPeriodePlacementVolS)
+        {
+            // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On
+            // suit donc la verticale SANS lissage, et on garde l'amortissement sur l'horizontale.
+            const RED4ext::Vector4 vol{
+                position.X + dx * kFractionCorrection,
+                position.Y + dy * kFractionCorrection,
+                positionVoulue.Z,
+                1.0f};
+            SetEntityPosition(entityId, vol, pose.yaw);
+            s.placeX = vol.X; s.placeY = vol.Y; s.depuisPlaceS = 0.0f; s.placeZ = vol.Z; s.placeValide = true;
+            const auto reluvol = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+            const float rvolx = reluvol.X - vol.X, rvoly = reluvol.Y - vol.Y, rvolz = reluvol.Z - vol.Z;
+            g_ecartApresPose = std::sqrt(rvolx * rvolx + rvoly * rvoly + rvolz * rvolz);
+            g_telemetrie.Evenement("saut_place", networkId, "");
+        }
     }
     else if (!g_suspendreCorrections && deriveHorizontale > kCorrectionMiniM
              && derive <= kSautFrancM)

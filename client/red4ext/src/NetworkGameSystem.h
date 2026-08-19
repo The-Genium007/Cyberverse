@@ -201,6 +201,18 @@ struct SuiviAvatar
     /// ait la preuve qu'il applique (F-PLY-085), mais aussi celui qui avait fait tomber le jeu en
     /// etant appele a chaque frame (2026-08-06).
     float depuisPlacementImmobileS = 0.0f;
+
+    /// Derniere posture POUSSEE a cet avatar : 0 debout, 1 accroupi.
+    ///
+    /// ⚠️ INITIALISE A 0, PAS A -1, et ce n'est pas un detail de style. Un pantin naît DEBOUT :
+    /// initialiser a -1 (« on ne lui a rien pousse ») provoquait une ecriture de graphe
+    /// d'animation dans la frame meme de sa naissance, avant que son apparence ne soit posee.
+    /// Elle n'apprenait rien au moteur — il etait deja debout — et coûtait une ecriture par
+    /// avatar au pire moment de sa vie.
+    ///
+    /// Un avatar qui apparaît DEJA accroupi recoit quand meme sa pousse : son etat voulu vaut 1,
+    /// donc different de 0. Le tri-etat ne servait a rien.
+    std::int8_t dernierePostureAccroupie = 0;
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 
