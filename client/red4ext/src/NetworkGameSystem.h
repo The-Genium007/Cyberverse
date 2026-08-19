@@ -220,6 +220,15 @@ struct SuiviAvatar
     /// initial `false` est le bon et ne provoque aucune ecriture dans la frame de naissance
     /// (F-PLY-119, qui rendait les corps invisibles).
     bool dernierEnVol = false;
+
+    /// Derniere valeur lue de `TesseraLireLocomotion` (`action * 10 + exploration`), pour
+    /// n'ecrire au journal que les CHANGEMENTS d'etat de la machine de deplacement.
+    ///
+    /// -2 et non -1 comme sentinelle : -1 est une valeur LEGITIME (composant injoignable), et la
+    /// confondre avec « jamais lu » ferait taire le tout premier releve -- c'est-a-dire celui qui
+    /// dit qu'un avatar naît sans composant de mouvement, exactement le genre de fait qu'on
+    /// cherche.
+    std::int32_t derniereLocoMoteur = -2;
 };
 extern std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 

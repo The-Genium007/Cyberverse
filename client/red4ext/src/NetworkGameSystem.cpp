@@ -4358,6 +4358,41 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
                       g_tamponsJoueurs.size(), avecCorps, regressions);
         g_telemetrie.Evenement("voisins", 0, detail);
 
+        // -- CE QUE LE MOTEUR CROIT ETRE EN TRAIN DE FAIRE (F-PLY-123) ----------------------
+        //
+        // Tout ce qu'on savait d'un avatar distant se deduisait de l'EXTERIEUR : position relue,
+        // derive, ordres emis. Rien ne disait ce que sa machine de deplacement pense faire --
+        // et c'est pour ca que « l'accroupi ne marche pas » et « on ne pilote rien du tout » ont
+        // mis trois semaines a se distinguer.
+        //
+        // `TesseraLireLocomotion` rend `action * 10 + exploration` :
+        //   action      0 Undefined 1 Exploration 2 Idle 3 IdleTurn 4 Reposition 5 Start 6 Move 7 Stop
+        //   exploration 0 None 1 Ladder 2 Jump 3 Climb 4 Vault 5 ChargedJump
+        //   -1          composant injoignable -- un resultat, pas une absence de resultat
+        //
+        // SUR CHANGEMENT UNIQUEMENT. Un etat de machine qui ne bouge pas n'a rien a dire, et une
+        // ligne par avatar toutes les deux secondes noierait le journal sans rien apprendre.
+        // La lecture, elle, coute un appel par avatar toutes les deux secondes : au plafond de
+        // 200 voisins, 100 appels/s -- deux ordres de grandeur sous le regime qui a fait tomber
+        // le jeu le 2026-08-06.
+        for (const auto& [networkId, entite] : m_networkedEntitiesLookup)
+        {
+            std::int32_t lu = -1;
+            if (!Red::CallVirtual(this, "TesseraLireLocomotion", lu, entite))
+            {
+                continue;
+            }
+            auto& suivi = g_suiviAvatars[networkId];
+            if (suivi.derniereLocoMoteur != lu)
+            {
+                suivi.derniereLocoMoteur = lu;
+                char etat[64];
+                std::snprintf(etat, sizeof(etat), "action=%d,exploration=%d",
+                              lu < 0 ? -1 : lu / 10, lu < 0 ? -1 : lu % 10);
+                g_telemetrie.Evenement("loco_moteur", networkId, etat);
+            }
+        }
+
         // ── SONDE T7 ───────────────────────────────────────────────────────────────────────
         //
         // Rejouée toutes les deux secondes plutôt qu'une seule fois : une entrée de graphe peut

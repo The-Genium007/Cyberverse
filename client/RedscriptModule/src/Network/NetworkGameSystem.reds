@@ -1554,6 +1554,47 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // ── L'INSTRUMENT QUI MANQUAIT : CE QUE LE MOTEUR CROIT ÊTRE EN TRAIN DE FAIRE ──────────
+    //
+    // Tout ce qu'on sait aujourd'hui d'un avatar distant, on le déduit de l'extérieur : sa
+    // position relue, sa dérive, le nombre d'ordres émis. **Rien ne dit ce que le moteur pense
+    // faire.** C'est pourquoi « l'accroupi ne marche pas » et « le saut ne marche pas » ont mis
+    // trois semaines à se distinguer d'un avatar qu'on ne pilotait tout simplement pas.
+    //
+    // `MovePoliciesComponent` expose deux LECTEURS (F-PLY-123), et ils valent autant que ses
+    // commandes :
+    //
+    //   `GetCurrentLocomotionAction()` → `moveLocomotionAction`
+    //        0 Undefined · 1 Exploration · 2 Idle · 3 IdleTurn · 4 Reposition · 5 Start · 6 Move
+    //        · 7 Stop  — c'est-à-dire l'état de la machine de déplacement, à la source.
+    //   `GetExplorationOffMeshLinkType()` → `moveExplorationType`
+    //        0 None · 1 Ladder · 2 Jump · 3 Climb · 4 Vault · 5 ChargedJump · 6 ThrusterJump
+    //        — dit si le moteur est en train de FRANCHIR quelque chose, donc de sauter.
+    //
+    // ⚠️ Le second est le contrôle négatif du chantier saut. Si l'on pousse
+    // `exploration.explorationType = Jump` et que ce lecteur rend toujours `None`, on sait que
+    // l'écriture n'atteint pas la machine — au lieu de le déduire d'une capture floue.
+    //
+    // ⚠️ L'ACCESSEUR S'ÉCRIT `GetMovePolicesComponent`, SANS LE « i ». C'est la faute de frappe de
+    // CDPR (`scriptedPuppet.script:1299`) ; la bonne orthographe ne résout pas.
+    //
+    // Encodage du retour, pour ne coûter qu'un entier sur le fil de la télémétrie :
+    //   `action * 10 + exploration`, et **-1** si le composant est injoignable — ce qui est un
+    //   résultat, pas une absence de résultat.
+    public func TesseraLireLocomotion(entityId: EntityID) -> Int32 {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return -1;
+        }
+        let politiques = puppet.GetMovePolicesComponent();
+        if !IsDefined(politiques) {
+            return -1;
+        }
+        return EnumInt(politiques.GetCurrentLocomotionAction()) * 10
+             + EnumInt(politiques.GetExplorationOffMeshLinkType());
+    }
+
     public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
