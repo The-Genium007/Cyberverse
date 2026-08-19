@@ -142,6 +142,17 @@ extern Tessera::Sync::HorlogeRendu g_horlogeRendu;
 extern std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 /// Dernier point de visée réellement commandé, et depuis quand — pour ne pas réémettre un ordre
 /// identique vingt fois par seconde (le moteur s'est effondré pour cette raison le 2026-08-06).
+/// Le joueur LOCAL etait-il en l'air au dernier envoi ?
+///
+/// Sert a dater le DECOLLAGE — le front montant, pas l'etat. Un `PlayerActionReport` part alors une
+/// fois par saut, en canal FIABLE, au lieu de laisser l'observateur deduire le geste d'une allure
+/// echantillonnee a 25 Hz.
+///
+/// Membre libre plutot que champ de `SuiviAvatar` : celui-ci decrit les avatars DISTANTS, un par
+/// id reseau. Le joueur local n'y a pas d'entree, et lui en fabriquer une melangerait deux
+/// populations dont rien d'autre ne se ressemble.
+extern bool g_localEtaitEnLair;
+
 struct SuiviAvatar
 {
     float cibleX = 0.0f;

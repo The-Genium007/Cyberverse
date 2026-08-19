@@ -703,6 +703,7 @@ StatsRoster g_statsRoster;
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
+bool g_localEtaitEnLair = false;
 
 /// Dernier masque d'etats de locomotion releve sur la population NATIVE autour du
 /// joueur. -2 = jamais releve (-1 est une valeur legitime : joueur injoignable).
@@ -1434,6 +1435,51 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
     // lecture du regard, pour que `yaw` et `lyaw` de la même ligne décrivent le même instant :
     // c'est leur COMPARAISON qui tranche la convention d'axes non mesurée.
     g_telemetrie.Emission(x, y, z, yaw, locomotion, lookYawDeg, lookPitchDeg, moveDir);
+
+    // -- LE DECOLLAGE PART COMME UN EVENEMENT, PAS SEULEMENT COMME UN ETAT ------------------
+    //
+    // L'allure voyage dans `PositionUpdate`, ECHANTILLONNEE : le serveur diffuse a 25 Hz, donc un
+    // observateur apprend le saut jusqu'a 40 ms apres son debut, plus le delai du tampon
+    // d'interpolation. Pour un geste qui dure 800 ms, c'est un sixieme du geste perdu avant meme
+    // qu'il ne commence a s'afficher.
+    //
+    // L'etat continu et l'evenement discret ont des exigences OPPOSEES : l'un tolere la perte et
+    // veut la fraîcheur, l'autre exige l'ordre et la livraison. Les faire voyager ensemble, c'est
+    // choisir les exigences du premier pour les deux.
+    //
+    // ⚠️ LE CANAL EXISTAIT DEJA AUX DEUX TIERS, ET PERSONNE NE S'EN SERVAIT. `PlayerActionReport`
+    // est dans `protocol.fbs`, le serveur le relaie aux voisins d'AoI en `PlayerEvent kind=0` —
+    // avec trois tests dedies (`player_action_report_relays_player_event_to_aoi_neighbor` et
+    // suivants) — et le client, lui, n'en emettait AUCUN et ignorait tous les `kind` autres que le
+    // stimulus. Le tiers manquant etait entierement de ce cote.
+    //
+    // Le franchissement de `!onGround` suffit a dater le decollage : `locomotion == 6` est
+    // exactement ce que `ReadLocomotionPacked` met a 6 quand `IsOnGround` est faux, et cette
+    // lecture est MESUREE (F-PLY-008, table complete des huit etats).
+    static constexpr std::uint8_t kLocoEnLair = 6;
+    static constexpr std::uint8_t kActionSaut = 0;   // eACTION_JUMP (WorldPacketsServerBound.h)
+    const bool enLairMaintenant = locomotion == kLocoEnLair;
+    if (enLairMaintenant && !g_localEtaitEnLair)
+    {
+        flatbuffers::FlatBufferBuilder bAction(128);
+        const auto rapport = cyberpunk_rp::protocol::CreatePlayerActionReport(
+            bAction, kActionSaut, /*param=*/0u);
+        const auto envAction = cyberpunk_rp::protocol::CreateClientEnvelope(
+            bAction, cyberpunk_rp::protocol::ClientMsg_PlayerActionReport, rapport.Union());
+        bAction.Finish(envAction);
+        // FIABLE, et c'est tout l'interet : un evenement perdu n'existe pas, contrairement a une
+        // pose perdue que la suivante remplace. C'est la ligne de partage entre les deux canaux —
+        // et la raison pour laquelle la pose juste en dessous part, elle, en `Unreliable`.
+        //
+        // ⚠️ `SendMessageToConnection`, jamais `SendMessage` : ce dernier est une MACRO Win32
+        // (`SendMessageA`) et le compilateur ne dit pas « fonction inconnue », il dit « ne prend
+        // pas 3 arguments » — une erreur qui envoie chercher une signature au lieu d'un nom.
+        m_pInterface->SendMessageToConnection(
+            m_hConnection, bAction.GetBufferPointer(), bAction.GetSize(),
+            k_nSteamNetworkingSend_Reliable, nullptr);
+        g_telemetrie.Evenement("action_emise", 0, "saut");
+    }
+    g_localEtaitEnLair = enLairMaintenant;
 
     const cyberpunk_rp::protocol::QVec3 pos(QuantPos(x), QuantPos(y), QuantPos(z));
     const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
@@ -3636,7 +3682,49 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
     // kind : 0=Action, 1=Stim. Un kind INCONNU se journalise et s'ignore — jamais d'interpretation
     // par defaut. Le schema est append-only : un client plus ancien que le serveur DOIT pouvoir
     // recevoir un kind qu'il ne connait pas sans mal se comporter.
+    constexpr uint8_t kKindAction = 0;
     constexpr uint8_t kKindStim = 1;
+
+    // -- kind=0 : L'EVENEMENT D'ACTION, QUI ETAIT JETE PAR TERRE ------------------------------
+    //
+    // Le serveur relaie ces evenements aux voisins d'AoI depuis longtemps, avec des tests. Ce
+    // handler, lui, les ignorait tous : seul le stimulus (kind=1) etait traite. Un saut, un tir,
+    // un rechargement arrivaient chez l'observateur et n'y produisaient rien.
+    //
+    // Ce qu'on y gagne, precisement : l'animation se declenche a l'ARRIVEE DE L'EVENEMENT au lieu
+    // d'attendre que le prochain instantane porte `locomotion == 6`. A 25 Hz de diffusion, c'est
+    // jusqu'a 40 ms sur un geste qui en dure 800 — plus le delai du tampon d'interpolation.
+    //
+    // ⚠️ La POSITION reste pilotee par le flux de poses, et c'est voulu. Un evenement ne deplace
+    // rien : il declenche. Confondre les deux ferait sauter l'avatar deux fois, une fois par
+    // l'evenement et une fois par la pose — le defaut exact que la separation des canaux evite.
+    if (event->kind() == kKindAction)
+    {
+        static constexpr std::uint8_t kActionSaut = 0;   // eACTION_JUMP
+        const auto acteur = m_networkedEntitiesLookup.find(event->actor());
+        if (acteur == m_networkedEntitiesLookup.end())
+        {
+            // Meme regle que pour le stimulus : pas de repli acceptable. Jouer l'animation sur
+            // quelqu'un d'autre serait pire que ne rien jouer.
+            g_telemetrie.Evenement("action_recue", event->actor(), "acteur_absent");
+            return;
+        }
+        if (event->action() == kActionSaut)
+        {
+            bool pousse = false;
+            Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true);
+            g_telemetrie.Evenement("action_recue", event->actor(),
+                                   pousse ? "saut" : "saut_refuse");
+        }
+        else
+        {
+            // Un code inconnu se journalise et s'ignore. Le schema est append-only : un client
+            // plus ancien que le serveur DOIT pouvoir recevoir une action qu'il ne connaît pas.
+            g_telemetrie.Evenement("action_recue", event->actor(), "code_inconnu");
+        }
+        return;
+    }
+
     if (event->kind() != kKindStim)
     {
         SDK->logger->InfoF(PLUGIN, "PlayerEvent kind=%u ignore (acteur %llu)",
