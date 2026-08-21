@@ -338,7 +338,7 @@ struct NetworkAppearance
     //
     // Blob `TSV1` opaque : magic, trois compteurs de section, puis des paires (uiSlot, name). 440
     // octets pour un V complet (27 paires). Le serveur ne l'interprete PAS — il verifie sa forme et
-    // le relaie (ADR 0027) ; le client non plus ne le lit pas champ par champ, il le rend au natif
+    // le relaie (ADR 0036) ; le client non plus ne le lit pas champ par champ, il le rend au natif
     // qui sait l'appliquer.
     //
     // ⚠️ VIDE EST LEGITIME, et ce n'est pas la meme chose que `arme = 0`. Tant que le createur de
@@ -865,11 +865,26 @@ public:
     // apparence hors catalogue. Renvoie false seulement si l'envoi lui-meme n'a pas pu partir
     // (pas de connexion) — un `true` ne dit RIEN du verdict, qui arrive en `CharacterResult`.
     /// ⚠️ `esthetiqueHex` : le blob `TSV1` en hexadecimal, ou une chaine VIDE.
-    /// Le fork TRANSPORTE l'esthetique, il ne la CAPTURE pas (ADR 0027) : c'est a l'appelant
+    /// Le fork TRANSPORTE l'esthetique, il ne la CAPTURE pas (ADR 0036) : c'est a l'appelant
     /// redscript de la fournir — le createur de personnage demain, une sonde aujourd'hui.
     /// Vide est le cas NORMAL tant que le createur n'existe pas.
     bool Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record, uint64_t apparence,
                                  const Red::CString& origine, const Red::CString& esthetiqueHex);
+    // ── LA CAPTURE : lire l'esthetique du V LOCAL, pour la proposer au serveur ───────────────
+    //
+    // Rend le blob `TSV1` en hexadecimal, a passer tel quel en dernier argument de
+    // `Tessera_CreerPersonnage`. C'est la moitie EMISSION de la boucle d'apparence, et elle vit
+    // ici plutot que dans la sonde parce que le createur de personnage tourne dans le client
+    // LIVRE, pas dans `tools/re-probe`.
+    //
+    // `aEtat` : le `gameuiCharacterCustomizationState`, obtenu cote redscript par
+    // `GameInstance.GetCharacterCustomizationSystem().GetState()`. Le type est verifie.
+    //
+    // ⚠️ RETOUR VIDE = REFUS, et c'est un cas NORMAL, pas une panne : l'etat est parfois non
+    // finalise (F-PLY-160). L'appelant doit traiter le vide comme « pas encore », journaliser, et
+    // surtout NE PAS envoyer de descripteur vide — ca donnerait un avatar sans visage chez les
+    // autres joueurs, avec un symptome tres loin de sa cause. La raison exacte part au journal.
+    Red::CString Tessera_LireEsthetique(const Red::Handle<RED4ext::IScriptable>& aEtat);
     // Entre dans le monde avec ce personnage. Meme remarque : `true` = « parti », pas « accepte ».
     bool Tessera_ChoisirPersonnage(uint64_t id);
     // Supprime un personnage du compte. Le SERVEUR arbitre (`not_owner`, `not_found`) et renvoie la
@@ -1498,6 +1513,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ApparencePersonnage);
     RTTI_METHOD(Tessera_DernierResultat);
     RTTI_METHOD(Tessera_CreerPersonnage);
+    RTTI_METHOD(Tessera_LireEsthetique);
     RTTI_METHOD(Tessera_ChoisirPersonnage);
     RTTI_METHOD(Tessera_SupprimerPersonnage);
     // Interactions joueur<->joueur. ⚠️ Chacune de ces cinq lignes a son `public native func` dans

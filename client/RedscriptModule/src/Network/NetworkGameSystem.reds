@@ -193,9 +193,22 @@ public native class NetworkGameSystem extends IGameSystem {
     // ⚠️ Une chaîne VIDE est légitime, et le serveur ne la refuse pas : l'écran du lobby ne posait
     // pas encore la question quand ce champ est arrivé. Le serveur retombe alors sur sa dotation de
     // repli, volontairement la plus maigre — personne ne doit avoir intérêt à ne pas choisir.
-    // `esthetiqueHex` : blob `TSV1` hexadecimal, ou "" — vide est LEGITIME (ADR 0027, le fork
+    // `esthetiqueHex` : blob `TSV1` hexadecimal, ou "" — vide est LEGITIME (ADR 0036, le fork
     // transporte, il ne capture pas). Ajoute en DERNIER argument : tout appelant doit le passer.
     public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName, origine: String, esthetiqueHex: String) -> Bool;
+
+    // ── LA CAPTURE — lire l'esthétique du V LOCAL, pour la proposer au serveur ────────────────
+    //
+    // Rend le blob `TSV1` en hexadécimal, à passer tel quel en dernier argument de
+    // `Tessera_CreerPersonnage`. C'est ce que le créateur de personnage appellera à la validation.
+    //
+    // `etat` : `GameInstance.GetCharacterCustomizationSystem().GetState()`.
+    //
+    // ⚠️ CHAÎNE VIDE = REFUS, et c'est un cas NORMAL, pas une panne : l'état de customisation est
+    // parfois non finalisé. Traiter le vide comme « pas encore », et surtout NE PAS l'envoyer :
+    // un descripteur vide donne un avatar sans visage chez les autres joueurs, avec un symptôme
+    // très loin de sa cause. La raison exacte du refus part dans le journal du client.
+    public native func Tessera_LireEsthetique(etat: ref<IScriptable>) -> String;
     public native func Tessera_ChoisirPersonnage(id: Uint64) -> Bool;
     // Supprime un personnage. Le serveur arbitre et renvoie la liste à jour — le client ne retire
     // rien de lui-même, sinon il afficherait une suppression qui pourrait être refusée.

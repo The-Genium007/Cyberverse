@@ -1,5 +1,7 @@
 #include "NetworkGameSystem.h"
 
+#include "TesseraEsthetiqueV.h"
+
 // Pour la sonde `Tessera_LireTableAlias` (F-PLY-101) : releve ecrit dans un fichier, et tampon de
 // lignes. Ajoutes explicitement plutot que supposes transitifs — une inclusion implicite qui
 // disparait a une montee de dependance casse un build sans que le motif soit lisible.
@@ -710,7 +712,24 @@ bool g_localEtaitEnLair = false;
 static std::int32_t g_dernierMasqueLocoNatif = -2;
 bool g_suspendreCommandes = false;
 bool g_suspendreCorrections = false;
-bool g_pilotageParEntrees = false;
+// ── ALLUME PAR DEFAUT DEPUIS LE 2026-08-21 ────────────────────────────────────────────────────
+//
+// Il valait `false`, et son SEUL appelant dans les deux depots etait un mod de SONDE. Autrement
+// dit : le correctif de marche des avatars distants existait, il etait ecrit, il etait correct — et
+// personne ne l'allumait en partie normale. Les avatars des autres joueurs ont donc glisse pendant
+// des mois avec le remede a portee de main.
+//
+// TRANCHE EN JEU PAR A/B, meme session, meme avatar, meme trace rejouee, seul ce drapeau changeant :
+//   eteint  -> « elle glisse »       allume -> « elle marche »   (verdicts de Lucas)
+// Voir F-PLY-222 (le drapeau) et F-PLY-173 (le symptome, clos).
+//
+// ⚠️ UNE RESERVE, ET ELLE EST HONNETE. Le tir portait AUSSI `corrections off`, que le harnais
+// impose pour la mesure (sinon la correction ramene l'avatar sur la position autoritaire et masque
+// l'effet). La part de chacun des deux n'est donc PAS departagee, et la configuration de
+// PRODUCTION — pilotage par entrees allume AVEC les corrections actives — n'a jamais tourne telle
+// quelle. C'est le premier point a regarder si les avatars se remettent a glisser ou se mettent a
+// tressauter : le suspect est l'interaction des deux, pas ce drapeau seul.
+bool g_pilotageParEntrees = true;
 
 bool NetworkGameSystem::Tessera_PilotageParEntrees(bool actif)
 {
@@ -3042,6 +3061,24 @@ static std::vector<uint8_t> DeHex(const std::string& hex)
         out.push_back(static_cast<uint8_t>((haut << 4) | bas));
     }
     return out;
+}
+
+Red::CString NetworkGameSystem::Tessera_LireEsthetique(
+    const Red::Handle<RED4ext::IScriptable>& aEtat)
+{
+    std::string hex;
+    std::string erreur;
+    if (!Tessera::EsthetiqueV::Lire(aEtat.instance, hex, erreur))
+    {
+        // ⚠️ LE REFUS EST JOURNALISE, TOUJOURS. Le retour est une chaine vide, et une chaine vide
+        // est indiscernable d'une autre : sans cette ligne, « non finalise » (un moment) et
+        // « classe inattendue » (un bug d'appelant) donneraient exactement le meme silence.
+        SDK->logger->WarnF(PLUGIN, "LireEsthetique REFUS : %s", erreur.c_str());
+        return Red::CString("");
+    }
+    SDK->logger->InfoF(PLUGIN, "LireEsthetique : %zu caracteres hex (%zu octets)", hex.size(),
+                       hex.size() / 2);
+    return Red::CString(hex.c_str());
 }
 
 bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record,

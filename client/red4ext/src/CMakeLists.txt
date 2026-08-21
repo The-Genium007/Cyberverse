@@ -12,6 +12,7 @@ set(PROJECT_HEADER_FILES
 set(PROJECT_SRC_FILES
   Main.cpp
   NetworkGameSystem.cpp
+  TesseraEsthetiqueV.cpp
   PlayerActionTracker.cpp
 )
 
