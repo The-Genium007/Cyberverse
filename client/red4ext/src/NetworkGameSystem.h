@@ -452,6 +452,10 @@ private:
         // afficher qu'une silhouette : il sait QUI est le personnage, pas a quoi il ressemble.
         uint64_t record = 0;
         uint64_t apparence = 0;
+        // L'origine telle que le SERVEUR la connait : "corpo" | "gosse_des_rues" | "nomade".
+        // Vide pour un personnage cree avant que le champ n'existe — le lobby n'affiche alors
+        // rien plutot qu'une valeur inventee.
+        std::string origine;
     };
     std::vector<PersonnageDistant> m_personnages;
     // Dernier verdict de creation. `m_aUnResultat` distingue « rien recu » de « recu un refus » —
@@ -828,6 +832,17 @@ public:
             return Red::CString("");
         }
         return Red::CString(m_personnages[static_cast<size_t>(index)].pseudonyme.c_str());
+    }
+    // L'origine du personnage a cet index — chaine VIDE si l'index est hors bornes ou si le
+    // serveur ne l'a pas renseignee. Le client ne la traduit pas : "corpo" reste "corpo", et
+    // c'est l'UI qui decide comment l'ecrire pour un joueur.
+    Red::CString Tessera_OriginePersonnage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_personnages[static_cast<size_t>(index)].origine.c_str());
     }
     // (record, apparence) du personnage a cet index — 0 si l'index est hors bornes OU si le serveur
     // n'a pas d'avatar valide pour lui. Le client traite les deux cas pareil : repli silhouette.
@@ -1508,6 +1523,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ListePersonnagesRecue);
     RTTI_METHOD(Tessera_ModeDeveloppement);
     RTTI_METHOD(Tessera_NomPersonnage);
+    RTTI_METHOD(Tessera_OriginePersonnage);
     RTTI_METHOD(Tessera_IdPersonnage);
     RTTI_METHOD(Tessera_RecordPersonnage);
     RTTI_METHOD(Tessera_ApparencePersonnage);

@@ -175,6 +175,10 @@ public native class NetworkGameSystem extends IGameSystem {
     // rien à faire chez un joueur ; c'est aussi ce qui permet à un agent de tester sans humain.
     public native func Tessera_ModeDeveloppement() -> Bool;
     public native func Tessera_NomPersonnage(index: Int32) -> String;
+    // L'origine du personnage, telle que le SERVEUR la connait : « corpo » | « gosse_des_rues » |
+    // « nomade ». Chaine VIDE pour un personnage cree avant que le champ n'existe — l'UI doit
+    // alors n'afficher rien, jamais une valeur de repli qui se lirait comme une donnee.
+    public native func Tessera_OriginePersonnage(index: Int32) -> String;
     public native func Tessera_IdPersonnage(index: Int32) -> Uint64;
     // L'avatar d'un personnage EXISTANT, pour que le lobby puisse dessiner sa jaquette. 0 = pas
     // d'avatar connu -> silhouette de repli, jamais une carte vide.

@@ -60,10 +60,13 @@ protected cb func OnUninitialize() -> Bool {
 	GetAllBlackboardDefs().DebugData.AutoContinueUsed = true;
 }
 
+// ⛔ « Server-Browser » RETIRE (2026-08-21). Il ouvrait le navigateur de serveurs du multijoueur
+// abandonne de CDPR — sans objet pour Tessera, ou la connexion se fait par le LAUNCHER avant meme
+// que le jeu demarre. Le hook reste en place, vide de son ajout : c'est lui qui sert desormais a
+// composer le menu Tessera (voir `TesseraSondeLobbyNatif.reds`).
 @wrapMethod(SingleplayerMenuGameController)
 private func PopulateMenuItemList() -> Void {
     wrappedMethod();
-    this.AddMenuItem("Server-Browser", n"OnBuyGame");
 }
 
 @wrapMethod(PlayerPuppet)

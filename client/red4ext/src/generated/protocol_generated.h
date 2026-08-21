@@ -2566,7 +2566,8 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_ID = 4,
     VT_PSEUDONYM = 6,
     VT_BASE_RECORD = 8,
-    VT_APPEARANCE = 10
+    VT_APPEARANCE = 10,
+    VT_ORIGINE = 12
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -2580,6 +2581,9 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t appearance() const {
     return GetField<uint64_t>(VT_APPEARANCE, 0);
   }
+  const ::flatbuffers::String *origine() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_ORIGINE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -2588,6 +2592,8 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(pseudonym()) &&
            VerifyField<uint64_t>(verifier, VT_BASE_RECORD, 8) &&
            VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
+           VerifyOffset(verifier, VT_ORIGINE) &&
+           verifier.VerifyString(origine()) &&
            verifier.EndTable();
   }
 };
@@ -2608,6 +2614,9 @@ struct CharacterSummaryBuilder {
   void add_appearance(uint64_t appearance) {
     fbb_.AddElement<uint64_t>(CharacterSummary::VT_APPEARANCE, appearance, 0);
   }
+  void add_origine(::flatbuffers::Offset<::flatbuffers::String> origine) {
+    fbb_.AddOffset(CharacterSummary::VT_ORIGINE, origine);
+  }
   explicit CharacterSummaryBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2624,11 +2633,13 @@ inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummary(
     uint64_t id = 0,
     ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0,
     uint64_t base_record = 0,
-    uint64_t appearance = 0) {
+    uint64_t appearance = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> origine = 0) {
   CharacterSummaryBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
   builder_.add_id(id);
+  builder_.add_origine(origine);
   builder_.add_pseudonym(pseudonym);
   return builder_.Finish();
 }
@@ -2638,14 +2649,17 @@ inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummaryDirect(
     uint64_t id = 0,
     const char *pseudonym = nullptr,
     uint64_t base_record = 0,
-    uint64_t appearance = 0) {
+    uint64_t appearance = 0,
+    const char *origine = nullptr) {
   auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
+  auto origine__ = origine ? _fbb.CreateString(origine) : 0;
   return cyberpunk_rp::protocol::CreateCharacterSummary(
       _fbb,
       id,
       pseudonym__,
       base_record,
-      appearance);
+      appearance,
+      origine__);
 }
 
 struct CharacterList FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

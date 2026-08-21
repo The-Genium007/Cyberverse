@@ -2830,6 +2830,7 @@ void NetworkGameSystem::HandleCharacterList(const cyberpunk_rp::protocol::Charac
             p.pseudonyme = c->pseudonym() != nullptr ? c->pseudonym()->str() : std::string();
             p.record = c->base_record();
             p.apparence = c->appearance();
+            p.origine = c->origine() != nullptr ? c->origine()->str() : std::string();
             m_personnages.push_back(std::move(p));
         }
     }
