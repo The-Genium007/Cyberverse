@@ -3012,8 +3012,41 @@ void NetworkGameSystem::SendActionJoueur(uint64_t target, uint32_t recette)
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
+// Decode une chaine hexadecimale en octets. Rend un vecteur VIDE des que quoi que ce soit cloche
+// (longueur impaire, caractere hors [0-9a-fA-F]) : un blob a moitie decode serait pire que pas de
+// blob — il passerait la validation de taille du serveur en portant n'importe quoi.
+static std::vector<uint8_t> DeHex(const std::string& hex)
+{
+    std::vector<uint8_t> out;
+    if (hex.empty() || (hex.size() % 2) != 0)
+    {
+        return out;
+    }
+    out.reserve(hex.size() / 2);
+    for (std::size_t i = 0; i < hex.size(); i += 2)
+    {
+        int haut = -1, bas = -1;
+        for (int k = 0; k < 2; ++k)
+        {
+            const char c = hex[i + static_cast<std::size_t>(k)];
+            int v = -1;
+            if (c >= '0' && c <= '9') v = c - '0';
+            else if (c >= 'a' && c <= 'f') v = 10 + (c - 'a');
+            else if (c >= 'A' && c <= 'F') v = 10 + (c - 'A');
+            (k == 0 ? haut : bas) = v;
+        }
+        if (haut < 0 || bas < 0)
+        {
+            return {};
+        }
+        out.push_back(static_cast<uint8_t>((haut << 4) | bas));
+    }
+    return out;
+}
+
 bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record,
-                                                uint64_t apparence, const Red::CString& origine)
+                                                uint64_t apparence, const Red::CString& origine,
+                                                const Red::CString& esthetiqueHex)
 {
     if (m_pInterface == nullptr)
     {
@@ -3037,14 +3070,38 @@ bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, 
     // sa dotation de repli. On ne refuse donc PAS une creation sans origine ici.
     const std::string org = origine.c_str() != nullptr ? std::string(origine.c_str()) : std::string();
 
-    SDK->logger->InfoF(PLUGIN, "CreateCharacter : « %s » record %llu apparence %llu origine « %s »",
-        nom.c_str(), record, apparence, org.c_str());
+    // ── L'ESTHETIQUE, TRANSPORTEE TELLE QUELLE ────────────────────────────────────────────────
+    //
+    // VIDE EST LE CAS NORMAL aujourd'hui : le createur de personnage n'existe pas encore, donc
+    // personne n'a de blob a proposer, et le serveur retombe sur son repli. On n'echoue donc PAS
+    // sur une esthetique absente.
+    //
+    // ⚠️ On distingue quand meme « absente » de « MAL FORMEE » dans le journal. Une chaine non
+    // vide qui se decode en zero octet est une ERREUR de l'appelant, et elle serait autrement
+    // indiscernable du cas normal — le joueur verrait un passant generique sans que rien ne le
+    // dise. Meme famille que les gardes muettes qui ont deja coute des sessions entieres.
+    const std::string hex = esthetiqueHex.c_str() != nullptr ? std::string(esthetiqueHex.c_str())
+                                                            : std::string();
+    const std::vector<uint8_t> blob = DeHex(hex);
+    if (!hex.empty() && blob.empty())
+    {
+        SDK->logger->WarnF(PLUGIN,
+            "CreateCharacter : esthetique MAL FORMEE (%zu caracteres hex), envoyee VIDE",
+            hex.size());
+    }
+
+    SDK->logger->InfoF(PLUGIN,
+        "CreateCharacter : « %s » record %llu apparence %llu origine « %s » esthetique %zu o",
+        nom.c_str(), record, apparence, org.c_str(), blob.size());
 
     flatbuffers::FlatBufferBuilder builder;
     const auto pseudo = builder.CreateString(nom);
     const auto org_off = builder.CreateString(org);
+    // Vecteur de taille zero plutot qu'offset nul : les deux se lisent pareil cote serveur
+    // (`esthetique()` rend nullptr ou un vecteur vide), et l'uniformite evite un cas de plus.
+    const auto esth_off = builder.CreateVector(blob);
     const auto req = cyberpunk_rp::protocol::CreateCreateCharacter(
-        builder, pseudo, record, apparence, org_off);
+        builder, pseudo, record, apparence, org_off, esth_off);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_CreateCharacter, req.Union());
     builder.Finish(env);
@@ -4155,10 +4212,24 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
             appearance.arme = premier->item();
         }
     }
+    // ── L'ESTHETIQUE, RECOPIEE DEPUIS LE FIL ──────────────────────────────────────────────────
+    //
+    // On copie au lieu de garder le pointeur : le tampon FlatBuffers appartient au message recu et
+    // meurt avec lui, alors que `m_appearances` survit jusqu'au spawn — qui arrive PLUS TARD (le
+    // serveur pousse l'apparence a l'entree en AoI, avant le Snapshot qui porte l'entite).
+    appearance.esthetique.clear();
+    if (const auto* blob = sync->spec()->esthetique(); blob != nullptr && blob->size() > 0)
+    {
+        appearance.esthetique.assign(blob->data(), blob->data() + blob->size());
+    }
     m_appearances[id] = appearance;
 
-    SDK->logger->InfoF(PLUGIN, "AppearanceSync %llu : record=%llu apparence=%llu arme=%llu",
-        id, appearance.baseRecord, appearance.appearance, appearance.arme);
+    // ⚠️ LA TAILLE EST JOURNALISEE, et c'est le seul instrument qui prouve que le blob TRAVERSE.
+    // Les tests du serveur encodaient et decodaient en Rust — verts des deux cotes, muets sur le
+    // fil. Cette ligne est ce qui distingue « le serveur a relaye » de « le client a recu ».
+    SDK->logger->InfoF(PLUGIN, "AppearanceSync %llu : record=%llu apparence=%llu arme=%llu esthetique=%zu o",
+        id, appearance.baseRecord, appearance.appearance, appearance.arme,
+        appearance.esthetique.size());
 
     // L'apparence arrive AVANT le premier Snapshot qui porte l'entite (le serveur la pousse a
     // l'entree en AoI) — dans ce cas il n'y a rien a appliquer, le spawn s'en servira. Mais elle

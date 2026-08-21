@@ -1763,7 +1763,8 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_BASE_RECORD = 4,
     VT_APPEARANCE = 6,
-    VT_GARMENTS = 8
+    VT_GARMENTS = 8,
+    VT_ESTHETIQUE = 10
   };
   uint64_t base_record() const {
     return GetField<uint64_t>(VT_BASE_RECORD, 0);
@@ -1774,6 +1775,9 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *garments() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *>(VT_GARMENTS);
   }
+  const ::flatbuffers::Vector<uint8_t> *esthetique() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_ESTHETIQUE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1782,6 +1786,8 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_GARMENTS) &&
            verifier.VerifyVector(garments()) &&
            verifier.VerifyVectorOfTables(garments()) &&
+           VerifyOffset(verifier, VT_ESTHETIQUE) &&
+           verifier.VerifyVector(esthetique()) &&
            verifier.EndTable();
   }
 };
@@ -1799,6 +1805,9 @@ struct AppearanceSpecBuilder {
   void add_garments(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>> garments) {
     fbb_.AddOffset(AppearanceSpec::VT_GARMENTS, garments);
   }
+  void add_esthetique(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique) {
+    fbb_.AddOffset(AppearanceSpec::VT_ESTHETIQUE, esthetique);
+  }
   explicit AppearanceSpecBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1814,10 +1823,12 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpec(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t base_record = 0,
     uint64_t appearance = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>> garments = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>> garments = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0) {
   AppearanceSpecBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
+  builder_.add_esthetique(esthetique);
   builder_.add_garments(garments);
   return builder_.Finish();
 }
@@ -1826,13 +1837,16 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpecDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t base_record = 0,
     uint64_t appearance = 0,
-    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *garments = nullptr) {
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *garments = nullptr,
+    const std::vector<uint8_t> *esthetique = nullptr) {
   auto garments__ = garments ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>(*garments) : 0;
+  auto esthetique__ = esthetique ? _fbb.CreateVector<uint8_t>(*esthetique) : 0;
   return cyberpunk_rp::protocol::CreateAppearanceSpec(
       _fbb,
       base_record,
       appearance,
-      garments__);
+      garments__,
+      esthetique__);
 }
 
 struct AppearanceSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2693,7 +2707,8 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_PSEUDONYM = 4,
     VT_BASE_RECORD = 6,
     VT_APPEARANCE = 8,
-    VT_ORIGINE = 10
+    VT_ORIGINE = 10,
+    VT_ESTHETIQUE = 12
   };
   const ::flatbuffers::String *pseudonym() const {
     return GetPointer<const ::flatbuffers::String *>(VT_PSEUDONYM);
@@ -2707,6 +2722,9 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *origine() const {
     return GetPointer<const ::flatbuffers::String *>(VT_ORIGINE);
   }
+  const ::flatbuffers::Vector<uint8_t> *esthetique() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_ESTHETIQUE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -2716,6 +2734,8 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
            VerifyOffset(verifier, VT_ORIGINE) &&
            verifier.VerifyString(origine()) &&
+           VerifyOffset(verifier, VT_ESTHETIQUE) &&
+           verifier.VerifyVector(esthetique()) &&
            verifier.EndTable();
   }
 };
@@ -2736,6 +2756,9 @@ struct CreateCharacterBuilder {
   void add_origine(::flatbuffers::Offset<::flatbuffers::String> origine) {
     fbb_.AddOffset(CreateCharacter::VT_ORIGINE, origine);
   }
+  void add_esthetique(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique) {
+    fbb_.AddOffset(CreateCharacter::VT_ESTHETIQUE, esthetique);
+  }
   explicit CreateCharacterBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2752,10 +2775,12 @@ inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacter(
     ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0,
     uint64_t base_record = 0,
     uint64_t appearance = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> origine = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> origine = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0) {
   CreateCharacterBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
+  builder_.add_esthetique(esthetique);
   builder_.add_origine(origine);
   builder_.add_pseudonym(pseudonym);
   return builder_.Finish();
@@ -2766,15 +2791,18 @@ inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacterDirect(
     const char *pseudonym = nullptr,
     uint64_t base_record = 0,
     uint64_t appearance = 0,
-    const char *origine = nullptr) {
+    const char *origine = nullptr,
+    const std::vector<uint8_t> *esthetique = nullptr) {
   auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
   auto origine__ = origine ? _fbb.CreateString(origine) : 0;
+  auto esthetique__ = esthetique ? _fbb.CreateVector<uint8_t>(*esthetique) : 0;
   return cyberpunk_rp::protocol::CreateCreateCharacter(
       _fbb,
       pseudonym__,
       base_record,
       appearance,
-      origine__);
+      origine__,
+      esthetique__);
 }
 
 struct SelectCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

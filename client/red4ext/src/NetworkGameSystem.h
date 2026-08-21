@@ -334,6 +334,18 @@ struct NetworkAppearance
     // quand le joueur range son arme, et le confondre avec « pas d'info » laisserait l'arme dans
     // les mains de l'avatar pour toujours.
     uint64_t arme = 0;
+    // ── L'ESTHETIQUE DE V, transportee telle quelle ───────────────────────────────────────────
+    //
+    // Blob `TSV1` opaque : magic, trois compteurs de section, puis des paires (uiSlot, name). 440
+    // octets pour un V complet (27 paires). Le serveur ne l'interprete PAS — il verifie sa forme et
+    // le relaie (ADR 0027) ; le client non plus ne le lit pas champ par champ, il le rend au natif
+    // qui sait l'appliquer.
+    //
+    // ⚠️ VIDE EST LEGITIME, et ce n'est pas la meme chose que `arme = 0`. Tant que le createur de
+    // personnage n'existe pas, aucun joueur n'en a : l'avatar retombe alors sur son record de repli,
+    // un passant generique. Traiter le vide comme une erreur ferait echouer le spawn de tout le
+    // monde aujourd'hui.
+    std::vector<uint8_t> esthetique;
 };
 
 class NetworkGameSystem : public Red::IGameSystem
@@ -852,8 +864,12 @@ public:
     // Demande la creation d'un personnage. Le serveur arbitre : cap de slots, pseudonyme deja pris,
     // apparence hors catalogue. Renvoie false seulement si l'envoi lui-meme n'a pas pu partir
     // (pas de connexion) — un `true` ne dit RIEN du verdict, qui arrive en `CharacterResult`.
+    /// ⚠️ `esthetiqueHex` : le blob `TSV1` en hexadecimal, ou une chaine VIDE.
+    /// Le fork TRANSPORTE l'esthetique, il ne la CAPTURE pas (ADR 0027) : c'est a l'appelant
+    /// redscript de la fournir — le createur de personnage demain, une sonde aujourd'hui.
+    /// Vide est le cas NORMAL tant que le createur n'existe pas.
     bool Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record, uint64_t apparence,
-                                 const Red::CString& origine);
+                                 const Red::CString& origine, const Red::CString& esthetiqueHex);
     // Entre dans le monde avec ce personnage. Meme remarque : `true` = « parti », pas « accepte ».
     bool Tessera_ChoisirPersonnage(uint64_t id);
     // Supprime un personnage du compte. Le SERVEUR arbitre (`not_owner`, `not_found`) et renvoie la

@@ -193,7 +193,9 @@ public native class NetworkGameSystem extends IGameSystem {
     // ⚠️ Une chaîne VIDE est légitime, et le serveur ne la refuse pas : l'écran du lobby ne posait
     // pas encore la question quand ce champ est arrivé. Le serveur retombe alors sur sa dotation de
     // repli, volontairement la plus maigre — personne ne doit avoir intérêt à ne pas choisir.
-    public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName, origine: String) -> Bool;
+    // `esthetiqueHex` : blob `TSV1` hexadecimal, ou "" — vide est LEGITIME (ADR 0027, le fork
+    // transporte, il ne capture pas). Ajoute en DERNIER argument : tout appelant doit le passer.
+    public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName, origine: String, esthetiqueHex: String) -> Bool;
     public native func Tessera_ChoisirPersonnage(id: Uint64) -> Bool;
     // Supprime un personnage. Le serveur arbitre et renvoie la liste à jour — le client ne retire
     // rien de lui-même, sinon il afficherait une suppression qui pourrait être refusée.
