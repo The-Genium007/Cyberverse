@@ -49,6 +49,21 @@ struct Groupe
     int section;
 };
 
+/// ⚠️⚠️ CETTE TABLE PORTE DEUX DEFAUTS CONNUS, audites le 2026-08-21 (F-PLY-226). Ils sont ici
+/// parce que ce port est une COPIE FIDELE de la sonde, et les corriger d'un cote sans l'autre les
+/// ferait diverger — c'est justement ce que la table centralisee evite. A traiter aux DEUX endroits.
+///
+/// DEFAUT 1 — trois paires partent EN DOUBLE. En section Arms, `character_customization` et
+/// `holstered_default` partagent trois options sur quatre. 4+3 = 7 paires Arms, exactement le
+/// compte mesure en F-PLY-172 : les doublons voyagent. Meme valeur deux fois, donc probablement
+/// inoffensif — mais non mesure, et la sonde est gratuite (les retirer, comparer le rendu).
+///
+/// DEFAUT 2 — LES CYBERBRAS NE TRAVERSENT PAS, et rien ne le signale. `holstered_default` est code
+/// en dur : un joueur aux bras mantis a son etat range dans `holstered_mantis`, que cette table ne
+/// lit jamais. Sur l'ecran des autres, il a des bras ordinaires — ni erreur, ni journal. Chaque
+/// variante (mantis, gorille, monofil, lance-projectiles) porte ses propres couleurs. Et
+/// l'information « laquelle » n'est PAS dans cette table : elle est dans l'EQUIPEMENT du joueur
+/// (F-PLY-226 et la mesure qui la suit), donc hors de portee de cette recolte telle qu'elle est.
 constexpr Groupe kGroupes[] = {
     {0x70, 0x38503Cull, "character_customization", 0},   // Head
     {0x80, 0xB85240ull, "TPP_Body", 1},                  // Body — ce que voient les AUTRES
