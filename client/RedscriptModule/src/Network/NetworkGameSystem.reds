@@ -179,6 +179,19 @@ public native class NetworkGameSystem extends IGameSystem {
     // « nomade ». Chaine VIDE pour un personnage cree avant que le champ n'existe — l'UI doit
     // alors n'afficher rien, jamais une valeur de repli qui se lirait comme une donnee.
     public native func Tessera_OriginePersonnage(index: Int32) -> String;
+    // Le CORPS et le CERVEAU du personnage — deux genres INDEPENDANTS chez CDPR : le corps decide
+    // du pantin monte chez les autres joueurs, le cerveau decide de la voix.
+    // ⚠️ `false` couvre deux cas que le fil ne distingue pas : un choix feminin, et un personnage
+    // cree avant l'existence du champ. Seule la BASE garde la nuance.
+    // L'esthetique du personnage, en hexadecimal — meme forme que `Tessera_LireEsthetique`.
+    // Chaine VIDE si le serveur n'en a pas, ou si ce qu'il a n'est pas un `TSV1`.
+    public native func Tessera_EsthetiquePersonnage(index: Int32) -> String;
+    // ⭐ La RECETTE d'esthétique du personnage à cet index — « nom:index;nom:index », prête à être
+    // rejouée par `ApplyChangeToOption` + `ReFinalizeState` (F-PLY-246). Vide pour un personnage
+    // antérieur à la capture : le client n'applique alors rien.
+    public native func Tessera_RecettePersonnage(index: Int32) -> String;
+    public native func Tessera_CorpsMasculin(index: Int32) -> Bool;
+    public native func Tessera_CerveauMasculin(index: Int32) -> Bool;
     public native func Tessera_IdPersonnage(index: Int32) -> Uint64;
     // L'avatar d'un personnage EXISTANT, pour que le lobby puisse dessiner sa jaquette. 0 = pas
     // d'avatar connu -> silhouette de repli, jamais une carte vide.
@@ -199,7 +212,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // repli, volontairement la plus maigre — personne ne doit avoir intérêt à ne pas choisir.
     // `esthetiqueHex` : blob `TSV1` hexadecimal, ou "" — vide est LEGITIME (ADR 0036, le fork
     // transporte, il ne capture pas). Ajoute en DERNIER argument : tout appelant doit le passer.
-    public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName, origine: String, esthetiqueHex: String) -> Bool;
+    public native func Tessera_CreerPersonnage(pseudonyme: String, record: Uint64, apparence: CName, origine: String, esthetiqueHex: String, corpsMasculin: Bool, cerveauMasculin: Bool, optionsApparence: String) -> Bool;
 
     // ── LA CAPTURE — lire l'esthétique du V LOCAL, pour la proposer au serveur ────────────────
     //

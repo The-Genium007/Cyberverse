@@ -2831,11 +2831,37 @@ void NetworkGameSystem::HandleCharacterList(const cyberpunk_rp::protocol::Charac
             p.record = c->base_record();
             p.apparence = c->appearance();
             p.origine = c->origine() != nullptr ? c->origine()->str() : std::string();
+            p.corpsMasculin = c->corps_masculin();
+            p.cerveauMasculin = c->cerveau_masculin();
+            if (c->esthetique() != nullptr)
+            {
+                p.esthetique.assign(c->esthetique()->begin(), c->esthetique()->end());
+            }
+            // ⭐ La recette transparente, resserialisee ICI dans la forme que le client rejoue —
+            // « nom:index;nom:index ». La convertir a la reception plutot qu'a chaque lecture
+            // evite de refaire le meme travail a chaque appel de l'accesseur.
+            if (c->options_apparence() != nullptr)
+            {
+                for (const auto* o : *c->options_apparence())
+                {
+                    if (o == nullptr || o->nom() == nullptr) continue;
+                    if (!p.recette.empty()) p.recette.push_back(';');
+                    p.recette += o->nom()->str();
+                    p.recette.push_back(':');
+                    p.recette += std::to_string(o->index());
+                }
+            }
             m_personnages.push_back(std::move(p));
         }
     }
     m_listeRecue = true;
     SDK->logger->InfoF(PLUGIN, "CharacterList : %zu personnage(s) sur ce compte", m_personnages.size());
+    for (size_t i = 0; i < m_personnages.size(); ++i)
+    {
+        SDK->logger->InfoF(PLUGIN, "  [%zu] « %s » esthetique %zu o, recette %zu caracteres",
+                           i, m_personnages[i].pseudonyme.c_str(),
+                           m_personnages[i].esthetique.size(), m_personnages[i].recette.size());
+    }
 
     // TESSERA_AUTO_CHARACTER=1 : incarne le premier personnage sans passer par l'écran de choix.
     // Réservé aux runs automatisés à deux instances, même usage que TESSERA_DISPLAY_NAME ci-dessus.
@@ -3082,9 +3108,58 @@ Red::CString NetworkGameSystem::Tessera_LireEsthetique(
     return Red::CString(hex.c_str());
 }
 
+// Decoupe « nom:index;nom:index;... » en paires. Format volontairement TRIVIAL : il traverse la
+// frontiere redscript -> C++, ou seuls des scalaires et des chaines passent commodement, et il
+// reste lisible a l'oeil dans un journal — ce qui est TOUT l'interet de l'esthetique transparente.
+//
+// ⚠️ Une entree malformee est SAUTEE, pas fatale. Perdre une option coute un detail d'apparence ;
+// rejeter la creation coute le personnage. Le desequilibre est net, et le compte des sautees est
+// journalise pour qu'un format casse ne passe pas inapercu.
+static std::vector<std::pair<std::string, uint32_t>> DecouperOptions(const std::string& brut,
+                                                                     size_t& sautees)
+{
+    std::vector<std::pair<std::string, uint32_t>> sortie;
+    sautees = 0;
+    size_t debut = 0;
+    while (debut <= brut.size())
+    {
+        const size_t fin = brut.find(';', debut);
+        const std::string entree = brut.substr(debut, fin == std::string::npos ? std::string::npos
+                                                                               : fin - debut);
+        if (!entree.empty())
+        {
+            const size_t sep = entree.find(':');
+            if (sep == std::string::npos || sep == 0 || sep + 1 >= entree.size())
+            {
+                ++sautees;
+            }
+            else
+            {
+                const std::string nom = entree.substr(0, sep);
+                const std::string val = entree.substr(sep + 1);
+                try
+                {
+                    // `stoul` et non `stoi` : l'index « inactif » du moteur vaut 0xFFFFFFFF, qui
+                    // deborde un `int` signe et leverait `out_of_range`.
+                    sortie.emplace_back(nom, static_cast<uint32_t>(std::stoul(val)));
+                }
+                catch (...)
+                {
+                    ++sautees;
+                }
+            }
+        }
+        if (fin == std::string::npos) break;
+        debut = fin + 1;
+    }
+    return sortie;
+}
+
 bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record,
                                                 uint64_t apparence, const Red::CString& origine,
-                                                const Red::CString& esthetiqueHex)
+                                                const Red::CString& esthetiqueHex,
+                                                bool corpsMasculin, bool cerveauMasculin,
+                                                const Red::CString& optionsApparence)
 {
     if (m_pInterface == nullptr)
     {
@@ -3128,18 +3203,45 @@ bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, 
             hex.size());
     }
 
+    // ── L'ESTHETIQUE TRANSPARENTE ─────────────────────────────────────────────────────────────
+    //
+    // Le blob ci-dessus est opaque et sert a habiller les avatars DISTANTS. Celle-ci est la
+    // RECETTE du V du joueur — « hairstyle:12;skin_color:3 » — la seule forme que le moteur de
+    // customisation sait rejouer, et la seule qu'une edition future pourra modifier.
+    const std::string optionsBrutes = optionsApparence.c_str() != nullptr
+                                          ? std::string(optionsApparence.c_str())
+                                          : std::string();
+    size_t sautees = 0;
+    const auto options = DecouperOptions(optionsBrutes, sautees);
+    if (sautees > 0)
+    {
+        SDK->logger->WarnF(PLUGIN,
+            "CreateCharacter : %zu option(s) d'apparence MAL FORMEE(S) ignoree(s) sur %zu",
+            sautees, sautees + options.size());
+    }
+
     SDK->logger->InfoF(PLUGIN,
-        "CreateCharacter : « %s » record %llu apparence %llu origine « %s » esthetique %zu o",
-        nom.c_str(), record, apparence, org.c_str(), blob.size());
+        "CreateCharacter : « %s » record %llu apparence %llu origine « %s » esthetique %zu o, "
+        "%zu option(s) transparente(s)",
+        nom.c_str(), record, apparence, org.c_str(), blob.size(), options.size());
 
     flatbuffers::FlatBufferBuilder builder;
     const auto pseudo = builder.CreateString(nom);
     const auto org_off = builder.CreateString(org);
+    std::vector<flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>> options_off;
+    options_off.reserve(options.size());
+    for (const auto& o : options)
+    {
+        const auto n = builder.CreateString(o.first);
+        options_off.push_back(cyberpunk_rp::protocol::CreateOptionApparence(builder, n, o.second));
+    }
+    const auto options_vec = builder.CreateVector(options_off);
     // Vecteur de taille zero plutot qu'offset nul : les deux se lisent pareil cote serveur
     // (`esthetique()` rend nullptr ou un vecteur vide), et l'uniformite evite un cas de plus.
     const auto esth_off = builder.CreateVector(blob);
     const auto req = cyberpunk_rp::protocol::CreateCreateCharacter(
-        builder, pseudo, record, apparence, org_off, esth_off);
+        builder, pseudo, record, apparence, org_off, esth_off, corpsMasculin, cerveauMasculin,
+        options_vec);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_CreateCharacter, req.Union());
     builder.Finish(env);

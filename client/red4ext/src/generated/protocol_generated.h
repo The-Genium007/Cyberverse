@@ -82,6 +82,9 @@ struct InteractionResultBuilder;
 struct PlayerEvent;
 struct PlayerEventBuilder;
 
+struct OptionApparence;
+struct OptionApparenceBuilder;
+
 struct CharacterSummary;
 struct CharacterSummaryBuilder;
 
@@ -2560,6 +2563,70 @@ inline ::flatbuffers::Offset<PlayerEvent> CreatePlayerEvent(
   return builder_.Finish();
 }
 
+struct OptionApparence FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef OptionApparenceBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NOM = 4,
+    VT_INDEX = 6
+  };
+  const ::flatbuffers::String *nom() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_NOM);
+  }
+  uint32_t index() const {
+    return GetField<uint32_t>(VT_INDEX, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_NOM) &&
+           verifier.VerifyString(nom()) &&
+           VerifyField<uint32_t>(verifier, VT_INDEX, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct OptionApparenceBuilder {
+  typedef OptionApparence Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_nom(::flatbuffers::Offset<::flatbuffers::String> nom) {
+    fbb_.AddOffset(OptionApparence::VT_NOM, nom);
+  }
+  void add_index(uint32_t index) {
+    fbb_.AddElement<uint32_t>(OptionApparence::VT_INDEX, index, 0);
+  }
+  explicit OptionApparenceBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<OptionApparence> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<OptionApparence>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<OptionApparence> CreateOptionApparence(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> nom = 0,
+    uint32_t index = 0) {
+  OptionApparenceBuilder builder_(_fbb);
+  builder_.add_index(index);
+  builder_.add_nom(nom);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<OptionApparence> CreateOptionApparenceDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *nom = nullptr,
+    uint32_t index = 0) {
+  auto nom__ = nom ? _fbb.CreateString(nom) : 0;
+  return cyberpunk_rp::protocol::CreateOptionApparence(
+      _fbb,
+      nom__,
+      index);
+}
+
 struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef CharacterSummaryBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -2567,7 +2634,11 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_PSEUDONYM = 6,
     VT_BASE_RECORD = 8,
     VT_APPEARANCE = 10,
-    VT_ORIGINE = 12
+    VT_ORIGINE = 12,
+    VT_CORPS_MASCULIN = 14,
+    VT_CERVEAU_MASCULIN = 16,
+    VT_ESTHETIQUE = 18,
+    VT_OPTIONS_APPARENCE = 20
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -2584,6 +2655,18 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *origine() const {
     return GetPointer<const ::flatbuffers::String *>(VT_ORIGINE);
   }
+  bool corps_masculin() const {
+    return GetField<uint8_t>(VT_CORPS_MASCULIN, 0) != 0;
+  }
+  bool cerveau_masculin() const {
+    return GetField<uint8_t>(VT_CERVEAU_MASCULIN, 0) != 0;
+  }
+  const ::flatbuffers::Vector<uint8_t> *esthetique() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_ESTHETIQUE);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>> *options_apparence() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>> *>(VT_OPTIONS_APPARENCE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -2594,6 +2677,13 @@ struct CharacterSummary FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_APPEARANCE, 8) &&
            VerifyOffset(verifier, VT_ORIGINE) &&
            verifier.VerifyString(origine()) &&
+           VerifyField<uint8_t>(verifier, VT_CORPS_MASCULIN, 1) &&
+           VerifyField<uint8_t>(verifier, VT_CERVEAU_MASCULIN, 1) &&
+           VerifyOffset(verifier, VT_ESTHETIQUE) &&
+           verifier.VerifyVector(esthetique()) &&
+           VerifyOffset(verifier, VT_OPTIONS_APPARENCE) &&
+           verifier.VerifyVector(options_apparence()) &&
+           verifier.VerifyVectorOfTables(options_apparence()) &&
            verifier.EndTable();
   }
 };
@@ -2617,6 +2707,18 @@ struct CharacterSummaryBuilder {
   void add_origine(::flatbuffers::Offset<::flatbuffers::String> origine) {
     fbb_.AddOffset(CharacterSummary::VT_ORIGINE, origine);
   }
+  void add_corps_masculin(bool corps_masculin) {
+    fbb_.AddElement<uint8_t>(CharacterSummary::VT_CORPS_MASCULIN, static_cast<uint8_t>(corps_masculin), 0);
+  }
+  void add_cerveau_masculin(bool cerveau_masculin) {
+    fbb_.AddElement<uint8_t>(CharacterSummary::VT_CERVEAU_MASCULIN, static_cast<uint8_t>(cerveau_masculin), 0);
+  }
+  void add_esthetique(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique) {
+    fbb_.AddOffset(CharacterSummary::VT_ESTHETIQUE, esthetique);
+  }
+  void add_options_apparence(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>>> options_apparence) {
+    fbb_.AddOffset(CharacterSummary::VT_OPTIONS_APPARENCE, options_apparence);
+  }
   explicit CharacterSummaryBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2634,13 +2736,21 @@ inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummary(
     ::flatbuffers::Offset<::flatbuffers::String> pseudonym = 0,
     uint64_t base_record = 0,
     uint64_t appearance = 0,
-    ::flatbuffers::Offset<::flatbuffers::String> origine = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> origine = 0,
+    bool corps_masculin = false,
+    bool cerveau_masculin = false,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>>> options_apparence = 0) {
   CharacterSummaryBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
   builder_.add_id(id);
+  builder_.add_options_apparence(options_apparence);
+  builder_.add_esthetique(esthetique);
   builder_.add_origine(origine);
   builder_.add_pseudonym(pseudonym);
+  builder_.add_cerveau_masculin(cerveau_masculin);
+  builder_.add_corps_masculin(corps_masculin);
   return builder_.Finish();
 }
 
@@ -2650,16 +2760,26 @@ inline ::flatbuffers::Offset<CharacterSummary> CreateCharacterSummaryDirect(
     const char *pseudonym = nullptr,
     uint64_t base_record = 0,
     uint64_t appearance = 0,
-    const char *origine = nullptr) {
+    const char *origine = nullptr,
+    bool corps_masculin = false,
+    bool cerveau_masculin = false,
+    const std::vector<uint8_t> *esthetique = nullptr,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>> *options_apparence = nullptr) {
   auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
   auto origine__ = origine ? _fbb.CreateString(origine) : 0;
+  auto esthetique__ = esthetique ? _fbb.CreateVector<uint8_t>(*esthetique) : 0;
+  auto options_apparence__ = options_apparence ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>>(*options_apparence) : 0;
   return cyberpunk_rp::protocol::CreateCharacterSummary(
       _fbb,
       id,
       pseudonym__,
       base_record,
       appearance,
-      origine__);
+      origine__,
+      corps_masculin,
+      cerveau_masculin,
+      esthetique__,
+      options_apparence__);
 }
 
 struct CharacterList FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2722,7 +2842,10 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_BASE_RECORD = 6,
     VT_APPEARANCE = 8,
     VT_ORIGINE = 10,
-    VT_ESTHETIQUE = 12
+    VT_ESTHETIQUE = 12,
+    VT_CORPS_MASCULIN = 14,
+    VT_CERVEAU_MASCULIN = 16,
+    VT_OPTIONS_APPARENCE = 18
   };
   const ::flatbuffers::String *pseudonym() const {
     return GetPointer<const ::flatbuffers::String *>(VT_PSEUDONYM);
@@ -2739,6 +2862,15 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<uint8_t> *esthetique() const {
     return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_ESTHETIQUE);
   }
+  bool corps_masculin() const {
+    return GetField<uint8_t>(VT_CORPS_MASCULIN, 0) != 0;
+  }
+  bool cerveau_masculin() const {
+    return GetField<uint8_t>(VT_CERVEAU_MASCULIN, 0) != 0;
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>> *options_apparence() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>> *>(VT_OPTIONS_APPARENCE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -2750,6 +2882,11 @@ struct CreateCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(origine()) &&
            VerifyOffset(verifier, VT_ESTHETIQUE) &&
            verifier.VerifyVector(esthetique()) &&
+           VerifyField<uint8_t>(verifier, VT_CORPS_MASCULIN, 1) &&
+           VerifyField<uint8_t>(verifier, VT_CERVEAU_MASCULIN, 1) &&
+           VerifyOffset(verifier, VT_OPTIONS_APPARENCE) &&
+           verifier.VerifyVector(options_apparence()) &&
+           verifier.VerifyVectorOfTables(options_apparence()) &&
            verifier.EndTable();
   }
 };
@@ -2773,6 +2910,15 @@ struct CreateCharacterBuilder {
   void add_esthetique(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique) {
     fbb_.AddOffset(CreateCharacter::VT_ESTHETIQUE, esthetique);
   }
+  void add_corps_masculin(bool corps_masculin) {
+    fbb_.AddElement<uint8_t>(CreateCharacter::VT_CORPS_MASCULIN, static_cast<uint8_t>(corps_masculin), 0);
+  }
+  void add_cerveau_masculin(bool cerveau_masculin) {
+    fbb_.AddElement<uint8_t>(CreateCharacter::VT_CERVEAU_MASCULIN, static_cast<uint8_t>(cerveau_masculin), 0);
+  }
+  void add_options_apparence(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>>> options_apparence) {
+    fbb_.AddOffset(CreateCharacter::VT_OPTIONS_APPARENCE, options_apparence);
+  }
   explicit CreateCharacterBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2790,13 +2936,19 @@ inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacter(
     uint64_t base_record = 0,
     uint64_t appearance = 0,
     ::flatbuffers::Offset<::flatbuffers::String> origine = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0,
+    bool corps_masculin = false,
+    bool cerveau_masculin = false,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>>> options_apparence = 0) {
   CreateCharacterBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
+  builder_.add_options_apparence(options_apparence);
   builder_.add_esthetique(esthetique);
   builder_.add_origine(origine);
   builder_.add_pseudonym(pseudonym);
+  builder_.add_cerveau_masculin(cerveau_masculin);
+  builder_.add_corps_masculin(corps_masculin);
   return builder_.Finish();
 }
 
@@ -2806,17 +2958,24 @@ inline ::flatbuffers::Offset<CreateCharacter> CreateCreateCharacterDirect(
     uint64_t base_record = 0,
     uint64_t appearance = 0,
     const char *origine = nullptr,
-    const std::vector<uint8_t> *esthetique = nullptr) {
+    const std::vector<uint8_t> *esthetique = nullptr,
+    bool corps_masculin = false,
+    bool cerveau_masculin = false,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>> *options_apparence = nullptr) {
   auto pseudonym__ = pseudonym ? _fbb.CreateString(pseudonym) : 0;
   auto origine__ = origine ? _fbb.CreateString(origine) : 0;
   auto esthetique__ = esthetique ? _fbb.CreateVector<uint8_t>(*esthetique) : 0;
+  auto options_apparence__ = options_apparence ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::OptionApparence>>(*options_apparence) : 0;
   return cyberpunk_rp::protocol::CreateCreateCharacter(
       _fbb,
       pseudonym__,
       base_record,
       appearance,
       origine__,
-      esthetique__);
+      esthetique__,
+      corps_masculin,
+      cerveau_masculin,
+      options_apparence__);
 }
 
 struct SelectCharacter FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

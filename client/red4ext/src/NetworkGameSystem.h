@@ -456,6 +456,17 @@ private:
         // Vide pour un personnage cree avant que le champ n'existe — le lobby n'affiche alors
         // rien plutot qu'une valeur inventee.
         std::string origine;
+        // Le CORPS et le CERVEAU choisis au createur : deux genres INDEPENDANTS chez CDPR — le
+        // corps decide du pantin monte, le cerveau decide de la voix.
+        bool corpsMasculin = false;
+        bool cerveauMasculin = false;
+        // Le blob `TSV1` du personnage, tel que capture a sa creation. VIDE pour un personnage
+        // anterieur a la capture — le client retombe alors sur le pantin de base.
+        std::vector<uint8_t> esthetique;
+        // ⭐ La RECETTE d'esthetique, deja reserialisee en « nom:index;nom:index ». C'est elle que
+        // le client rejoue sur le V local en entrant en jeu (F-PLY-246/248) ; le blob ci-dessus
+        // habille les avatars DISTANTS. Vide pour un personnage cree avant la capture.
+        std::string recette;
     };
     std::vector<PersonnageDistant> m_personnages;
     // Dernier verdict de creation. `m_aUnResultat` distingue « rien recu » de « recu un refus » —
@@ -844,6 +855,57 @@ public:
         }
         return Red::CString(m_personnages[static_cast<size_t>(index)].origine.c_str());
     }
+    /// L'esthetique du personnage a cet index, en HEXADECIMAL — meme forme que ce que
+    /// `Tessera_LireEsthetique` produit, pour que les deux bouts parlent la meme langue.
+    /// ⚠️ Chaine VIDE si l'index est hors bornes, si le serveur n'a rien, ou si ce qu'il a n'est
+    /// PAS un `TSV1` : `characters.appearance` est un champ a double usage (16 octets = l'ancien
+    /// couple record/apparence). On reconnait le blob a sa magie, jamais a sa longueur seule.
+    Red::CString Tessera_EsthetiquePersonnage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size())
+        {
+            return Red::CString("");
+        }
+        const auto& blob = m_personnages[static_cast<size_t>(index)].esthetique;
+        if (blob.size() < 4 || blob[0] != 'T' || blob[1] != 'S' || blob[2] != 'V' || blob[3] != '1')
+        {
+            return Red::CString("");
+        }
+        static const char* kHex = "0123456789abcdef";
+        std::string hex;
+        hex.reserve(blob.size() * 2);
+        for (uint8_t o : blob)
+        {
+            hex.push_back(kHex[o >> 4]);
+            hex.push_back(kHex[o & 0x0F]);
+        }
+        return Red::CString(hex.c_str());
+    }
+    /// ⭐ La RECETTE d'esthetique du personnage a cet index — « nom:index;nom:index », prete a
+    /// etre rejouee par `ApplyChangeToOption` + `ReFinalizeState` (F-PLY-246).
+    /// Chaine VIDE si l'index est hors bornes ou si le personnage est anterieur a la capture : le
+    /// client n'applique alors rien, et V garde l'apparence de la souche.
+    Red::CString Tessera_RecettePersonnage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_personnages[static_cast<size_t>(index)].recette.c_str());
+    }
+    // Le corps du personnage a cet index. ⚠️ `false` couvre DEUX cas que FlatBuffers ne distingue
+    // pas : un corps feminin choisi, et un personnage cree avant que le champ n'existe. La base
+    // garde la nuance (`NULL`), le fil ne peut pas.
+    bool Tessera_CorpsMasculin(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size()) { return false; }
+        return m_personnages[static_cast<size_t>(index)].corpsMasculin;
+    }
+    bool Tessera_CerveauMasculin(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_personnages.size()) { return false; }
+        return m_personnages[static_cast<size_t>(index)].cerveauMasculin;
+    }
     // (record, apparence) du personnage a cet index — 0 si l'index est hors bornes OU si le serveur
     // n'a pas d'avatar valide pour lui. Le client traite les deux cas pareil : repli silhouette.
     uint64_t Tessera_RecordPersonnage(int32_t index) const
@@ -883,8 +945,21 @@ public:
     /// Le fork TRANSPORTE l'esthetique, il ne la CAPTURE pas (ADR 0036) : c'est a l'appelant
     /// redscript de la fournir — le createur de personnage demain, une sonde aujourd'hui.
     /// Vide est le cas NORMAL tant que le createur n'existe pas.
+    /// ⚠️ `corpsMasculin` et `cerveauMasculin` sont deux genres INDEPENDANTS (conception CDPR) :
+    /// le corps decide du pantin monte chez les autres joueurs, le cerveau decide de la voix.
+    /// Aucun des deux n'est deductible du blob d'esthetique — son en-tete ne porte que des
+    /// compteurs de paires, et les paires decrivent des details, pas le corps qui les porte.
+    /// ⭐ `optionsApparence` (2026-08-22) : l'esthetique TRANSPARENTE, « nom:index;nom:index ».
+    /// Le blob hexadecimal ci-dessus RESTE et garde son emploi — habiller les avatars DISTANTS.
+    /// Celle-ci est la RECETTE du V du joueur : la seule forme que le moteur de customisation sait
+    /// rejouer (F-PLY-246), et la seule qu'une edition future pourra lire et modifier. Decision de
+    /// Lucas, 2026-08-22 : « il faut qu'on puisse savoir qu'il a voulu tels yeux, telle coiffure ».
+    /// ⚠️ Une chaine, et non un tableau : c'est ce qui traverse commodement la frontiere
+    /// redscript -> C++, et ca reste lisible a l'oeil dans un journal — ce qui est tout l'interet.
     bool Tessera_CreerPersonnage(const Red::CString& pseudonyme, uint64_t record, uint64_t apparence,
-                                 const Red::CString& origine, const Red::CString& esthetiqueHex);
+                                 const Red::CString& origine, const Red::CString& esthetiqueHex,
+                                 bool corpsMasculin, bool cerveauMasculin,
+                                 const Red::CString& optionsApparence);
     // ── LA CAPTURE : lire l'esthetique du V LOCAL, pour la proposer au serveur ───────────────
     //
     // Rend le blob `TSV1` en hexadecimal, a passer tel quel en dernier argument de
@@ -1524,6 +1599,10 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ModeDeveloppement);
     RTTI_METHOD(Tessera_NomPersonnage);
     RTTI_METHOD(Tessera_OriginePersonnage);
+    RTTI_METHOD(Tessera_EsthetiquePersonnage);
+    RTTI_METHOD(Tessera_RecettePersonnage);
+    RTTI_METHOD(Tessera_CorpsMasculin);
+    RTTI_METHOD(Tessera_CerveauMasculin);
     RTTI_METHOD(Tessera_IdPersonnage);
     RTTI_METHOD(Tessera_RecordPersonnage);
     RTTI_METHOD(Tessera_ApparencePersonnage);
