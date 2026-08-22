@@ -3250,14 +3250,70 @@ bool NetworkGameSystem::Tessera_CreerPersonnage(const Red::CString& pseudonyme, 
     return true;
 }
 
-bool NetworkGameSystem::Tessera_ChoisirPersonnage(uint64_t id)
+// ⭐⭐ LE DEPART VOLONTAIRE — « quitter le jeu », par opposition a une coupure subie.
+//
+// Le serveur distingue les deux depuis toujours (`gateway.rs`) : une coupure RESERVE la place
+// quelques minutes — on a pu perdre le reseau et vouloir revenir —, un depart volontaire la
+// LIBERE IMMEDIATEMENT, « sa place retourne au pot commun tout de suite ». Mais rien, cote client,
+// n'envoyait jamais ce message : tout depart passait donc pour une coupure, et un joueur qui
+// quittait proprement bloquait une place pendant dix minutes.
+//
+// Demande de Lucas, 2026-08-22 : « on aura le bouton quitter le jeu qui nous deconnecte du serveur,
+// libere le personnage, et qu'il y ait un slot ouvert pour les suivants. »
+//
+// ⚠️ ON VIDE LA FILE D'ENVOI. Le processus se ferme dans la foulee ; un message « fiable » pose
+// dans une file qu'on ne pousse jamais n'arrive jamais, et le serveur retomberait sur le chemin
+// « coupure ». `FlushMessagesOnConnection` est la difference entre un depart propre et un depart
+// qui en a l'air.
+bool NetworkGameSystem::Tessera_QuitterServeur()
 {
-    if (m_pInterface == nullptr || id == 0)
+    if (m_pInterface == nullptr)
     {
-        SDK->logger->Warn(PLUGIN, "SelectCharacter ignore : pas de connexion, ou id nul");
         return false;
     }
-    SDK->logger->InfoF(PLUGIN, "SelectCharacter : id %llu", id);
+    flatbuffers::FlatBufferBuilder builder;
+    const auto req = cyberpunk_rp::protocol::CreateLeave(builder);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_Leave, req.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    m_pInterface->FlushMessagesOnConnection(m_hConnection);
+    m_personnageIncarne = 0;
+    SDK->logger->Info(PLUGIN, "Leave envoye et pousse : depart volontaire, la place est liberee");
+    return true;
+}
+
+bool NetworkGameSystem::Tessera_ChoisirPersonnage(uint64_t id)
+{
+    if (m_pInterface == nullptr)
+    {
+        SDK->logger->Warn(PLUGIN, "SelectCharacter ignore : pas de connexion");
+        return false;
+    }
+    // ⭐⭐ ZERO EST UN ORDRE VALIDE : « SORTIR DU MONDE SANS QUITTER LE SERVEUR ».
+    //
+    // ⛔ L'ancien garde le REFUSAIT (`|| id == 0`), et le commentaire d'a cote le savait :
+    // « ce chemin-la est de toute facon refuse par ce meme garde ». Le serveur, lui, le traite
+    // depuis toujours — il repasse le client en `AwaitingSelection`, sa connexion et sa place
+    // restent (`gateway.rs`, branche `SelectionDemandee::Sortir`). Le fil etait mort d'un seul
+    // cote, et le seul appelant (`UiKitRetourLobby.reds`) n'avait donc jamais rien fait.
+    //
+    // C'est la demande de Lucas du 2026-08-22 : « que ca supprime le personnage comme si on etait
+    // deconnecte, sauf qu'on reste connecte au serveur, pour qu'on puisse changer de personnage
+    // sans perdre notre place. »
+    if (id == 0)
+    {
+        SDK->logger->Info(PLUGIN, "SelectCharacter(0) : sortie du monde, la connexion RESTE ouverte");
+        // ⚠️ ON OUBLIE LE PERSONNAGE INCARNE. Sans ca, la reprise apres reconnexion nous
+        // remettrait d'office dans un personnage qu'on vient de quitter volontairement — et le
+        // lobby serait sauté sans que personne ne comprenne pourquoi.
+        m_personnageIncarne = 0;
+    }
+    else
+    {
+        SDK->logger->InfoF(PLUGIN, "SelectCharacter : id %llu", id);
+    }
     // Retenu pour la REPRISE apres une reconnexion (voir `HandleCharacterList`). Sans lui, un
     // joueur qui revient est connecte mais n'incarne personne : la Gateway retient tout ce qu'il
     // envoie, le Shard reste a zero joueur, et l'ecran reste vide (F-PLF-024).
@@ -3266,7 +3322,7 @@ bool NetworkGameSystem::Tessera_ChoisirPersonnage(uint64_t id)
     // par `SelectCharacter(0)` ne peut pas effacer cette memoire. Sans consequence aujourd'hui :
     // ce chemin-la est de toute facon refuse par ce meme garde (cf. `UiKitRetourLobby.reds`, qui
     // l'appelle et n'a jamais ete mesure en jeu).
-    m_personnageIncarne = id;
+    if (id != 0) m_personnageIncarne = id;
 
     flatbuffers::FlatBufferBuilder builder;
     const auto req = cyberpunk_rp::protocol::CreateSelectCharacter(builder, id);

@@ -195,6 +195,9 @@ public native class NetworkGameSystem extends IGameSystem {
     // contrôleurs de menu, donc rien ne peut transporter un index depuis le lobby. Le netcode,
     // lui, retient déjà le personnage incarné (il en a besoin pour la reprise après reconnexion).
     public native func Tessera_RecetteIncarnee() -> String;
+    // ⭐ Départ VOLONTAIRE : le serveur libère la place tout de suite, au lieu de la réserver
+    // quelques minutes comme après une coupure. À appeler AVANT de fermer le jeu.
+    public native func Tessera_QuitterServeur() -> Bool;
     public native func Tessera_CorpsMasculin(index: Int32) -> Bool;
     public native func Tessera_CerveauMasculin(index: Int32) -> Bool;
     public native func Tessera_IdPersonnage(index: Int32) -> Uint64;

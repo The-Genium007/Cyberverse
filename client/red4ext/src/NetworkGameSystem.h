@@ -993,7 +993,15 @@ public:
     // autres joueurs, avec un symptome tres loin de sa cause. La raison exacte part au journal.
     Red::CString Tessera_LireEsthetique(const Red::Handle<RED4ext::IScriptable>& aEtat);
     // Entre dans le monde avec ce personnage. Meme remarque : `true` = « parti », pas « accepte ».
+    /// ⭐ Depart VOLONTAIRE : le serveur libere la place immediatement, au lieu de la reserver
+    /// quelques minutes comme apres une coupure subie. Rien ne l'envoyait avant le 2026-08-22 —
+    /// tout depart passait donc pour une coupure, et bloquait un slot pour rien.
     bool Tessera_ChoisirPersonnage(uint64_t id);
+    /// ⭐ Depart VOLONTAIRE : le serveur libere la place IMMEDIATEMENT, au lieu de la reserver
+    /// quelques minutes comme apres une coupure subie. Rien ne l'envoyait avant le 2026-08-22 —
+    /// tout depart passait donc pour une coupure, et bloquait un slot pour rien.
+    /// ⚠️ Vide la file d'envoi : le processus se ferme dans la foulee.
+    bool Tessera_QuitterServeur();
     // Supprime un personnage du compte. Le SERVEUR arbitre (`not_owner`, `not_found`) et renvoie la
     // liste a jour — le client ne retire rien de son cote, sinon il afficherait une suppression qui
     // pourrait etre refusee. `true` = la demande est PARTIE, jamais qu'elle a ete acceptee.
@@ -1619,6 +1627,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_EsthetiquePersonnage);
     RTTI_METHOD(Tessera_RecettePersonnage);
     RTTI_METHOD(Tessera_RecetteIncarnee);
+    RTTI_METHOD(Tessera_QuitterServeur);
     RTTI_METHOD(Tessera_CorpsMasculin);
     RTTI_METHOD(Tessera_CerveauMasculin);
     RTTI_METHOD(Tessera_IdPersonnage);
