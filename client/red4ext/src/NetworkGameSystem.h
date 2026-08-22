@@ -893,6 +893,23 @@ public:
         }
         return Red::CString(m_personnages[static_cast<size_t>(index)].recette.c_str());
     }
+    /// ⭐⭐ La recette du personnage QU'ON INCARNE — sans avoir a connaitre son index.
+    ///
+    /// C'est le point d'entree de l'hydratation a l'arrivee en jeu. Passer par l'index aurait
+    /// oblige a transporter un nombre a travers le chargement du monde, qui detruit les
+    /// controleurs de menu ; `m_personnageIncarne` est deja retenu ici pour la reprise apres
+    /// reconnexion, et il survit — c'est donc lui la source, pas un etat cote script.
+    ///
+    /// Chaine VIDE si aucun personnage n'est incarne, ou s'il est anterieur a la capture.
+    Red::CString Tessera_RecetteIncarnee() const
+    {
+        if (m_personnageIncarne == 0) return Red::CString("");
+        for (const auto& p : m_personnages)
+        {
+            if (p.id == m_personnageIncarne) return Red::CString(p.recette.c_str());
+        }
+        return Red::CString("");
+    }
     // Le corps du personnage a cet index. ⚠️ `false` couvre DEUX cas que FlatBuffers ne distingue
     // pas : un corps feminin choisi, et un personnage cree avant que le champ n'existe. La base
     // garde la nuance (`NULL`), le fil ne peut pas.
@@ -1601,6 +1618,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_OriginePersonnage);
     RTTI_METHOD(Tessera_EsthetiquePersonnage);
     RTTI_METHOD(Tessera_RecettePersonnage);
+    RTTI_METHOD(Tessera_RecetteIncarnee);
     RTTI_METHOD(Tessera_CorpsMasculin);
     RTTI_METHOD(Tessera_CerveauMasculin);
     RTTI_METHOD(Tessera_IdPersonnage);

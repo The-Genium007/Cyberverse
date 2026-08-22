@@ -190,6 +190,11 @@ public native class NetworkGameSystem extends IGameSystem {
     // rejouée par `ApplyChangeToOption` + `ReFinalizeState` (F-PLY-246). Vide pour un personnage
     // antérieur à la capture : le client n'applique alors rien.
     public native func Tessera_RecettePersonnage(index: Int32) -> String;
+    // ⭐⭐ La recette du personnage QU'ON INCARNE — sans connaître son index. C'est le point
+    // d'entrée de l'hydratation à l'arrivée en jeu : le chargement du monde détruit les
+    // contrôleurs de menu, donc rien ne peut transporter un index depuis le lobby. Le netcode,
+    // lui, retient déjà le personnage incarné (il en a besoin pour la reprise après reconnexion).
+    public native func Tessera_RecetteIncarnee() -> String;
     public native func Tessera_CorpsMasculin(index: Int32) -> Bool;
     public native func Tessera_CerveauMasculin(index: Int32) -> Bool;
     public native func Tessera_IdPersonnage(index: Int32) -> Uint64;
