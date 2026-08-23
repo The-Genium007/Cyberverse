@@ -679,6 +679,30 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
                       (unsigned long long)mots[8], (unsigned long long)mots[9],
                       (unsigned long long)mots[10], (unsigned long long)mots[11]);
         SDK->logger->InfoF(PLUGIN, "%s", d);
+
+        // ── ⭐ DE QUELLE CLASSE EST CET OBJET ? LA VTABLE LE DIT ─────────────────────────────
+        //
+        // On tient un pointeur dont on sait deux choses : `+0x00` pointe dans l'executable (donc
+        // c'est une table de methodes), et `+0x110` porte un EntityID exploitable. Ce n'est PAS une
+        // `ent::Entity` — celle-ci porte son `entityID` en `+0x48`. C'est donc autre chose, et
+        // savoir QUOI change tout : si c'est un objet de jeu, le teleport du moteur le prend
+        // directement en HANDLE, sans jamais passer par une resolution d'identifiant.
+        //
+        // ⚠️ ON NE DEMANDE PAS SON TYPE AU JEU. `GetType()` sur un pointeur dont on ignore la
+        // nature est precisement ce qui a mene au crash du 2026-08-21 (F-PLY-225) : le type s'est
+        // lu `None`, et l'appel suivant a parcouru de la memoire arbitraire.
+        //
+        // On journalise donc l'ADRESSE de la vtable, en RVA — c'est-a-dire dans le repere de
+        // Ghidra. La classe se resout alors HORS DU JEU, sans rien risquer, exactement comme
+        // `Reserve` a ete identifie ce matin par l'assertion de CDPR.
+        {
+            const auto vt = *reinterpret_cast<const std::uintptr_t*>(sortie[0]);
+            SDK->logger->InfoF(PLUGIN,
+                               "[retour enrichi] vtable=0x%llX · base=0x%llX · RVA=0x%llX "
+                               "(a resoudre dans Ghidra)",
+                               (unsigned long long)vt, (unsigned long long)base,
+                               (unsigned long long)(vt - base));
+        }
         // ⚠️ ET LE TEMOIN, dans la meme trace. Sans lui, ces douze nombres ne se comparent a rien.
         // `sortie[1]` est le second mot du tampon de sortie : le gabarit natif ecrit parfois une
         // paire. On le dit meme s'il est nul — un zero OBSERVE vaut mieux qu'un silence.

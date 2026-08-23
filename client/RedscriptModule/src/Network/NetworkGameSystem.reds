@@ -55,6 +55,24 @@ public native class NetworkGameSystem extends IGameSystem {
     // fait donc côté C++, où le hash EST déjà un TweakDBID.
     public native func Tessera_ArmeDeLEntite(cible: EntityID) -> TweakDBID;
 
+    // ── CE QUE LE SERVEUR VEUT VOIR SUR LE DOS DE CETTE ENTITÉ ──────────────────────────────
+    //
+    // Autorité : la base de données du serveur (colonne `contenus.porte`, migration 0012), jamais
+    // le client. Les items arrivent par `AppearanceSync.garments` avec `drawn = false` — le vrai
+    // désigne l'arme en main, qui suit une recette entièrement différente (F-PLY-203).
+    //
+    // ⚠️ DEUX APPELS PLUTÔT QU'UN TABLEAU, et ce n'est pas de la timidité : aucun `DynArray` ne
+    // traverse le RTTI dans ce plugin aujourd'hui, alors qu'un `TweakDBID` de retour est mesuré
+    // (`Tessera_ArmeDeLEntite`, en service depuis le 2026-07-24). On reste sur la forme prouvée.
+    //
+    // ⚠️ Et pour la même raison qu'elle : ça rend un `TweakDBID`, pas un `Uint64`. redscript expose
+    // `TDBID.ToNumber` mais **aucune conversion inverse** — un hash 64 bits y est un cul-de-sac.
+    //
+    // `0` vêtement signifie « ne porte rien » AUSSI BIEN QUE « entité inconnue » : dans les deux
+    // cas il n'y a rien à poser, donc rien à décider ici.
+    public native func Tessera_NombreDeVetements(cible: EntityID) -> Int32;
+    public native func Tessera_VetementDeLEntite(cible: EntityID, index: Int32) -> TweakDBID;
+
     // ── Coma et réapparition (chantier autorité totale, 2026-08-09) ─────────────────────────
     //
     // Le serveur décide, le client demande et affiche. `Tessera_DemanderReapparition` renvoie

@@ -1039,10 +1039,120 @@ std::map<uint64_t, std::chrono::steady_clock::time_point> g_apparenceConnueDepui
 std::map<uint64_t, uint64_t> g_premiereApparence;
 bool g_sondeApparenceFaite = false;
 
+/// Guette le moment ou l'entite d'un avatar devient RESOLVABLE, et le dit une seule fois.
+///
+/// ⭐⭐ POURQUOI CE GUET EXISTE. La fiche posee au spawn ne testait la resolution qu'UNE FOIS, a
+/// l'instant meme du spawn — et concluait « IRRESOLVABLE » pour toujours.
+///
+/// Or la decompilation montre que l'objet rendu par l'appel enrichi est un **ticket de spawn** (deux
+/// constructeurs, `FUN_140661684` et `FUN_14065f018`, partagent sa vtable et ne remplissent que des
+/// champs de requete), dont `+0x110` recoit l'EntityID **resultat**. Un identifiant peut donc etre
+/// alloue AVANT que l'entite n'existe : le tester tout de suite ne dit rien de ce qu'il vaudra une
+/// seconde plus tard.
+///
+/// ⚠️ C'est la meme faute que celle qui a coute six tirs ce soir, sous une forme de plus : mesurer
+/// une fois et conclure pour toujours. Un « non » instantane sur un mecanisme ASYNCHRONE n'est pas
+/// un non — c'est un « pas encore », et rien ne les distinguait.
+void NetworkGameSystem::GuetterResolution(uint64_t networkId, RED4ext::ent::EntityID entityId,
+                                          const Tessera::Sync::PoseRendue& pose)
+{
+    // ── ⚠️ REECRIT LE 2026-08-23 APRES UNE INONDATION DE JOURNAL ────────────────────────────────
+    //
+    // La version precedente deduisait son etat d'un booleen unique (`dit`). Resultat : la branche
+    // « resolvable » se rejournalisait a CHAQUE tick — 19 000 lignes identiques — et la mesure de
+    // derive, placee apres, n'etait jamais atteinte.
+    //
+    // C'est le douzieme instrument fautif de la journee, et le premier qui NUIT au lieu de
+    // seulement mentir : un journal noye empeche de lire tout le reste.
+    //
+    // D'ou une machine a TROIS ETATS EXPLICITES, sans aucune deduction :
+    //   Attente   -> on retente la resolution a chaque tick
+    //   Mesure    -> resolue ; on echantillonne la derive, quelques fois seulement
+    //   Fini      -> plus rien, jamais
+    //
+    // La regle de la journee, appliquee a l'instrument lui-meme : **un etat qui commande une
+    // decision se DECLARE.** Un booleen qui doit signifier trois choses en signifie zero.
+    enum class Etape { Attente, Mesure, Fini };
+    struct Guet
+    {
+        Etape etape = Etape::Attente;
+        std::chrono::steady_clock::time_point debut;
+        std::chrono::steady_clock::time_point dernierEchantillon;
+        std::uint32_t essais = 0;
+        std::uint32_t derives = 0;
+    };
+    static std::map<uint64_t, Guet> s_guets;
+    auto& g = s_guets[networkId];
+    if (g.etape == Etape::Fini) { return; }
+
+    const auto maintenant = std::chrono::steady_clock::now();
+    if (g.debut == std::chrono::steady_clock::time_point{}) { g.debut = maintenant; }
+
+    if (g.etape == Etape::Attente)
+    {
+        ++g.essais;
+        const auto ecoule = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                maintenant - g.debut).count();
+        const auto e = Cyberverse::Utils::GetDynamicEntity(entityId);
+        if (e.has_value() && e->instance != nullptr)
+        {
+            const char* classe = (e->instance->GetType() != nullptr)
+                                     ? e->instance->GetType()->name.ToString() : "<sans type>";
+            Red::Handle<RED4ext::IScriptable> ia;
+            const bool aIa = Red::CallVirtual(e.value(), "GetAIControllerComponent", ia)
+                             && ia != nullptr;
+            SDK->logger->InfoF(PLUGIN,
+                               "[guet %llu] ⭐ RESOLVABLE apres %lld ms (%u essais) · classe=%s · IA=%s",
+                               networkId, (long long)ecoule, g.essais, classe, aIa ? "OUI" : "NON");
+            g.etape = Etape::Mesure;
+            return;
+        }
+        // ⚠️ On abandonne EN LE DISANT : un guet muet ne se distingue pas d'un guet qui n'a jamais
+        // tourne — c'est precisement le defaut que tout ce bloc existe pour ne plus commettre.
+        if (ecoule > 15000)
+        {
+            SDK->logger->WarnF(PLUGIN,
+                               "[guet %llu] entite %llu TOUJOURS irresolvable apres %lld ms et %u "
+                               "essais — ce n'est pas un retard, c'est une absence",
+                               networkId, entityId.hash, (long long)ecoule, g.essais);
+            g.etape = Etape::Fini;
+        }
+        return;
+    }
+
+    // ── ETAPE « MESURE » : LES ORDRES PRENNENT-ILS EFFET ? ──────────────────────────────────────
+    //
+    // Le corps est resolvable, de la bonne espece, et il a une IA. Reste LA question suivante, qui
+    // est differente : ce qu'on lui demande a-t-il un effet ? On compare donc, quatre fois sur huit
+    // secondes, la position ou il EST a celle ou on le VEUT.
+    //
+    // Un ecart qui ne descend jamais dit que les ordres partent dans le vide — exactement le defaut
+    // mesure sur `PlacerSansCommande` (F-PLY-073) : accepte, sans effet.
+    const auto depuis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            maintenant - g.dernierEchantillon).count();
+    if (g.dernierEchantillon != std::chrono::steady_clock::time_point{} && depuis < 2000) { return; }
+    g.dernierEchantillon = maintenant;
+    ++g.derives;
+
+    const auto e = Cyberverse::Utils::GetDynamicEntity(entityId);
+    if (e.has_value())
+    {
+        const auto p = Cyberverse::Utils::Entity_GetWorldPosition(e.value());
+        const float dx = p.X - pose.x, dy = p.Y - pose.y, dz = p.Z - pose.z;
+        SDK->logger->InfoF(PLUGIN,
+                           "[derive %llu #%u] corps=(%.1f %.1f %.1f) voulu=(%.1f %.1f %.1f) "
+                           "ecart=%.2f m",
+                           networkId, g.derives, p.X, p.Y, p.Z, pose.x, pose.y, pose.z,
+                           std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    if (g.derives >= 4) { g.etape = Etape::Fini; }
+}
+
 void NetworkGameSystem::SetEntityPose(uint64_t networkId, RED4ext::ent::EntityID entityId,
                                       RED4ext::Vector4 worldPosition, float yaw, uint8_t locomotion,
                                       const RED4ext::Vector4* moveTarget)
 {
+
     // Modele HYBRIDE, prescrit par la mesure et non choisi au jugé.
     //
     // `AIMoveToCommand` fait reellement MARCHER et naviguer une entite commandee par le serveur
@@ -4425,13 +4535,31 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
     // serveur retire le garment quand le joueur range son arme (`appearance_relay.rs`) : traiter
     // l'absence comme « on ne sait pas » laisserait l'arme dans les mains de l'avatar pour
     // toujours. On ecrit donc explicitement 0.
+    //
+    // ⚠️ ON LIT DESORMAIS TOUT LE VECTEUR, plus seulement `Get(0)`. Il porte deux choses distinguees
+    // par `drawn` : l'arme EN MAIN (vrai, au plus une) et les VETEMENTS portes (faux, dans l'ordre
+    // de pose decide par le serveur). L'arme reste emise EN PREMIER cote serveur — cette position
+    // etait la seule information disponible ici avant aujourd'hui, et la garder evite qu'un client
+    // non mis a jour ne degaine un t-shirt.
     appearance.arme = 0;
-    if (sync->spec()->garments() != nullptr && sync->spec()->garments()->size() > 0)
+    appearance.vetements.clear();
+    if (const auto* garments = sync->spec()->garments(); garments != nullptr)
     {
-        const auto* premier = sync->spec()->garments()->Get(0);
-        if (premier != nullptr && premier->drawn())
+        for (flatbuffers::uoffset_t i = 0; i < garments->size(); ++i)
         {
-            appearance.arme = premier->item();
+            const auto* g = garments->Get(i);
+            if (g == nullptr)
+            {
+                continue;
+            }
+            if (g->drawn())
+            {
+                appearance.arme = g->item();
+            }
+            else if (g->item() != 0)
+            {
+                appearance.vetements.push_back(g->item());
+            }
         }
     }
     // ── L'ESTHETIQUE, RECOPIEE DEPUIS LE FIL ──────────────────────────────────────────────────
@@ -4449,9 +4577,10 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
     // ⚠️ LA TAILLE EST JOURNALISEE, et c'est le seul instrument qui prouve que le blob TRAVERSE.
     // Les tests du serveur encodaient et decodaient en Rust — verts des deux cotes, muets sur le
     // fil. Cette ligne est ce qui distingue « le serveur a relaye » de « le client a recu ».
-    SDK->logger->InfoF(PLUGIN, "AppearanceSync %llu : record=%llu apparence=%llu arme=%llu esthetique=%zu o",
+    SDK->logger->InfoF(PLUGIN,
+        "AppearanceSync %llu : record=%llu apparence=%llu arme=%llu esthetique=%zu o vetements=%zu",
         id, appearance.baseRecord, appearance.appearance, appearance.arme,
-        appearance.esthetique.size());
+        appearance.esthetique.size(), appearance.vetements.size());
 
     // L'apparence arrive AVANT le premier Snapshot qui porte l'entite (le serveur la pousse a
     // l'entree en AoI) — dans ce cas il n'y a rien a appliquer, le spawn s'en servira. Mais elle
@@ -5135,6 +5264,12 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
 void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
                                       const Tessera::Sync::PoseRendue& pose, float deltaTime)
 {
+    // ⚠️ LE GUET EST ICI, ET PAS DANS SetEntityPose : celle-la est le chemin des PNJ et des
+    // vehicules. Les avatars de JOUEURS passent par PiloterAvatar. Pose au mauvais endroit, le
+    // guet n'a produit AUCUNE ligne — et une absence totale de trace est le seul cas ou un
+    // instrument muet se denonce lui-meme.
+    GuetterResolution(networkId, entityId, pose);
+
     // ── LA BOUCLE PROUVEE, ET SEULEMENT ELLE ───────────────────────────────────────────────
     //
     // Mesuree en jeu le 2026-07-23 (backlog Q6/Q6b, sondes `loco_active`/`loco_lag`/`loco_hybrid`,

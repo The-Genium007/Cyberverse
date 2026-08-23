@@ -346,6 +346,18 @@ struct NetworkAppearance
     // un passant generique. Traiter le vide comme une erreur ferait echouer le spawn de tout le
     // monde aujourd'hui.
     std::vector<uint8_t> esthetique;
+    // ── CE QUE LE PERSONNAGE PORTE, decide par le SERVEUR ─────────────────────────────────────
+    //
+    // Hashes TweakDBID de vetements, DANS L'ORDRE DE POSE. Transportes par les `garments` dont le
+    // drapeau `drawn` est faux — le vrai designe l'arme en main, qui suit une tout autre recette
+    // (F-PLY-203 : l'habillage se branche sur `gamedataEquipmentArea`).
+    //
+    // L'autorite est la base de donnees du serveur (colonne `contenus.porte`), jamais le client et
+    // plus `dotation.toml` : un joueur qui se change doit rester change apres reconnexion.
+    //
+    // ⚠️ VIDE = NE PORTE RIEN, un etat a part entiere. Aujourd'hui c'est le cas de tout personnage
+    // cree avant la migration 0012 : ceux-la sont nus, et c'est exact.
+    std::vector<uint64_t> vetements;
 };
 
 class NetworkGameSystem : public Red::IGameSystem
@@ -1100,6 +1112,24 @@ public:
         return true;
     }
 
+    // Ce que le serveur annonce pour une entite de JEU. `nullptr` = entite inconnue de nos tables.
+    //
+    // ⚠️ Balayage lineaire de `m_networkedEntitiesLookup` : la table est indexee par id RESEAU et
+    // la question arrive avec un id d'ENTITE. Le cout est celui du voisinage visible (quelques
+    // dizaines), et ces appels partent une poignee de fois par avatar, pas par frame.
+    const NetworkAppearance* ApparencePourEntite(RED4ext::ent::EntityID cible) const
+    {
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                const auto it = m_appearances.find(paire.first);
+                return it == m_appearances.end() ? nullptr : &it->second;
+            }
+        }
+        return nullptr;
+    }
+
     // ── L'ARME EN MAIN : ce que le joueur LOCAL tient, annonce au serveur ─────────────────────
     //
     // `item` = hash TweakDBID de l'arme, `degainee` = elle est en main. Une arme rangee s'annonce
@@ -1124,15 +1154,40 @@ public:
     // la premiere ligne du cote script — sans quoi tout le chemin de reception aurait ete a jeter.
     RED4ext::TweakDBID Tessera_ArmeDeLEntite(RED4ext::ent::EntityID cible) const
     {
-        for (const auto& paire : m_networkedEntitiesLookup)
+        const auto* a = ApparencePourEntite(cible);
+        return RED4ext::TweakDBID(a == nullptr ? 0 : a->arme);
+    }
+
+    // Combien de vetements le serveur veut sur CETTE entite. `0` = elle ne porte rien.
+    //
+    // ⚠️ `0` NE DIT PAS « entite inconnue » — les deux rendent zero, et c'est assume : dans les
+    // deux cas il n'y a rien a poser. Le cote redscript n'a donc aucune decision a prendre sur la
+    // difference, et une valeur sentinelle de plus serait un cas de plus a oublier.
+    std::int32_t Tessera_NombreDeVetements(RED4ext::ent::EntityID cible) const
+    {
+        const auto* a = ApparencePourEntite(cible);
+        return a == nullptr ? 0 : static_cast<std::int32_t>(a->vetements.size());
+    }
+
+    // Le n-ieme vetement, dans l'ORDRE DE POSE decide par le serveur.
+    //
+    // ⚠️ RENVOIE UN `TweakDBID`, PAS UN `uint64_t`, pour exactement la raison ecrite au-dessus de
+    // `Tessera_ArmeDeLEntite` : redscript expose `TDBID.ToNumber` mais AUCUNE conversion inverse
+    // (verifie dans `core/data/tweakDBID.script` : `Create(String)`, `IsValid`, `Prepend`,
+    // `Append`, `ToNumber`, `None`, `ToStringDEBUG` — et rien d'autre). Un hash 64 bits passe cote
+    // script serait un cul-de-sac.
+    //
+    // ⚠️ Un index hors bornes rend un `TweakDBID` INVALIDE plutot que de lire a cote. L'appelant
+    // boucle sur `Tessera_NombreDeVetements`, mais les deux appels sont separes par des frames
+    // pendant lesquelles un `AppearanceSync` peut avoir raccourci la liste.
+    RED4ext::TweakDBID Tessera_VetementDeLEntite(RED4ext::ent::EntityID cible, std::int32_t index) const
+    {
+        const auto* a = ApparencePourEntite(cible);
+        if (a == nullptr || index < 0 || static_cast<std::size_t>(index) >= a->vetements.size())
         {
-            if (paire.second == cible)
-            {
-                const auto it = m_appearances.find(paire.first);
-                return RED4ext::TweakDBID(it == m_appearances.end() ? 0 : it->second.arme);
-            }
+            return RED4ext::TweakDBID(static_cast<uint64_t>(0));
         }
-        return RED4ext::TweakDBID(static_cast<uint64_t>(0));
+        return RED4ext::TweakDBID(a->vetements[static_cast<std::size_t>(index)]);
     }
 
     // Demande au serveur de faire reapparaitre le joueur local apres son coma.
@@ -1404,6 +1459,10 @@ public:
 
     /// Vrai tant qu'on accepte d'attendre l'apparence complete de ce voisin (delai borne).
     bool AttendreEncore(uint64_t networkId);
+
+    /// Guette le moment ou l'entite d'un avatar devient resolvable, et le dit UNE seule fois.
+    void GuetterResolution(uint64_t networkId, RED4ext::ent::EntityID entityId,
+                           const Tessera::Sync::PoseRendue& pose);
     bool m_drapeauxAppliques = false;
 
     /// SONDE (F-PLY-101, etape 1) — LIT la table d'alias FPP/TPP de l'etat de customisation, sans
@@ -1625,6 +1684,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_RapporterDegats);
     RTTI_METHOD(Tessera_RapporterArme);
     RTTI_METHOD(Tessera_ArmeDeLEntite);
+    RTTI_METHOD(Tessera_NombreDeVetements);
+    RTTI_METHOD(Tessera_VetementDeLEntite);
     RTTI_METHOD(Tessera_DemanderReapparition);
     RTTI_METHOD(Tessera_RapporterVariation);
     RTTI_METHOD(Tessera_SecondesSecours);
