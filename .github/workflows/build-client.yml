@@ -95,8 +95,16 @@ jobs:
           # jusqu'a rendre le jeu injouable (kick protocol_version, 2026-07-15). L'artefact est
           # desormais auto-suffisant : il correspond exactement au contenu de cyberverse-client.zip.
           #
-          # Cyberverse.reds (hooks du menu solo) reste EXCLU : il n'est pas dans le zip publie
-          # (verifie le 2026-07-15) — seul Network/ compose le package netcode.
+          # ⚠️ Cyberverse.reds N'EST PLUS EXCLU depuis le 2026-08-22, et c'est un RENVERSEMENT.
+          #
+          # Il l'etait sur un constat — « il n'est pas dans le zip publie (verifie le 2026-07-15) »
+          # — transforme en regle. Or il declare `TesseraLobbyValide` sur `DebugDataDef`
+          # (Cyberverse.reds:22), et le parcours d'entree promu dans tessera-uikit ECRIT ce champ.
+          # Sans ce fichier, `UiKitLobbyNatif.reds` ne resout pas, et redscript fait alors tomber
+          # TOUT r6/scripts : le joueur n'a pas « un lobby en moins », il a un jeu qui ne demarre
+          # plus du tout.
+          #
+          # Il vit a la racine de src/, pas sous src/Network/ — d'ou la copie separee ci-dessous.
           $reds = "staging/r6/scripts/Cyberverse"
           New-Item -ItemType Directory -Force -Path $reds | Out-Null
           #
@@ -104,11 +112,24 @@ jobs:
           # c'est une SONDE de recherche, qui n'a rien a faire chez un joueur. Tout .reds de
           # production ajoute dans src/Network/ doit donc etre ajoute ici, sinon il est deploye a
           # la main sur le poste de dev et n'atteint jamais les joueurs.
-          foreach ($f in @('NetworkGameSystem.reds', 'PlayerActionTracker.reds', 'AvatarNeutre.reds', 'LootOff.reds', 'DegatsPvp.reds', 'SanteLocale.reds')) {
+          # ⚠️ QUATRE FICHIERS AJOUTES LE 2026-08-22. Le fork portait 14 .reds, cette liste
+          # en nommait 6 : ArmeAvatar (armes vues par les autres joueurs), PoliceOff,
+          # Promotion (ADR 0022) et StimObserver etaient de la PRODUCTION deployee a la main
+          # sur le poste de dev, et n'atteignaient aucun joueur. C'est exactement ce que le
+          # commentaire ci-dessus annoncait qu'il arriverait.
+          #
+          # RESTENT DEHORS, et c'est voulu : AppearanceProbe, ChuteProbe et CrowdProbe. Leur
+          # bandeau dit « SONDE » — elles mesurent et journalisent, elles n'ont rien a faire
+          # chez un joueur.
+          foreach ($f in @('NetworkGameSystem.reds', 'PlayerActionTracker.reds', 'AvatarNeutre.reds', 'LootOff.reds', 'DegatsPvp.reds', 'SanteLocale.reds', 'ArmeAvatar.reds', 'PoliceOff.reds', 'Promotion.reds', 'StimObserver.reds')) {
             $src = "client/RedscriptModule/src/Network/$f"
             if (-not (Test-Path $src)) { Write-Error "Module redscript introuvable : $src"; exit 1 }
             Copy-Item $src $reds/; Write-Host "Redscript -> r6/scripts/Cyberverse : $f"
           }
+          # Cyberverse.reds : racine de src/, donc hors de la boucle ci-dessus.
+          $racine = 'client/RedscriptModule/src/Cyberverse.reds'
+          if (-not (Test-Path $racine)) { Write-Error "Module redscript introuvable : $racine"; exit 1 }
+          Copy-Item $racine $reds/; Write-Host "Redscript -> r6/scripts/Cyberverse : Cyberverse.reds"
           Write-Host "=== overlay final ==="; Get-ChildItem -Recurse staging | Select-Object FullName, Length
 
       - name: Upload artefact
