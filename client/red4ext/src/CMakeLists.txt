@@ -13,6 +13,7 @@ set(PROJECT_SRC_FILES
   Main.cpp
   NetworkGameSystem.cpp
   TesseraEsthetiqueV.cpp
+  TesseraSpawnEnrichi.cpp
   PlayerActionTracker.cpp
 )
 

@@ -1,6 +1,7 @@
 #include "NetworkGameSystem.h"
 
 #include "TesseraEsthetiqueV.h"
+#include "TesseraSpawnEnrichi.h"
 
 // Pour la sonde `Tessera_LireTableAlias` (F-PLY-101) : releve ecrit dans un fichier, et tampon de
 // lignes. Ajoutes explicitement plutot que supposes transitifs — une inclusion implicite qui
@@ -742,6 +743,14 @@ bool NetworkGameSystem::Tessera_PilotageParEntrees(bool actif)
     // distinguer « le correctif marche » de « le mode n'etait pas allume ».
     g_telemetrie.Evenement("pilotage_entrees", actif ? 1u : 0u, "");
     return g_pilotageParEntrees;
+}
+
+bool NetworkGameSystem::Tessera_SpawnEnrichi(bool actif)
+{
+    Tessera::SpawnEnrichi::g_actif = actif;
+    g_telemetrie.Evenement("spawn_enrichi", actif ? 1u : 0u, "");
+    SDK->logger->InfoF(PLUGIN, "spawn enrichi %s", actif ? "ALLUME" : "eteint");
+    return Tessera::SpawnEnrichi::g_actif;
 }
 
 // ── SONDE F-PLY-101 · LA TABLE D'ALIAS FPP/TPP, EN LECTURE SEULE ────────────────────────────────
@@ -4528,6 +4537,38 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
 
     const RED4ext::Quaternion worldOrientation = { 0.0f, 0.0f, 0.0f, 1.0f };
     RED4ext::ent::EntityID entityId;
+
+    // ── LA VOIE ENRICHIE D'ABORD, LA VOIE SURE ENSUITE ─────────────────────────────────────
+    //
+    // Codeware ne sait pas porter un V : `DynamicEntitySpec` n'a AUCUN champ de customisation.
+    // Le corps sortait donc du catalogue des passants, alors que la fiche d'apparence de ce
+    // joueur etait DEJA rangee dans `m_appearances[...].esthetique` — sans aucun lecteur.
+    //
+    // ⚠️ Toute la conception tient dans une phrase : **cette tentative peut echouer, jamais
+    // laisser sans corps.** Drapeau eteint, charge invalide, systeme injoignable, entite non
+    // retrouvee — chaque sortie retombe sur `SpawnNetworkAvatar` juste en dessous. Il n'existe
+    // pas de chemin ou l'on perd un voisin parce qu'on a voulu lui donner son visage.
+    if (it != m_appearances.end() && !it->second.esthetique.empty())
+    {
+        const auto essai = Tessera::SpawnEnrichi::Tenter(record.value, it->second.esthetique,
+                                                         worldPosition);
+        if (essai.tente && !essai.diag.empty())
+        {
+            // Journalise MEME en cas de succes : c'est ce qui distingue « la voie enrichie a
+            // marche » de « elle n'a jamais ete tentee », deux causes opposees derriere le meme
+            // symptome a l'ecran (un visage generique).
+            SDK->logger->InfoF(PLUGIN, "[spawn enrichi %llu] %s", networkId, essai.diag.c_str());
+        }
+        if (essai.entite.IsDefined())
+        {
+            entityId = essai.entite;
+            m_networkedEntitiesLookup.insert(std::make_pair(networkId, entityId));
+            SDK->logger->InfoF(PLUGIN, "Spawn entite reseau %llu -> entity %llu (voie ENRICHIE, "
+                                       "porte le V de ce joueur)", networkId, entityId.hash);
+            return true;
+        }
+    }
+
     if (!Red::CallVirtual(this, "SpawnNetworkAvatar", entityId, record, appearanceName,
                           worldPosition, worldOrientation))
     {

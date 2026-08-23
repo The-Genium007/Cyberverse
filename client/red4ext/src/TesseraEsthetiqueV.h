@@ -21,10 +21,58 @@
 
 #include <RED4ext/RED4ext.hpp>
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace Tessera::EsthetiqueV
 {
+// ── CE QUE CE MODULE PARTAGE, ET POURQUOI IL LE PARTAGE ──────────────────────────────────────────
+//
+// `TesseraSpawnEnrichi` a besoin des memes primitives : la meme disposition de tableau, la meme
+// garde de lisibilite, et surtout LA MEME SELECTION DE GROUPES. Cette selection a coute trois jours
+// de mesure et une erreur en jeu (« les bras sont dupliques », F-PLY-197 : les groupes d'une section
+// sont des ALTERNATIVES, pas des couches). **Deux copies d'une telle liste sont une divergence en
+// attente** — elles vivent donc ici, en un seul endroit, et s'exposent au lieu de se recopier.
+
+/// Le tableau dynamique du moteur, tel que le binaire le dispose.
+///
+/// ⚠️ **La capacite PRECEDE la taille** — l'inverse de l'ordre qu'on suppose spontanement.
+/// Confirme par QUATRE chemins independants : F-PLY-182, F-PLY-195, puis F-PLY-267 qui l'a relu
+/// dans l'ajout unitaire du moteur ET dans l'assertion de debug de CDPR
+/// (`redContainers/src/dynamicBuffer.cpp`, message nommant `capacity` et `elementSize`).
+struct DynArray
+{
+    void* entries;
+    std::uint32_t capacity;
+    std::uint32_t size;
+};
+
+/// Vrai si `[aPtr, aPtr+aSize)` est mappe et lisible.
+///
+/// ⚠️ Exige un alignement sur 8 octets : c'est une garde pour les lectures de POINTEURS. Interroger
+/// une adresse impaire rend TOUJOURS faux, et le refus est credible (F-PLY-171) — pour un drapeau a
+/// offset impair, interroger le mot ALIGNE qui le contient.
+///
+/// ⚠️⚠️ « Lisible » n'est PAS « c'est un objet de la classe que je crois ». Entre les deux il y a un
+/// crash, et il a ete paye le 2026-08-21 (F-PLY-225).
+bool Lisible(std::uintptr_t aPtr, std::size_t aSize);
+
+/// Recolte les six groupes de customisation du V local dans `aCharge`, et rend le compte PAR
+/// SECTION (Head, Body, Arms). `aEtat` doit etre un `gameuiCharacterCustomizationState` VERIFIE.
+void Recolter(void* aEtat, std::uintptr_t aBase, DynArray& aCharge, std::uint32_t aParSection[3]);
+
+/// RVA du tampon « tableau vide » partage du jeu : le point de depart d'une recolte.
+std::uint64_t RvaSentinelle();
+
+/// Decode un blob `TSV1` (octets bruts, tels que le serveur les stocke et les redistribue).
+///
+/// C'est la FRONTIERE DE CONFIANCE cote client : le blob vient du reseau. Tout y est verifie —
+/// magic, octet reserve, coherence des compteurs avec la taille. Rend `false` et remplit
+/// `aPourquoi` au moindre doute : ces octets vont servir a calculer des adresses d'ecriture.
+bool Decoder(const std::vector<std::uint8_t>& aBlob, std::uint32_t& aHead, std::uint32_t& aBody,
+             std::uint32_t& aArms, std::vector<std::uint64_t>& aPaires, std::string& aPourquoi);
+
 /// Rend l'esthetique du personnage local en hexadecimal (blob `TSV1`).
 ///
 /// `aEtat` doit etre un `gameuiCharacterCustomizationState` — celui que redscript obtient par

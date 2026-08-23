@@ -1385,6 +1385,12 @@ public:
     /// Bascule le pilotage par les ENTREES (ADR 0032). Voir `g_pilotageParEntrees`.
     bool Tessera_PilotageParEntrees(bool actif);
 
+    /// Allume ou eteint le SPAWN ENRICHI — le corps d'un joueur distant porte SON V au lieu du
+    /// visage d'un passant. ⚠️ **Eteint par defaut** : couche 3 (ADR 0015), mode d'echec = crash du
+    /// processus. Rend l'etat effectif, pour qu'un depouillement puisse dire si le mode etait actif
+    /// — la sonde du 2026-08-16 a conclu au succes sur un dispositif qui ne mesurait rien.
+    bool Tessera_SpawnEnrichi(bool actif);
+
     /// SONDE (F-PLY-101, etape 1) — LIT la table d'alias FPP/TPP de l'etat de customisation, sans
     /// rien modifier. Ecrit le releve dans `TesseraLogs\alias-apparence.txt` et rend un resume.
     ///
@@ -1653,6 +1659,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_SuspendreCommandes);
     RTTI_METHOD(Tessera_SuspendreCorrections);
     RTTI_METHOD(Tessera_PilotageParEntrees);
+    RTTI_METHOD(Tessera_SpawnEnrichi);
     RTTI_METHOD(Tessera_LireTableAlias);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);
     RTTI_METHOD(Tessera_AvatarJoueurParIndex);

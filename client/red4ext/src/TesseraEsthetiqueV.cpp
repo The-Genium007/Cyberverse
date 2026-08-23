@@ -15,15 +15,6 @@ namespace
 // Toutes viennent de mesures datees de la sonde `tools/re-probe`, et sont recopiees ici sans etre
 // re-devinees. Elles valent pour Cyberpunk 2077 **2.31** et pour elle seule.
 
-/// Disposition confirmee trois fois (F-PLY-182, F-PLY-195).
-/// ⚠️ La capacite PRECEDE la taille — l'inverse de l'ordre qu'on suppose spontanement.
-struct DynArray
-{
-    void* entries;
-    std::uint32_t capacity;
-    std::uint32_t size;
-};
-
 /// (this, nomDeGroupe, isFPP, tableauDeSortie) -> 1 si le groupe est ABSENT
 using Charge_t = std::uint8_t (*)(void*, std::uint64_t, std::uint8_t, void*);
 
@@ -83,6 +74,8 @@ constexpr Groupe kGroupes[] = {
 /// refuse toute adresse impaire. Interroger directement un drapeau a offset impair rend donc
 /// TOUJOURS faux, et le refus est parfaitement credible (F-PLY-171). On interroge le mot ALIGNE qui
 /// contient le drapeau, jamais le drapeau lui-meme.
+}  // namespace  (fin de l'espace anonyme — ce qui suit est PARTAGE, voir l'en-tete)
+
 bool Lisible(std::uintptr_t aPtr, std::size_t aSize)
 {
     if (aPtr == 0 || (aPtr & 0x7) != 0)
@@ -134,7 +127,70 @@ void EnHex(const std::uint8_t* aOctets, std::size_t aN, std::string& aOut)
         aOut.push_back(Chiffre(static_cast<unsigned>(aOctets[i] & 0x0F)));
     }
 }
-}  // namespace
+std::uint64_t RvaSentinelle()
+{
+    return kRvaSentinelle;
+}
+
+bool Decoder(const std::vector<std::uint8_t>& aBlob, std::uint32_t& aHead, std::uint32_t& aBody,
+             std::uint32_t& aArms, std::vector<std::uint64_t>& aPaires, std::string& aPourquoi)
+{
+    aPaires.clear();
+    aHead = aBody = aArms = 0;
+
+    if (aBlob.size() < kEnTete)
+    {
+        aPourquoi = "trop court pour porter l'en-tete TSV1";
+        return false;
+    }
+    if (aBlob[0] != 'T' || aBlob[1] != 'S' || aBlob[2] != 'V' || aBlob[3] != '1')
+    {
+        aPourquoi = "magic absent (pas un descripteur TSV1)";
+        return false;
+    }
+    aHead = aBlob[4];
+    aBody = aBlob[5];
+    aArms = aBlob[6];
+    // L'octet reserve DOIT valoir 0. Un jour il portera un drapeau ; ce jour-la, un client qui
+    // l'ignorait aurait applique une esthetique en croyant la comprendre.
+    if (aBlob[7] != 0)
+    {
+        aPourquoi = "octet reserve non nul — descripteur d'une version qu'on ne sait pas lire";
+        return false;
+    }
+
+    const std::uint32_t total = aHead + aBody + aArms;
+    if (total == 0)
+    {
+        aPourquoi = "descripteur VIDE — aucune paire";
+        return false;
+    }
+    if (total > kMaxSection * 3)
+    {
+        aPourquoi = "trop de paires (au-dela du plafond annonce)";
+        return false;
+    }
+    // ⚠️ LA VERIFICATION QUI COMPTE : la taille annoncee par les compteurs doit correspondre EXACTEMENT
+    // a la taille recue. Sans elle, un blob tronque ferait lire au-dela du vecteur — et ces octets
+    // servent ensuite a calculer des adresses d'ecriture dans le tas du jeu.
+    if (aBlob.size() != kEnTete + static_cast<std::size_t>(total) * 16)
+    {
+        aPourquoi = "taille incoherente avec les compteurs de l'en-tete";
+        return false;
+    }
+
+    aPaires.reserve(static_cast<std::size_t>(total) * 2);
+    for (std::uint32_t i = 0; i < total; ++i)
+    {
+        const std::uint8_t* ou = &aBlob[kEnTete + static_cast<std::size_t>(i) * 16];
+        std::uint64_t a = 0, c = 0;
+        for (int k = 7; k >= 0; --k) { a = (a << 8) | ou[k]; }
+        for (int k = 7; k >= 0; --k) { c = (c << 8) | ou[8 + k]; }
+        aPaires.push_back(a);
+        aPaires.push_back(c);
+    }
+    return true;
+}
 
 bool Lire(RED4ext::IScriptable* aEtat, std::string& aHexOut, std::string& aErreurOut)
 {
