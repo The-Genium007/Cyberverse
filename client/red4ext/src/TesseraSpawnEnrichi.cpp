@@ -340,6 +340,14 @@ struct EnAttente
     RED4ext::Vector4 position{};
     std::uint32_t passages = 0;
     bool appele = false;
+    /// ⭐ Le pointeur RENDU par l'appel enrichi. Décompilation du 2026-08-23 :
+    /// `FUN_1406627d4` termine par `*param_2 = lVar1` — **le retour EST un objet**, pas une
+    /// valeur jetable, et il reçoit un champ à `+0x110`.
+    ///
+    /// Or le premier relevé montrait `+0x48 = 0` — l'emplacement du `entityID` sur une
+    /// `ent::Entity`. Zéro **au moment de l'appel**, ce qui est exactement ce qu'on attend d'une
+    /// création asynchrone : le champ se remplit ensuite. D'où l'idée de le RELIRE.
+    void* retour = nullptr;
 };
 
 /// Combien de passages on accorde au moteur pour faire naitre le corps.
@@ -382,6 +390,57 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
         {
             auto& a = attente->second;
             ++a.passages;
+
+            // ── ⭐⭐ RELIRE L'OBJET RENDU — la voie la plus directe, et la moins chere ─────────
+            //
+            // Décompilation de `FUN_1406627d4` : le retour est un objet dont un champ est écrit à
+            // `+0x110`. Le premier relevé donnait `+0x48 = 0` — la place du `entityID` sur une
+            // `ent::Entity`. Zéro AU MOMENT DE L'APPEL est cohérent avec la création asynchrone
+            // qu'on a mesurée par ailleurs : le champ se remplit après.
+            //
+            // ⚠️⚠️ ON LIT, ON N'APPELLE RIEN. Le crash du 2026-08-21 (F-PLY-225) ne venait pas
+            // d'avoir lu ce pointeur : il venait d'avoir APPELÉ `GetFunction` dessus, sur un type
+            // bidon. Une lecture gardée par `Lisible` vérifie que la page est mappée ; c'est tout
+            // ce dont on a besoin.
+            //
+            // ⚠️ ET ON VALIDE AVANT D'UTILISER. Un `EntityID` plausible ici ressemble à ceux que la
+            // voie sûre produit — de l'ordre de 10 000 000 à 11 000 000 sur cette session. Prendre
+            // n'importe quel entier non nul ferait piloter n'importe quoi, et le défaut se
+            // chercherait très loin d'ici.
+            if (a.retour != nullptr
+                && EsthetiqueV::Lisible(reinterpret_cast<std::uintptr_t>(a.retour), 0x120))
+            {
+                const auto* mots = reinterpret_cast<const std::uint64_t*>(a.retour);
+                const std::uint64_t candidats[] = {mots[0x48 / 8], mots[0x110 / 8], mots[0x118 / 8]};
+                const char* nomOffset[] = {"+0x48", "+0x110", "+0x118"};
+                for (int k = 0; k < 3; ++k)
+                {
+                    const std::uint64_t v = candidats[k];
+                    // Plage volontairement large mais FINIE : un identifiant, pas un pointeur.
+                    if (v > 1000000ull && v < 0xFFFFFFFFull)
+                    {
+                        r.entite = RED4ext::ent::EntityID{v};
+                        r.appelFait = true;
+                        char b[300];
+                        std::snprintf(b, sizeof(b),
+                                      "corps enrichi TROUVE PAR LE RETOUR apres %u passage(s) — "
+                                      "entite %llu lue en %s de l'objet rendu",
+                                      a.passages, (unsigned long long)v, nomOffset[k]);
+                        r.diag = b;
+                        g_enAttente.erase(attente);
+                        return r;
+                    }
+                }
+                // Diagnostic espace : trois relectures suffisent a voir si ca se remplit.
+                if (a.passages == 1 || a.passages == 30 || a.passages == 200)
+                {
+                    SDK->logger->InfoF(PLUGIN,
+                                       "[retour relu, passage %u] +48=%llX +110=%llX +118=%llX",
+                                       a.passages, (unsigned long long)candidats[0],
+                                       (unsigned long long)candidats[1],
+                                       (unsigned long long)candidats[2]);
+                }
+            }
 
             Releve maintenant;
             Relever(recordAttendu(), maintenant);
@@ -652,6 +711,7 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
         a.position = aPosition;
         a.appele = true;
         a.passages = 0;
+        a.retour = sortie[0];
         g_enAttente[aNetworkId] = std::move(a);
     }
     char b[300];

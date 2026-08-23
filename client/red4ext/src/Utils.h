@@ -72,23 +72,51 @@ namespace Cyberverse::Utils
         return out;
     }
 
+    /// Resout une entite par son identifiant.
+    ///
+    /// ⭐⭐ **DEUX VOIES, ET LA SECONDE EXISTE DEPUIS LE 2026-08-23.**
+    ///
+    /// Cette fonction est le point de passage de TOUT le pilotage d'un avatar distant : placement,
+    /// correction de derive, postures, suppression. Elle n'interrogeait que le
+    /// `DynamicEntitySystem` — qui ne connait QUE les entites qu'il a lui-meme creees (Codeware).
+    ///
+    /// Or le corps qui porte le V d'un joueur vient du **spawner natif du mode photo**. Il n'est
+    /// donc PAS dans ce registre, et chaque resolution echouait. Consequence mesuree en jeu :
+    /// l'avatar etait enregistre, le netcode le croyait present, ne fabriquait plus de corps de
+    /// secours — et ne pouvait piloter ni l'un ni l'autre. Verdict de Lucas : *« je ne vois pas de
+    /// corps physique sur les joueurs quand ils se deplacent … peu importe la nature du corps »*.
+    ///
+    /// ⚠️ **L'ORDRE COMPTE, et il n'est pas interchangeable.** Le systeme dynamique passe EN
+    /// PREMIER parce que c'est la voie prouvee depuis toujours pour les corps qu'il fabrique.
+    /// `FindEntityByID` est le repli : il resout n'importe quelle entite du monde, mais il est
+    /// mesure comme rendant `nil` sur des pantins bien vivants (F-PNJ-088). Un repli n'est pas un
+    /// remplacement — on ne renverse pas cet ordre sans une mesure qui le justifie.
     inline std::optional<Red::Handle<Red::Entity>> GetDynamicEntity(const RED4ext::EntityID& entityId)
     {
         Red::Handle<Red::IGameSystem> dynamicEntitySystem;
-        if (!Red::CallStatic("ScriptGameInstance", "GetDynamicEntitySystem", dynamicEntitySystem))
+        if (Red::CallStatic("ScriptGameInstance", "GetDynamicEntitySystem", dynamicEntitySystem))
         {
-            SDK->logger->Warn(PLUGIN, "Getting the dynamic entity system failed");
-            return {};
+            Red::Handle<Red::Entity> entity;
+            if (Red::CallVirtual(dynamicEntitySystem, "GetEntity", entity, entityId)
+                && entity != nullptr)
+            {
+                return entity;
+            }
         }
 
-        Red::Handle<Red::Entity> entity;
-        if (!Red::CallVirtual(dynamicEntitySystem, "GetEntity", entity, entityId) || entity == nullptr)
+        // ── LE REPLI : n'importe quelle entite du monde, y compris celles qu'on n'a pas creees ──
+        //
+        // ⚠️ Pas de journal ici en cas d'echec des DEUX voies : cette fonction est appelee a chaque
+        // frame pour chaque avatar. Une ligne par echec noierait le journal — et c'est ce que
+        // faisait la version precedente, qui ecrivait « Failed to get the entity » en boucle.
+        Red::Handle<Red::Entity> parLeMonde;
+        if (Red::CallStatic("ScriptGameInstance", "FindEntityByID", parLeMonde, entityId)
+            && parLeMonde != nullptr)
         {
-            SDK->logger->WarnF(PLUGIN, "Failed to get the entity (%llu) by id", entityId.hash);
-            return {};
+            return parLeMonde;
         }
 
-        return entity;
+        return {};
     }
 
     inline RED4ext::Vector3 LerpLocal(const RED4ext::Vector3& from, const RED4ext::Vector3& to, float t) noexcept

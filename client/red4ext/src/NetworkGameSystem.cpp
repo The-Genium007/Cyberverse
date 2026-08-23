@@ -4638,6 +4638,126 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
             m_networkedEntitiesLookup.insert(std::make_pair(networkId, entityId));
             SDK->logger->InfoF(PLUGIN, "Spawn entite reseau %llu -> entity %llu (voie ENRICHIE, "
                                        "porte le V de ce joueur)", networkId, entityId.hash);
+
+            // ── ⭐ LA FICHE DU CORPS, UNE SEULE FOIS ──────────────────────────────────────────
+            //
+            // Verdict de Lucas, 2026-08-23 : le corps porte le bon visage, il est SEUL — et il est
+            // « statique, pas anime, pas relie au joueur ».
+            //
+            // ⚠️ ET JE N'AVAIS PLUS D'INSTRUMENT POUR LE DIRE. Le `Failed to get the entity` a ete
+            // retire au correctif precedent (il ecrivait une ligne par frame et par avatar). Un
+            // journal sans echec ne prouvait donc plus rien : zero echec, ou zero ligne. C'est la
+            // CINQUIEME fois de la journee qu'un mecanisme auxiliaire fait echouer la mesure qu'il
+            // devait servir.
+            //
+            // Quatre questions, une fois par corps, et chacune elimine une cause :
+            //   · l'entite se RESOUT-elle ? (sinon, tout le pilotage est aveugle)
+            //   · quelle CLASSE ? (un `NPCPuppet` se pilote, un `gameObject` nu non)
+            //   · a-t-elle un CONTROLEUR D'IA ? (sans lui, pas de commande de marche — F-PLY-205)
+            //   · ou est-elle ? (compare a la position demandee : le placement a-t-il pris ?)
+            {
+                // ── ⚠️ LES DEUX VOIES SEPAREMENT, ET « S'EST-ELLE LIEE » SEPAREMENT DE « A-T-ELLE
+                //    TROUVE » ────────────────────────────────────────────────────────────────────
+                //
+                // `IRRESOLVABLE` ne distinguait pas trois pannes : l'appel ne se lie pas, il se lie
+                // et rend nul, ou le systeme lui-meme est injoignable. C'est la SEPTIEME fois de la
+                // journee qu'un message unique couvre plusieurs causes opposees — et a chaque fois
+                // ca a coute un tir.
+                //
+                // ⚠️ Piste ouverte, a confirmer ici : le script declare
+                // `GameInstance.FindEntityByID( gi, entityID )` — la GameInstance en PREMIER
+                // parametre. `Red::CallStatic("ScriptGameInstance", ...)` l'injecte pour les
+                // accesseurs de systeme, mais rien n'etablit qu'il le fasse ici.
+                Red::Handle<Red::IGameSystem> sysDyn;
+                const bool sysLie = Red::CallStatic("ScriptGameInstance", "GetDynamicEntitySystem", sysDyn);
+                Red::Handle<Red::Entity> parDyn;
+                const bool dynLie = sysLie && sysDyn != nullptr
+                                    && Red::CallVirtual(sysDyn, "GetEntity", parDyn, entityId);
+                Red::Handle<Red::Entity> parMonde;
+                const bool mondeLie = Red::CallStatic("ScriptGameInstance", "FindEntityByID", parMonde, entityId);
+
+                // ── ⭐ ON DEMANDE AU MOTEUR CE QU'IL EXPOSE, AU LIEU DE DEVINER UN NOM DE PLUS ──
+                //
+                // `FindEntityByID` ne se lie pas (`appel=NON LIE`, mesure du 2026-08-23 18:16). Le
+                // script l'ecrit pourtant `GameInstance.FindEntityByID( gi, entityID )`.
+                //
+                // ⚠️ Essayer des noms au hasard serait la HUITIEME hypothese de la journee, apres
+                // sept qui ont coute un tir chacune. Le RTTI sait, lui : on lui demande. C'est le
+                // meme principe que lire le script decompile plutot que supposer une signature —
+                // et que lire l'assertion de CDPR plutot que deviner ce que fait `Reserve`.
+                //
+                // ⚠️ UNE SEULE FOIS : `s_dejaDump` garde. Enumerer une classe RTTI a chaque spawn
+                // ecrirait des centaines de lignes par minute.
+                static bool s_dejaDump = false;
+                if (!s_dejaDump)
+                {
+                    s_dejaDump = true;
+                    auto* rtti = RED4ext::CRTTISystem::Get();
+                    auto* cls = (rtti != nullptr) ? rtti->GetClass("ScriptGameInstance") : nullptr;
+                    if (cls == nullptr)
+                    {
+                        SDK->logger->WarnF(PLUGIN, "[rtti] classe ScriptGameInstance INTROUVABLE — "
+                                                   "ce n'est donc pas par la qu'il faut passer");
+                    }
+                    else
+                    {
+                        std::string trouvees;
+                        std::uint32_t total = 0;
+                        for (auto* fn : cls->staticFuncs)
+                        {
+                            if (fn == nullptr) { continue; }
+                            ++total;
+                            const char* nom = fn->fullName.ToString();
+                            if (nom == nullptr) { continue; }
+                            // On ne garde que ce qui parle d'entites : le reste noierait la ligne.
+                            if (std::strstr(nom, "Entity") != nullptr
+                                || std::strstr(nom, "entity") != nullptr)
+                            {
+                                trouvees += nom;
+                                trouvees += " (";
+                                trouvees += std::to_string(fn->params.size());
+                                trouvees += "p) · ";
+                            }
+                        }
+                        SDK->logger->InfoF(PLUGIN,
+                                           "[rtti] ScriptGameInstance : %u statique(s), celles qui "
+                                           "parlent d'entite -> %s",
+                                           total, trouvees.empty() ? "AUCUNE" : trouvees.c_str());
+                    }
+                }
+                SDK->logger->InfoF(PLUGIN,
+                                   "[fiche %llu] voie DYN : systeme=%s appel=%s entite=%s · "
+                                   "voie MONDE : appel=%s entite=%s",
+                                   networkId,
+                                   sysLie ? "ok" : "INJOIGNABLE",
+                                   dynLie ? "lie" : "NON LIE",
+                                   parDyn != nullptr ? "trouvee" : "nulle",
+                                   mondeLie ? "lie" : "NON LIE",
+                                   parMonde != nullptr ? "trouvee" : "nulle");
+
+                const auto e = Cyberverse::Utils::GetDynamicEntity(entityId);
+                if (!e.has_value() || e->instance == nullptr)
+                {
+                    SDK->logger->WarnF(PLUGIN, "[fiche %llu] entite %llu IRRESOLVABLE par les DEUX "
+                                               "voies — le pilotage sera aveugle sur ce corps",
+                                       networkId, entityId.hash);
+                }
+                else
+                {
+                    const char* classe = (e->instance->GetType() != nullptr)
+                                             ? e->instance->GetType()->name.ToString() : "<sans type>";
+                    Red::Handle<RED4ext::IScriptable> ia;
+                    const bool aIa = Red::CallVirtual(e.value(), "GetAIControllerComponent", ia)
+                                     && ia != nullptr;
+                    const auto p = Cyberverse::Utils::Entity_GetWorldPosition(e.value());
+                    SDK->logger->InfoF(PLUGIN,
+                                       "[fiche %llu] classe=%s · IA=%s · pos=(%.1f %.1f %.1f) "
+                                       "demandee=(%.1f %.1f %.1f)",
+                                       networkId, classe, aIa ? "OUI" : "NON",
+                                       p.X, p.Y, p.Z,
+                                       worldPosition.X, worldPosition.Y, worldPosition.Z);
+                }
+            }
             return true;
         }
         // ── L'APPEL EST PARTI, LE CORPS N'EST PAS ENCORE NE : ON PATIENTE ────────────────────
