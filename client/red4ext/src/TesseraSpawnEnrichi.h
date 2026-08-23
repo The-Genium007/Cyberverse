@@ -69,8 +69,11 @@ struct Resultat
 
 /// Tente de fabriquer un corps portant `aBlob` (format `TSV1`, tel que le serveur le stocke).
 ///
+/// ⚠️ **Ne prend PAS de record.** Le record du serveur designe un passant, et la voie enrichie ne
+/// produit rien d'observable sur un record de foule (F-PLY-207). Ce module choisit donc le sien —
+/// voir `kRecordEnrichi` dans le `.cpp`, avec la raison complete.
+///
 /// Rend toujours — jamais d'exception, jamais de sortie sans diagnostic. `resultat.entite` vide
 /// signifie « l'appelant doit reprendre la voie sure », quelle qu'en soit la raison.
-Resultat Tenter(std::uint64_t aRecord, const std::vector<std::uint8_t>& aBlob,
-                const RED4ext::Vector4& aPosition);
+Resultat Tenter(const std::vector<std::uint8_t>& aBlob, const RED4ext::Vector4& aPosition);
 }  // namespace Tessera::SpawnEnrichi

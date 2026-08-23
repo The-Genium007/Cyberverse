@@ -46,6 +46,27 @@ using SpawnEnrichi_t = void* (*)(void* aSpawner, void* aSortie, void* aRequete, 
 using Reserve_t = void (*)(void* aTableau, std::uint32_t aCapacite, std::uint32_t aTailleElement,
                            std::uint32_t aAlignement, void* aRappel);
 
+/// ⭐ LE RECORD DES CORPS ENRICHIS — et il ne vient PAS du serveur.
+///
+/// Le serveur envoie un record de PASSANT (`Character.CitizenRichFemale`...), parce que c'est ce
+/// qu'il fallait tant que le corps ne portait pas de visage. Le passer a la voie enrichie n'aurait
+/// aucun sens : F-PLY-207 a mesure que vingt pantins de FOULE spawnes par cette voie sortaient
+/// IDENTIQUES entre eux — la charge n'y produit rien d'observable.
+///
+/// La voie enrichie exige un record de la chaine PHOTOMODE, seule ascendance qui porte la
+/// machinerie de customisation. `_Marche_` est celui que le controle positif de Lucas a valide le
+/// 2026-08-23 (« je vois un personnage devant moi, exactement le meme que moi ») : entite du
+/// photomode avec le graphe `humanoid.animgraph` et les six champs d'IA, donc un corps qui MARCHE.
+///
+/// ⚠️ **Un seul record, pas deux.** Aucun record genre n'est necessaire : le SEXE DU CORPS SUIT LA
+/// CHARGE, jamais le nom du record — mesure a l'oeil du 2026-08-23, un record nomme `_Male` charge
+/// d'une esthetique feminine rend un corps de femme (F-PLY-267).
+///
+/// ⚠️⚠️ **CE RECORD DOIT ETRE DANS LE MODSET LIVRE.** Il vit aujourd'hui dans `tools/re-probe`,
+/// c'est-a-dire chez Lucas seulement (ADR 0038). Tant qu'il n'est pas promu, la voie enrichie
+/// echouera chez un joueur — proprement, en retombant sur la voie sure, mais elle echouera.
+constexpr const char* kRecordEnrichi = "Character.Tessera_Avatar_Marche_Male";
+
 /// Rayon d'enumeration pour retrouver le corps qu'on vient de fabriquer, en metres.
 ///
 /// ⚠️ **Pose explicitement, jamais laisse a un defaut.** Le 2026-08-22, un rayon code en dur a 30 m
@@ -120,8 +141,7 @@ void EnumererCorps(std::uint64_t aRecord, std::vector<std::uint64_t>& aOut)
 }
 }  // namespace
 
-Resultat Tenter(std::uint64_t aRecord, const std::vector<std::uint8_t>& aBlob,
-                const RED4ext::Vector4& aPosition)
+Resultat Tenter(const std::vector<std::uint8_t>& aBlob, const RED4ext::Vector4& aPosition)
 {
     Resultat r;
 
@@ -151,6 +171,11 @@ Resultat Tenter(std::uint64_t aRecord, const std::vector<std::uint8_t>& aBlob,
         return r;
     }
     const std::uint32_t nInj = nHead + nBody + nArms;
+
+    // Le record est le NOTRE, jamais celui du serveur (voir `kRecordEnrichi`). Hache une seule fois
+    // par appel : `TweakDBID` est un CRC32 du nom, plus la longueur dans les 32 bits hauts.
+    const RED4ext::TweakDBID recordId(kRecordEnrichi);
+    const std::uint64_t aRecord = recordId.value;
 
     // ── LES DEUX OBJETS DU JEU ──────────────────────────────────────────────────────────────────
     auto* pms = SystemeParNom("gamePhotoModeSystem");

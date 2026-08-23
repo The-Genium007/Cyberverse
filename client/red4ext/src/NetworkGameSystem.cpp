@@ -4550,8 +4550,7 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
     // pas de chemin ou l'on perd un voisin parce qu'on a voulu lui donner son visage.
     if (it != m_appearances.end() && !it->second.esthetique.empty())
     {
-        const auto essai = Tessera::SpawnEnrichi::Tenter(record.value, it->second.esthetique,
-                                                         worldPosition);
+        const auto essai = Tessera::SpawnEnrichi::Tenter(it->second.esthetique, worldPosition);
         if (essai.tente && !essai.diag.empty())
         {
             // Journalise MEME en cas de succes : c'est ce qui distingue « la voie enrichie a
