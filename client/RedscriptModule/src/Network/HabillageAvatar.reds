@@ -139,17 +139,35 @@ public class TesseraHabillageAvatar extends DelayCallback {
     // ⚠️ LE VERDICT EST `GetItemInSlot`, PAS LA VALEUR DE RETOUR DES ORDRES. `AddItemToSlot` rend
     // `true` en ayant seulement accepté (D1 : « accepté » ≠ « exécuté »). C'est la règle que
     // F-PLY-185 a établie au prix de quatre voies explorées.
+    //
+    // ── DEUX RECETTES, EN ALTERNANCE — et c'est délibéré ──────────────────────────────────────
+    //
+    // Mesuré le 2026-08-23, premier passage en jeu : la recette du photomode (F-PLY-203) ne pose
+    // RIEN sur nos pantins — « 4/4 pièces toujours absentes après 10 passes ». C'était une
+    // hypothèse, jamais exécutée ; elle vient d'être exécutée, et elle ne suffit pas.
+    //
+    // Or ce dépôt en connaît une SECONDE, celle-là mesurée : `ArmeAvatar.reds` équipe réellement
+    // une arme sur un pantin distant, par `GiveItem` + `AddItemToSlot` avec l'`ItemID` DIRECT — pas
+    // un item de prévisualisation. Elle marche depuis le 2026-07-24.
+    //
+    // Plutôt que de choisir à l'aveugle, on les alterne : passe paire = photomode, passe impaire =
+    // arme. Chacune a cinq tentatives sur les dix, le journal nomme celle qui a été essayée, et
+    // celle qui converge gagne. Un aller-retour en jeu coûte cinq minutes ; en faire un par
+    // hypothèse quand une seule suffit est du temps qu'on ne remet pas.
     private func Poser(transactions: ref<TransactionSystem>, avatar: ref<ScriptedPuppet>,
                        vetement: TweakDBID) -> Bool {
         let identifiant = ItemID.FromTDBID(vetement);
         let slot = EquipmentSystem.GetPlacementSlot(identifiant);
+        // On ne parle qu'à la première passe et à la dixième : une ligne par vêtement et par passe
+        // ferait quarante lignes par avatar et par seconde — le régime qui a produit 19 000 lignes
+        // le 2026-08-22 et rendu le journal inutilisable.
+        let bavard = this.essais == 0u || this.essais == 9u;
+
         if !TDBID.IsValid(slot) {
             // ⚠️ RENDU « POSÉ » DÉLIBÉRÉMENT, alors que rien n'a été posé. Un item sans slot de
             // placement ne l'aura jamais — le retenter dix fois par avatar ne ferait que masquer
             // les vraies pièces manquantes derrière du bruit. C'est exactement le défaut de
             // F-PLY-185 : `equipArea` vide, donc aucun slot, donc pipeline visuel sans objet.
-            // Le journal le NOMME, une fois, parce qu'un serveur qui distribue un item inportable
-            // a un problème que personne ne verrait autrement.
             if this.essais == 0u {
                 TesseraJournalHabillage(
                     s"⚠ \(TDBID.ToStringDEBUG(vetement)) n'a aucun slot de placement — ignoré");
@@ -157,22 +175,47 @@ public class TesseraHabillageAvatar extends DelayCallback {
             return true;
         }
 
+        // ── CE QUE L'AVATAR PORTE VRAIMENT, avant qu'on touche à quoi que ce soit ────────────
         let present = transactions.GetItemInSlot(avatar, slot);
-        if IsDefined(present)
-            && TDBID.ToNumber(ItemID.GetTDBID(present.GetItemID())) == TDBID.ToNumber(vetement) {
-            return true;
+        let occupant = "vide";
+        if IsDefined(present) {
+            occupant = TDBID.ToStringDEBUG(ItemID.GetTDBID(present.GetItemID()));
+            if TDBID.ToNumber(ItemID.GetTDBID(present.GetItemID())) == TDBID.ToNumber(vetement) {
+                return true;
+            }
         }
 
-        // La recette F-PLY-203, dans l'ordre. `GivePreviewItemByItemID` donne au pantin un item de
-        // PRÉVISUALISATION — pas l'item du joueur, qui appartient à son inventaire réel et n'a rien
-        // à faire ici.
-        transactions.GivePreviewItemByItemID(avatar, identifiant);
-        let apercu = transactions.CreatePreviewItemID(identifiant);
-        if transactions.CanPlaceItemInSlot(avatar, slot, apercu) {
-            // Le 4e argument à `true` (haute priorité) est celui du photomode — sans lui l'ordre
-            // passe derrière la file d'équipement du pantin, qui sur un avatar distant ne se vide
-            // jamais.
-            transactions.AddItemToSlot(avatar, slot, apercu, true);
+        let recette = "";
+        let peut = false;
+        let pose = false;
+        if this.essais % 2u == 0u {
+            // ── RECETTE PHOTOMODE (F-PLY-203) — item de PRÉVISUALISATION ────────────────
+            recette = "photomode";
+            transactions.GivePreviewItemByItemID(avatar, identifiant);
+            let apercu = transactions.CreatePreviewItemID(identifiant);
+            peut = transactions.CanPlaceItemInSlot(avatar, slot, apercu);
+            if peut {
+                pose = transactions.AddItemToSlot(avatar, slot, apercu, true);
+            }
+        } else {
+            // ── RECETTE ARME (mesurée sur pantin distant depuis le 2026-07-24) ──────────
+            //
+            // ⚠️ On donne l'item AVANT de l'équiper, et par le MÊME identifiant que celui demandé.
+            // Un item donné par une autre voie reçoit un `ItemID` dynamique différent, et
+            // l'équipement échoue ensuite sur un item que le pantin possède pourtant
+            // (`ArmeAvatar.reds`, mesuré).
+            recette = "arme";
+            if !transactions.HasItem(avatar, identifiant) {
+                transactions.GiveItem(avatar, identifiant, 1);
+            }
+            peut = transactions.CanPlaceItemInSlot(avatar, slot, identifiant);
+            pose = transactions.AddItemToSlot(avatar, slot, identifiant, true);
+        }
+
+        if bavard {
+            TesseraJournalHabillage(
+                s"\(TDBID.ToStringDEBUG(vetement)) · slot=\(TDBID.ToStringDEBUG(slot))"
+                + s" · occupant=\(occupant) · recette=\(recette) · peut=\(peut) · pose=\(pose)");
         }
         // Jamais `true` ici : c'est la passe SUIVANTE qui constatera, sur l'avatar lui-même.
         return false;
