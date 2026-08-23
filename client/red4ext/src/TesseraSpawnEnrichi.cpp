@@ -366,15 +366,17 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
 
             if (a.passages < kPassagesMax)
             {
-                // ⚠️ On rend un resultat SANS entite et SANS diagnostic : l'appelant doit patienter,
-                // pas retomber sur la voie sure. Journaliser ici ecrirait trente lignes par voisin.
+                // Aucun diagnostic : journaliser ici ecrirait trente lignes par voisin. C'est
+                // `attente` qui porte la decision, pas le silence.
                 r.appelFait = true;
+                r.attente = true;
                 return r;
             }
 
             char b[300];
             std::snprintf(b, sizeof(b),
-                          "corps enrichi JAMAIS APPARU apres %u passage(s) — autour %u->%u, "
+                          "corps enrichi JAMAIS APPARU apres %u passage(s) — autour %u->%u "
+                          "(le total NE BOUGE PAS : saturation probable du systeme de ciblage), "
                           "appel %s. Reprise par la voie sure.",
                           a.passages, static_cast<unsigned>(a.avant.size()),
                           static_cast<unsigned>(maintenant.tous.size()), maintenant.forme);
@@ -534,6 +536,50 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     // `CName` de hachage nul) et le jeu est mort dans la foulee (F-PLY-225). « Lisible » n'est pas
     // « c'est un objet de la classe que je crois ».
 
+    // ── ⭐⭐ LIRE CE QUE L'APPEL REND — PRUDEMMENT, ET SANS JAMAIS L'APPELER ────────────────────
+    //
+    // POURQUOI ON EN ARRIVE LA. L'enumeration par `GetEntitiesAroundObject` ne trouve jamais ce
+    // corps : le journal rend invariablement `autour 128->128`, avant comme apres. Le script
+    // decompile de CDPR explique pourquoi — cette fonction passe par le **systeme de ciblage**
+    // (`GetTargetParts`) et ne rend que les entites porteuses d'un `TargetingComponent`. Le total
+    // ne bouge pas d'un iota, ce qui ressemble fort a une **saturation** : dans une rue peuplee,
+    // les 128 places sont prises avant que notre corps n'arrive.
+    //
+    // ⚠️⚠️ CE BLOC NE FAIT QUE LIRE, ET LA DISTINCTION EST VITALE. Le 2026-08-21, une version de la
+    // sonde a traite ce meme pointeur comme un objet de script : elle a lu son type (`None`, un
+    // `CName` de hachage nul), puis APPELE `GetFunction` dessus — et le jeu est mort (F-PLY-225).
+    //
+    // La lecon exacte de cet incident n'est pas « ne touche pas a ce pointeur », c'est **« lisible »
+    // n'est pas « c'est un objet de la classe que je crois »**. Une lecture gardee par `Lisible`
+    // est sure : elle verifie que la page est mappee. Ce qui a tue le jeu, c'est l'APPEL derriere.
+    // On journalise donc des octets, on n'invoque rien, et on ne decide rien sur cette base.
+    if (sortie[0] != nullptr && EsthetiqueV::Lisible(reinterpret_cast<std::uintptr_t>(sortie[0]), 0x60))
+    {
+        const auto* mots = reinterpret_cast<const std::uint64_t*>(sortie[0]);
+        char d[400];
+        std::snprintf(d, sizeof(d),
+                      "[retour enrichi] +00=%llX +08=%llX +10=%llX +18=%llX +20=%llX "
+                      "+28=%llX +30=%llX +38=%llX +40=%llX +48=%llX +50=%llX +58=%llX",
+                      (unsigned long long)mots[0], (unsigned long long)mots[1],
+                      (unsigned long long)mots[2], (unsigned long long)mots[3],
+                      (unsigned long long)mots[4], (unsigned long long)mots[5],
+                      (unsigned long long)mots[6], (unsigned long long)mots[7],
+                      (unsigned long long)mots[8], (unsigned long long)mots[9],
+                      (unsigned long long)mots[10], (unsigned long long)mots[11]);
+        SDK->logger->InfoF(PLUGIN, "%s", d);
+        // ⚠️ ET LE TEMOIN, dans la meme trace. Sans lui, ces douze nombres ne se comparent a rien.
+        // `sortie[1]` est le second mot du tampon de sortie : le gabarit natif ecrit parfois une
+        // paire. On le dit meme s'il est nul — un zero OBSERVE vaut mieux qu'un silence.
+        SDK->logger->InfoF(PLUGIN, "[retour enrichi] sortie[1]=%llX (temoin)",
+                           reinterpret_cast<unsigned long long>(sortie[1]));
+    }
+    else if (sortie[0] != nullptr)
+    {
+        SDK->logger->InfoF(PLUGIN, "[retour enrichi] 0x%llX ILLISIBLE sur 0x60 octets — ce n'est pas "
+                                   "un objet en memoire commitee",
+                           reinterpret_cast<unsigned long long>(sortie[0]));
+    }
+
     // ── ON NE CHERCHE PAS MAINTENANT : ON PREND RENDEZ-VOUS ─────────────────────────────────────
     //
     // ⭐⭐ Mesure du 2026-08-23, 17:20 : le journal rendait `autour 128->128`. L'enumeration voyait
@@ -564,6 +610,7 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
                   static_cast<unsigned>(g_enAttente[aNetworkId].avant.size()),
                   reinterpret_cast<unsigned long long>(sortie[0]));
     r.diag = b;
+    r.attente = true;   // l'appel est parti : on cherchera aux passages suivants
     return r;
 }
 }  // namespace Tessera::SpawnEnrichi

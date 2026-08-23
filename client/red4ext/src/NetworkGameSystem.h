@@ -1401,6 +1401,9 @@ public:
     /// Applique les drapeaux de ligne de commande qui règlent des globales d'autres unités de
     /// compilation. Idempotent, appelé au premier spawn réseau.
     void TesseraAppliquerDrapeauxUneFois();
+
+    /// Vrai tant qu'on accepte d'attendre l'apparence complete de ce voisin (delai borne).
+    bool AttendreEncore(uint64_t networkId);
     bool m_drapeauxAppliques = false;
 
     /// SONDE (F-PLY-101, etape 1) — LIT la table d'alias FPP/TPP de l'etat de customisation, sans

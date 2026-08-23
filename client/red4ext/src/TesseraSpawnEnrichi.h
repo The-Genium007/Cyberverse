@@ -57,6 +57,17 @@ struct Resultat
     bool tente = false;
     /// L'appel natif est-il parti ? Distinct de `tente` : tout ce qui precede peut refuser.
     bool appelFait = false;
+    /// ⭐ **L'appel est parti, le corps n'est pas encore la : l'appelant doit PATIENTER**, surtout
+    /// pas retomber sur la voie sure (il fabriquerait le doublon qu'on repare).
+    ///
+    /// ⚠️ CE CHAMP EXISTE PARCE QUE J'AI DEDUIT CET ETAT D'AUTRE CHOSE, ET QUE C'ETAIT FAUX. La
+    /// premiere version disait « patiente » quand `diag` etait vide — or le tout premier appel
+    /// ECRIT un diagnostic (« appel enrichi PARTI »). La condition ne se declenchait donc jamais,
+    /// et le doublon revenait. Mesure en jeu le 2026-08-23 a 17:26.
+    ///
+    /// La lecon est la meme que celle de F-PLY-270, d'un cran plus haut : **un etat qui commande
+    /// une decision se DECLARE, il ne se deduit pas de l'absence d'autre chose.**
+    bool attente = false;
     /// L'entite RETROUVEE apres l'appel. Vide si on ne l'a pas retrouvee.
     ///
     /// ⚠️ **Elle ne vient PAS du retour de l'appel.** Le retour de la voie enrichie n'est pas un

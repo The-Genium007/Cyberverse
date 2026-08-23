@@ -4495,6 +4495,24 @@ void NetworkGameSystem::ApplyAppearance(uint64_t networkId, RED4ext::ent::Entity
     m_appliedAppearance[networkId] = it->second.appearance;
 }
 
+/// Vrai tant qu'on accepte d'attendre pour ce voisin. Faux passe le delai.
+///
+/// ⚠️ **L'attente est BORNEE, et c'est delibere.** Si le serveur n'envoie JAMAIS ce qu'on attend,
+/// patienter indefiniment rendrait le voisin INVISIBLE pour toujours — une panne muette, pire que
+/// le corps generique qu'on cherche a eviter. Passe le delai on prend ce qu'on a, et on le dit.
+bool NetworkGameSystem::AttendreEncore(uint64_t networkId)
+{
+    static std::map<uint64_t, std::chrono::steady_clock::time_point> s_depuis;
+    constexpr auto kDelai = std::chrono::seconds(3);
+    const auto maintenant = std::chrono::steady_clock::now();
+    auto& debut = s_depuis[networkId];
+    if (debut == std::chrono::steady_clock::time_point{})
+    {
+        debut = maintenant;
+    }
+    return (maintenant - debut) < kDelai;
+}
+
 bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Vector4& worldPosition)
 {
     TesseraAppliquerDrapeauxUneFois();
@@ -4504,8 +4522,46 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
     RED4ext::TweakDBID record;
     RED4ext::CName appearanceName(static_cast<uint64_t>(0));
     const auto it = m_appearances.find(networkId);
-    if (it != m_appearances.end() && it->second.baseRecord != 0)
+
+    // ── ⭐⭐ ON ATTEND AUSSI LA FICHE D'APPARENCE, PAS SEULEMENT LE RECORD ────────────────────
+    //
+    // MESURE DU 2026-08-23, 17:29 — la chronologie est sans ambiguite :
+    //
+    //     17:29:08.125  AppearanceSync 12 : ... esthetique=0 o     <- 1re annonce, SANS fiche
+    //     17:29:08.161  Spawn entite reseau 12                      <- on fabrique (voie sure)
+    //     17:29:09.086  AppearanceSync 12 : ... esthetique=344 o   <- la fiche arrive UNE SECONDE
+    //                                                                  PLUS TARD
+    //
+    // Le serveur emet DEUX `AppearanceSync` pour le meme voisin : la premiere porte le preset du
+    // catalogue, la seconde la vraie fiche. Fabriquer sur la premiere donne un passant — et **ce
+    // corps-la ne guerit jamais**, parce que le record et l'esthetique sont figes a la naissance.
+    //
+    // ⚠️ C'est exactement le piege que le dossier avatar avait predit sur l'ordre d'emission cote
+    // Shard. On le borde ICI plutot que la-bas : le client ne doit pas dependre de l'ordre dans
+    // lequel un serveur lui parle, et une garde locale protege aussi des serveurs tiers.
+    //
+    // La fiche entre donc dans la MEME attente bornee que le record — meme delai, meme repli
+    // bruyant. Un personnage qui n'en a legitimement pas (ancien preset de 16 octets) attend le
+    // delai puis part en voie sure, ce qui est le comportement d'avant.
+    const bool ficheAttendue = (it == m_appearances.end() || it->second.esthetique.empty());
+
+    if (it != m_appearances.end() && it->second.baseRecord != 0 && !ficheAttendue)
     {
+        record = RED4ext::TweakDBID(it->second.baseRecord);
+        appearanceName = RED4ext::CName(it->second.appearance);
+    }
+    else if (it != m_appearances.end() && it->second.baseRecord != 0 && ficheAttendue
+             && AttendreEncore(networkId))
+    {
+        JournalRalenti("fiche d'apparence ATTENDUE",
+                       " — le record est la, la fiche pas encore. Fabriquer maintenant donnerait un "
+                       "passant DEFINITIF (le corps ne guerit pas). Retente au prochain snapshot.");
+        return false;
+    }
+    else if (it != m_appearances.end() && it->second.baseRecord != 0)
+    {
+        // Delai ecoule : on prend le record connu, sans fiche. La voie enrichie ne se declenchera
+        // pas, et c'est dit plus bas par son propre silence.
         record = RED4ext::TweakDBID(it->second.baseRecord);
         appearanceName = RED4ext::CName(it->second.appearance);
     }
@@ -4598,7 +4654,7 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
         // Un diagnostic VIDE signifie précisément « patiente » ; `Tenter` n'en pose un que lorsqu'il
         // a quelque chose à dire (succès, refus, ou abandon après 30 passages). C'est ce qui évite
         // trente lignes de journal par voisin.
-        if (essai.appelFait && essai.diag.empty())
+        if (essai.attente)
         {
             return false;
         }
