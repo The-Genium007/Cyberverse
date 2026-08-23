@@ -71,6 +71,10 @@ using Reserve_t = void (*)(void* aTableau, std::uint32_t aCapacite, std::uint32_
 /// echouera chez un joueur — proprement, en retombant sur la voie sure, mais elle echouera.
 constexpr const char* kRecordEnrichi = "Character.Tessera_Avatar_Marche_Male";
 
+/// L'ascendance de notre record : c'est elle que la sonde reconnait (`Player_Puppet`).
+const std::uint64_t kRecordPhotomode = RED4ext::TweakDBID("Character.Player_Puppet_Photomode").value;
+const std::uint64_t kRecordPhotomodeBase = RED4ext::TweakDBID("Character.Player_Puppet_Base").value;
+
 /// Le TweakDBID de `kRecordEnrichi`, calcule une fois.
 inline std::uint64_t recordAttendu()
 {
@@ -85,6 +89,26 @@ inline std::uint64_t recordAttendu()
 inline std::uint64_t ChoisirLePlusProche(const std::vector<std::uint64_t>& aNeufs,
                                          const RED4ext::Vector4& aCible)
 {
+    if (aNeufs.empty()) { return 0; }
+
+    // ⭐⭐ UN CANDIDAT UNIQUE SE PREND, SANS CONDITION — mesure du 2026-08-23, 17:48.
+    //
+    // Le journal rendait `candidats 0->1 (notre record 1)` ET « JAMAIS APPARU » dans la MEME ligne :
+    // une entite portant notre record etait bien apparue, et cette fonction la jetait.
+    //
+    // La cause : chaque candidat etait resolu par `GetDynamicEntity`, qui interroge le
+    // `DynamicEntitySystem` — lequel ne connait QUE les entites qu'il a lui-meme creees (Codeware).
+    // Notre corps vient du spawner natif du photomode : il n'y est pas. La resolution echouait, le
+    // `continue` l'ecartait, et la fonction rendait 0.
+    //
+    // ⚠️ LA REGLE : **un discriminant ne doit jamais pouvoir ECARTER le seul candidat qu'il est
+    // cense departager.** Departager, c'est choisir entre plusieurs ; avec un seul, il n'y a rien a
+    // choisir et le discriminant n'a pas voix au chapitre. C'est la troisieme fois aujourd'hui
+    // qu'un mecanisme auxiliaire fait echouer la mesure qu'il devait servir — apres l'instrument
+    // qui confondait « rien vu » et « pas pu regarder » (F-PLY-270) et l'attente deduite d'un
+    // diagnostic vide.
+    if (aNeufs.size() == 1) { return aNeufs[0]; }
+
     std::uint64_t meilleur = 0;
     float meilleureDistance = 1e9f;
     for (const auto id : aNeufs)
@@ -96,7 +120,10 @@ inline std::uint64_t ChoisirLePlusProche(const std::vector<std::uint64_t>& aNeuf
         const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (d < meilleureDistance) { meilleureDistance = d; meilleur = id; }
     }
-    return meilleur;
+    // ⚠️ ET SI AUCUN N'A PU ETRE RESOLU, ON PREND LE PREMIER plutot que de tout jeter. Ils portent
+    // TOUS notre record — c'est deja une identification. Renoncer ici ferait retomber sur la voie
+    // sure alors qu'on tient le corps.
+    return meilleur != 0 ? meilleur : aNeufs[0];
 }
 
 /// Rayon d'enumeration pour retrouver le corps qu'on vient de fabriquer, en metres.
@@ -169,8 +196,18 @@ struct Releve
 {
     /// Tous les identifiants vus, sans aucun filtre. C'est LUI qui sert a la difference.
     std::vector<std::uint64_t> tous;
-    /// Combien portaient le record attendu. Purement informatif — plus aucune decision n'en depend.
+    /// Combien portaient le record attendu.
     std::uint32_t duRecord = 0;
+    /// Combien portaient le record PHOTOMODE (leur ascendance). La sonde filtre sur celui-la.
+    std::uint32_t duPhotomode = 0;
+    /// Les identifiants de ceux qui portent l'un OU l'autre — les seuls candidats credibles.
+    ///
+    /// ⚠️ **C'EST CE QUI REMPLACE « LE PLUS PROCHE ».** Prendre la nouvelle entite la plus proche
+    /// de la position visee n'IDENTIFIE rien : dans une rue peuplee, les entites entrent et sortent
+    /// en permanence de la fenetre de 128, et un passant quelconque peut se trouver plus pres que
+    /// notre corps. On enregistrerait alors le mauvais — ce qui donne exactement le symptome
+    /// observe le 2026-08-23 : deux corps empiles dont aucun ne suit.
+    std::vector<std::uint64_t> notres;
     /// L'enumeration elle-meme a-t-elle repondu ? `false` = l'appel a echoue, et tout le reste est
     /// sans valeur. Sans ce drapeau, « aucune entite » et « je n'ai pas pu regarder » se
     /// confondent — et c'est la confusion qui a coute le plus cher sur ce chantier.
@@ -260,9 +297,21 @@ void Relever(std::uint64_t aRecord, Releve& aOut)
         if (obj == nullptr) { continue; }
         aOut.tous.push_back(obj->entityID.hash);
         RED4ext::TweakDBID rec{};
-        if (Red::CallVirtual(obj, "GetRecordID", rec) && rec.value == aRecord)
+        if (!Red::CallVirtual(obj, "GetRecordID", rec)) { continue; }
+        if (rec.value == aRecord)
         {
             ++aOut.duRecord;
+            aOut.notres.push_back(obj->entityID.hash);
+        }
+        // ⚠️ ET LE RECORD DE BASE, parce que la sonde filtre sur `Player_Puppet` — pas sur le
+        // nôtre — et qu'elle TROUVE ces corps depuis toujours (200 énumérés d'un coup, F-PLY-170).
+        // Si ces entités rapportent le record de leur ascendance plutôt que le nôtre, c'est ici
+        // qu'on le verra. Un compteur qui vaut zéro des deux côtés dit autre chose qu'un compteur
+        // qui vaut zéro d'un seul.
+        else if (rec.value == kRecordPhotomode || rec.value == kRecordPhotomodeBase)
+        {
+            ++aOut.duPhotomode;
+            aOut.notres.push_back(obj->entityID.hash);
         }
     }
 }
@@ -298,7 +347,7 @@ struct EnAttente
 /// L'appelant repasse a chaque snapshot (20-25 Hz), donc ~30 passages valent un peu plus d'une
 /// seconde. Genereux exprès : un abandon trop tot retomberait sur la voie sure alors que le corps
 /// est en route, et on aurait alors DEUX corps — exactement le defaut qu'on repare.
-constexpr std::uint32_t kPassagesMax = 30;
+constexpr std::uint32_t kPassagesMax = 250;   // ~10 s : 30 passages ne faisaient que 1,2 s
 
 /// Les appels en cours, par identifiant reseau.
 static std::map<std::uint64_t, EnAttente> g_enAttente;
@@ -336,8 +385,10 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
 
             Releve maintenant;
             Relever(recordAttendu(), maintenant);
+            // ⚠️ La difference porte sur les CANDIDATS CREDIBLES, pas sur tout le voisinage. Un
+            // passant qui entre dans la fenetre n'est pas notre corps, meme s'il est plus proche.
             std::vector<std::uint64_t> neufs;
-            for (const auto id : maintenant.tous)
+            for (const auto id : maintenant.notres)
             {
                 bool connu = false;
                 for (const auto v : a.avant)
@@ -375,11 +426,13 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
 
             char b[300];
             std::snprintf(b, sizeof(b),
-                          "corps enrichi JAMAIS APPARU apres %u passage(s) — autour %u->%u "
-                          "(le total NE BOUGE PAS : saturation probable du systeme de ciblage), "
-                          "appel %s. Reprise par la voie sure.",
+                          "corps enrichi JAMAIS APPARU apres %u passage(s) — candidats %u->%u "
+                          "(notre record %u, photomode %u, voisinage %u), appel %s. "
+                          "Reprise par la voie sure.",
                           a.passages, static_cast<unsigned>(a.avant.size()),
-                          static_cast<unsigned>(maintenant.tous.size()), maintenant.forme);
+                          static_cast<unsigned>(maintenant.notres.size()), maintenant.duRecord,
+                          maintenant.duPhotomode, static_cast<unsigned>(maintenant.tous.size()),
+                          maintenant.forme);
             r.diag = b;
             r.appelFait = true;
             g_enAttente.erase(attente);
@@ -595,7 +648,7 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     // l'entite manque — fera la difference aux passages suivants (bloc en tete de cette fonction).
     {
         EnAttente a;
-        a.avant = std::move(avant.tous);
+        a.avant = std::move(avant.notres);
         a.position = aPosition;
         a.appele = true;
         a.passages = 0;
