@@ -9,6 +9,8 @@
 #include "RED4ext/Scripting/Natives/Generated/vehicle/BaseObject.hpp"
 #include "RedLib.hpp"
 
+#include <RED4ext/Scripting/Natives/ScriptGameInstance.hpp>
+
 namespace Cyberverse::Utils
 {
     inline RED4ext::Handle<RED4ext::GameObject> GetPlayer()
@@ -109,8 +111,43 @@ namespace Cyberverse::Utils
         // ⚠️ Pas de journal ici en cas d'echec des DEUX voies : cette fonction est appelee a chaque
         // frame pour chaque avatar. Une ligne par echec noierait le journal — et c'est ce que
         // faisait la version precedente, qui ecrivait « Failed to get the entity » en boucle.
+        // ── ⭐⭐ DEUX PARAMETRES, ET LE RTTI L'A DIT ─────────────────────────────────────────
+        //
+        // Enumeration du 2026-08-23 (`ScriptGameInstance`, 119 statiques) :
+        //
+        //     FindEntityByID (2p) · GetEntityList (1p) · GetDynamicEntitySystem (0p)
+        //                                              · GetStaticEntitySystem (0p)
+        //
+        // J'en passais UN. L'appel ne se liait donc pas — et le journal disait « IRRESOLVABLE »,
+        // ce qui se lit comme « l'entite n'existe pas » alors que la question n'avait jamais ete
+        // posee.
+        //
+        // ⚠️ ET VOILA POURQUOI L'INTUITION ETAIT PIEGEUSE : `GetDynamicEntitySystem` prend **0**
+        // parametre. C'est pour ca qu'il se lie sans qu'on fournisse la `GameInstance`, et c'est de
+        // la que venait ma generalisation fausse — « RED4ext l'injecte ». Il ne l'injecte pas : ces
+        // accesseurs n'en demandent simplement aucune. La difference est INVISIBLE depuis
+        // l'appelant, et seule l'enumeration pouvait la donner.
+        // ⚠️ LE TYPE DU PREMIER PARAMETRE, ET C'EST LUI QUI BLOQUAIT.
+        //
+        // `ScriptGameInstance` est une STRUCTURE de 0x18 octets (`instance`, `unk8`, `unk10`), pas
+        // un pointeur. Passer le `GameInstance*` brut ne correspond a aucun type attendu, et
+        // l'appel refuse de se lier — silencieusement.
+        //
+        // Le SDK fournit le bon emballage, et son constructeur va CHERCHER l'instance tout seul
+        // quand on ne lui donne rien (voir sa doc : « if NULL it will be retrieved automatically
+        // from CGameFramework »). Rien a resoudre de notre cote.
+        //
+        // ⭐ Trois erreurs successives sur le MEME appel, et chacune invisible depuis l'appelant :
+        //   1. un seul parametre au lieu de deux (le RTTI a donne « 2p ») ;
+        //   2. le bon nombre, mais un pointeur au lieu de la structure ;
+        //   3. et avant tout ca, la generalisation fausse « RED4ext injecte la GameInstance » —
+        //      tiree de `GetDynamicEntitySystem`, qui n'en prend simplement AUCUNE (« 0p »).
+        //
+        // Aucune des trois ne se voyait dans un message d'erreur : l'appel rendait `false`, et
+        // `false` se lit comme « l'entite n'existe pas ».
+        RED4ext::ScriptGameInstance gi;
         Red::Handle<Red::Entity> parLeMonde;
-        if (Red::CallStatic("ScriptGameInstance", "FindEntityByID", parLeMonde, entityId)
+        if (Red::CallStatic("ScriptGameInstance", "FindEntityByID", parLeMonde, gi, entityId)
             && parLeMonde != nullptr)
         {
             return parLeMonde;
