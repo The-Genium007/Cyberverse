@@ -745,6 +745,23 @@ bool NetworkGameSystem::Tessera_PilotageParEntrees(bool actif)
     return g_pilotageParEntrees;
 }
 
+/// Applique `--tessera-spawn-enrichi` une seule fois, au premier passage.
+///
+/// ⚠️ Posé ICI et pas dans un constructeur : `g_actif` vit dans une autre unité de compilation et
+/// l'ordre d'initialisation des globales entre unités n'est pas garanti par le C++. Un réglage posé
+/// trop tôt serait écrasé par l'initialisation de la variable qu'il règle — panne classique,
+/// silencieuse, et qui ne se reproduit pas d'un build à l'autre.
+void NetworkGameSystem::TesseraAppliquerDrapeauxUneFois()
+{
+    if (m_drapeauxAppliques) { return; }
+    m_drapeauxAppliques = true;
+    if (SpawnEnrichiDemande(GetCommandLineA()))
+    {
+        Tessera::SpawnEnrichi::g_actif = true;
+        SDK->logger->InfoF(PLUGIN, "spawn enrichi ALLUME par --tessera-spawn-enrichi");
+    }
+}
+
 bool NetworkGameSystem::Tessera_SpawnEnrichi(bool actif)
 {
     Tessera::SpawnEnrichi::g_actif = actif;
@@ -4480,6 +4497,7 @@ void NetworkGameSystem::ApplyAppearance(uint64_t networkId, RED4ext::ent::Entity
 
 bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Vector4& worldPosition)
 {
+    TesseraAppliquerDrapeauxUneFois();
     // Le record vient du SERVEUR (AppearanceSync). Le repli n'est utilise que si aucune apparence
     // n'est encore connue pour cet id — et il se signale, parce qu'un avatar de repli silencieux
     // est indistinguable d'un avatar correct.
@@ -4550,7 +4568,7 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
     // pas de chemin ou l'on perd un voisin parce qu'on a voulu lui donner son visage.
     if (it != m_appearances.end() && !it->second.esthetique.empty())
     {
-        const auto essai = Tessera::SpawnEnrichi::Tenter(it->second.esthetique, worldPosition);
+        const auto essai = Tessera::SpawnEnrichi::Tenter(networkId, it->second.esthetique, worldPosition);
         if (essai.tente && !essai.diag.empty())
         {
             // Journalise MEME en cas de succes : c'est ce qui distingue « la voie enrichie a
@@ -4565,6 +4583,24 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
             SDK->logger->InfoF(PLUGIN, "Spawn entite reseau %llu -> entity %llu (voie ENRICHIE, "
                                        "porte le V de ce joueur)", networkId, entityId.hash);
             return true;
+        }
+        // ── L'APPEL EST PARTI, LE CORPS N'EST PAS ENCORE NE : ON PATIENTE ────────────────────
+        //
+        // ⚠️ **C'est ce `return` qui supprime le doublon.** Sans lui, on enchaînait sur la voie sûre
+        // dans la même frame : un corps enrichi (invisible à nos tables, donc jamais piloté ni
+        // effacé) PLUS un corps de passant, empilés — exactement ce que Lucas a vu deux fois.
+        //
+        // La création d'entité est asynchrone : chercher dans la frame de l'appel, c'est chercher un
+        // corps qui n'existe pas encore. On rend donc `false` sans rien enregistrer, et l'appelant
+        // — qui retente à chaque snapshot tant que l'entité manque — repassera ici. `Tenter` fera
+        // alors la différence au lieu de rappeler le spawner.
+        //
+        // Un diagnostic VIDE signifie précisément « patiente » ; `Tenter` n'en pose un que lorsqu'il
+        // a quelque chose à dire (succès, refus, ou abandon après 30 passages). C'est ce qui évite
+        // trente lignes de journal par voisin.
+        if (essai.appelFait && essai.diag.empty())
+        {
+            return false;
         }
     }
 

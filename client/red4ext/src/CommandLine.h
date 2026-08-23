@@ -1,5 +1,6 @@
 #pragma once
 #include <optional>
+#include <cstring>
 #include <string>
 
 inline std::optional<std::string> ArgumentFromCommandLineUntilNextSpace(char* commandLine, const char* needle, const size_t needleLen)
@@ -42,12 +43,67 @@ inline std::optional<uint16_t> ParsePortFromCommandLine(char* commandLine) {
 // pour une raison précise : itérer sur le JEU sans repasser par un écran de choix à chaque
 // lancement — et surtout pour qu'un agent puisse tester seul, sans un humain pour cliquer.
 //
-// Présence/absence, pas de valeur : un drapeau qui prend un paramètre invite à en inventer d'autres,
-// et celui-ci ne doit rester qu'un interrupteur. Absent = parcours normal, lobby obligatoire.
+// Absent = parcours normal, lobby obligatoire.
+//
+// ⚠️ CE DRAPEAU PREND DÉSORMAIS UNE VALEUR OPTIONNELLE (`--tessera-dev=2`), et le commentaire
+// d'origine disait l'inverse : « présence/absence, pas de valeur ; un drapeau qui prend un paramètre
+// invite à en inventer d'autres ». Le raisonnement était bon en général, et faux ici.
+//
+// Ce qui l'a renversé, c'est l'usage : sans valeur, le mode dev TIRE UN PERSONNAGE AU HASARD parmi
+// ceux du compte. Lucas l'a signalé deux fois — « on sélectionne un des personnages random, il
+// faudrait une solution pour activer la sélection de la bonne sauvegarde ». Un tirage au sort rend
+// une mesure NON REPRODUCTIBLE : deux lancements identiques peuvent donner deux corps, deux voix,
+// deux souches. C'est exactement ce qu'un instrument ne doit pas faire.
 inline bool ModeDeveloppementDemande(char* commandLine)
 {
     if (commandLine == nullptr) { return false; }
     return std::string(commandLine).find("--tessera-dev") != std::string::npos;
+}
+
+// Quel personnage le mode dev doit prendre : `--tessera-dev=2` → 2 (le DEUXIÈME, en base 1).
+//
+// Rend **0 quand rien n'est demandé** — et `0` veut dire « choisis pour moi », pas « le premier ».
+// Le tirage au sort est conservé dans ce cas, et ce n'est pas de la nostalgie : c'est ce qui évite
+// que deux instances lancées sans précision se disputent le MÊME personnage, ce que le serveur
+// refuse (`already_playing`). Demander explicitement, c'est prendre la responsabilité de ne pas
+// lancer deux fois le même numéro.
+//
+// La base 1 est délibérée : elle correspond à ce qu'un humain lit à l'écran (« le deuxième carré »),
+// pas à un index de tableau. La conversion vers l'index réel se fait d'un seul côté, dans le
+// redscript, et elle y est commentée.
+inline int PersonnageDemande(char* commandLine)
+{
+    if (commandLine == nullptr) { return 0; }
+    const std::string ligne(commandLine);
+    const auto pos = ligne.find("--tessera-dev=");
+    if (pos == std::string::npos) { return 0; }
+    const auto debut = pos + std::strlen("--tessera-dev=");
+    int n = 0;
+    // Lecture chiffre à chiffre plutôt que `std::stoi` : la ligne de commande n'est pas terminée
+    // là où le nombre l'est, et `stoi` sur « 2 --autre-chose » lèverait ou lirait de travers selon
+    // la plateforme. Un chiffre non numérique arrête la lecture, ce qui rend `--tessera-dev=abc`
+    // équivalent à `--tessera-dev` — dégradation silencieuse mais SÛRE, et journalisée côté script.
+    for (auto i = debut; i < ligne.size() && ligne[i] >= '0' && ligne[i] <= '9'; ++i)
+    {
+        n = n * 10 + (ligne[i] - '0');
+        if (n > 999) { return 999; }   // borne : un compte n'a pas mille personnages
+    }
+    return n;
+}
+
+// `--tessera-spawn-enrichi` — allume la voie de spawn ENRICHIE dès le lancement.
+//
+// ⭐ POURQUOI CE DRAPEAU EXISTE. L'interrupteur n'était atteignable que par la console CET, donc il
+// exigeait qu'un humain tape une ligne dans CHAQUE instance, à CHAQUE lancement, et AVANT que les
+// joueurs ne se voient — faute de quoi les corps naissaient par la voie sûre et le tir ne mesurait
+// rien. C'était le dernier geste humain d'une boucle par ailleurs automatisable (ADR 0033), et il
+// tombait au pire moment : celui où l'on est occupé à regarder.
+//
+// ⚠️ Il reste ÉTEINT PAR DÉFAUT. Ce drapeau ne change pas le garde-fou, il change qui l'actionne.
+inline bool SpawnEnrichiDemande(char* commandLine)
+{
+    if (commandLine == nullptr) { return false; }
+    return std::string(commandLine).find("--tessera-spawn-enrichi") != std::string::npos;
 }
 
 // `--tessera-telemetrie` — écrit un journal JSONL de tout ce qu'on émet et de tout ce qu'on rend

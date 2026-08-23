@@ -7,8 +7,12 @@
 #include "Main.h"
 #include "Utils.h"
 
+#include <RED4ext/Scripting/Natives/Generated/game/TargetSearchFilter.hpp>
+
 #include <windows.h>
 
+#include <cmath>
+#include <map>
 #include <cstdio>
 #include <cstring>
 
@@ -67,13 +71,54 @@ using Reserve_t = void (*)(void* aTableau, std::uint32_t aCapacite, std::uint32_
 /// echouera chez un joueur — proprement, en retombant sur la voie sure, mais elle echouera.
 constexpr const char* kRecordEnrichi = "Character.Tessera_Avatar_Marche_Male";
 
+/// Le TweakDBID de `kRecordEnrichi`, calcule une fois.
+inline std::uint64_t recordAttendu()
+{
+    return RED4ext::TweakDBID(kRecordEnrichi).value;
+}
+
+/// Parmi `aNeufs`, celui qui est le plus proche de `aCible`. `0` si aucun n'est lisible.
+///
+/// Le discriminant est la POSITION VISEE : on vient de demander un corps la, le bon candidat est
+/// celui qui s'y trouve. Ce n'est pas une heuristique de confort — c'est la seule information que
+/// nous ayons fournie a l'appel, donc la seule qui nous appartienne.
+inline std::uint64_t ChoisirLePlusProche(const std::vector<std::uint64_t>& aNeufs,
+                                         const RED4ext::Vector4& aCible)
+{
+    std::uint64_t meilleur = 0;
+    float meilleureDistance = 1e9f;
+    for (const auto id : aNeufs)
+    {
+        const auto e = Cyberverse::Utils::GetDynamicEntity(RED4ext::ent::EntityID{id});
+        if (!e.has_value()) { continue; }
+        const auto p = Cyberverse::Utils::Entity_GetWorldPosition(e.value());
+        const float dx = p.X - aCible.X, dy = p.Y - aCible.Y, dz = p.Z - aCible.Z;
+        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < meilleureDistance) { meilleureDistance = d; meilleur = id; }
+    }
+    return meilleur;
+}
+
 /// Rayon d'enumeration pour retrouver le corps qu'on vient de fabriquer, en metres.
 ///
-/// ⚠️ **Pose explicitement, jamais laisse a un defaut.** Le 2026-08-22, un rayon code en dur a 30 m
-/// a rendu « aucune entite » sur une entite a exactement 30 m — et la conclusion tiree etait que le
-/// spawn avait echoue. Un rayon d'enumeration est un instrument : un instrument trop court ne rend
-/// pas « rien », il rend un FAUX NEGATIF.
-constexpr float kRayonRecherche = 12.0f;
+/// ⚠️⚠️ **12 m LE 2026-08-23 A MIDI, ET C'ETAIT UN FAUX NEGATIF — mesure en jeu le soir meme.**
+///
+/// Le journal rendait `0 entite(s) neuve(s) … 0 avant / 0 apres`, donc « le corps n'existe pas ».
+/// Lucas, lui, VOYAIT les corps a l'ecran, et les distinguait par leur coiffure — donc ils
+/// existaient ET portaient la bonne esthetique. L'enumeration cherchait simplement trop pres.
+///
+/// La cause est evidente une fois dite : **le corps naît a la position du VOISIN**, pas a celle du
+/// joueur local. Un voisin peut etre a n'importe quelle distance jusqu'a la portee de visibilite du
+/// serveur (100 m par defaut, `[runtime.aoi] visibility_radius`). Chercher dans 12 m, c'est ne
+/// trouver que le cas ou les deux joueurs se touchent.
+///
+/// 150 m couvre l'AoI avec de la marge. Le cout est celui de deux enumerations, **au spawn
+/// uniquement** — jamais par frame.
+///
+/// ⚠️ Et la lecon depasse ce chiffre : le commentaire d'origine DISAIT deja « un instrument trop
+/// court ne rend pas rien, il rend un FAUX NEGATIF ». Je l'ai ecrit, et j'ai quand meme pose 12 m.
+/// Ecrire la regle ne dispense pas de l'appliquer au nombre qu'on est en train de choisir.
+constexpr float kRayonRecherche = 150.0f;
 
 /// Resout un systeme du jeu par son nom RTTI.
 ///
@@ -114,17 +159,97 @@ bool EstDeClasse(RED4ext::IScriptable* aObjet, const char* aClasse)
 ///
 /// C'est la voie qu'emploie la sonde depuis toujours (`GetEntitiesAroundObject`, filtre par record),
 /// et elle a deja enumere 200 corps enrichis a la fois (F-PLY-170) — donc elle les VOIT.
-void EnumererCorps(std::uint64_t aRecord, std::vector<std::uint64_t>& aOut)
+/// Ce qu'une enumeration a vu. ⚠️ **Les trois nombres existent parce que `0` ne suffisait pas.**
+///
+/// La premiere version ne rendait que le compte FILTRE. Le journal disait donc « 0 entite(s) »
+/// aussi bien quand il n'y avait rien autour que quand il y avait cent entites dont aucune ne
+/// passait le filtre. **Deux pannes opposees, un seul message** — et deux sessions de jeu pour
+/// s'en apercevoir, alors que le chiffre manquant coutait une ligne.
+struct Releve
 {
-    aOut.clear();
+    /// Tous les identifiants vus, sans aucun filtre. C'est LUI qui sert a la difference.
+    std::vector<std::uint64_t> tous;
+    /// Combien portaient le record attendu. Purement informatif — plus aucune decision n'en depend.
+    std::uint32_t duRecord = 0;
+    /// L'enumeration elle-meme a-t-elle repondu ? `false` = l'appel a echoue, et tout le reste est
+    /// sans valeur. Sans ce drapeau, « aucune entite » et « je n'ai pas pu regarder » se
+    /// confondent — et c'est la confusion qui a coute le plus cher sur ce chantier.
+    bool interrogeable = false;
+    /// Quelle forme d'appel a mordu (`"2 params"`, `"1 param"`, `"AUCUNE"`). Journalisee : le jour
+    /// ou l'une des deux cesse de marcher, on saura laquelle on employait.
+    const char* forme = "?";
+};
+
+/// Releve les entites autour du joueur.
+///
+/// ⚠️ **PLUS AUCUN FILTRE PAR RECORD, et c'est le correctif du 2026-08-23 au soir.** La version
+/// precedente ne gardait que les entites dont `GetRecordID()` egalait exactement notre record. Elle
+/// rendait 0 alors que Lucas VOYAIT les corps a l'ecran, coiffures distinctes a l'appui.
+///
+/// Trois causes possibles, et le filtre les rendait indiscernables : l'entite rapporte peut-etre le
+/// record de sa BASE (`Player_Puppet_Photomode`) plutot que le notre — c'est d'ailleurs sur
+/// `Player_Puppet` que filtre la sonde qui, elle, les trouve ; ou `GetRecordID` ne se lie pas depuis
+/// le C++ ; ou `GetEntitiesAroundObject` non plus.
+///
+/// On ne cherche donc plus a reconnaitre le corps : **on prend la DIFFERENCE avant/apres**. Une
+/// difference ne suppose rien de ce qu'on cherche, et c'est precisement sa valeur ici.
+void Relever(std::uint64_t aRecord, Releve& aOut)
+{
+    aOut.tous.clear();
+    aOut.duRecord = 0;
+    aOut.interrogeable = false;
+
     const auto joueur = Cyberverse::Utils::GetPlayer();
     if (joueur == nullptr) { return; }
 
-    RED4ext::DynArray<RED4ext::Handle<RED4ext::GameObject>> autour;
-    if (!Red::CallVirtual(joueur, "GetEntitiesAroundObject", autour, kRayonRecherche))
+    // ── LA SIGNATURE EXACTE, ET DEUX ERREURS QUE J'AI FAITES ENSEMBLE ───────────────────────
+    //
+    // Le script decompile de CDPR fait foi (`core/entity/gameObject.script:936`) :
+    //
+    //     public function GetEntitiesAroundObject( optional range : Float,
+    //                                              optional searchFilter : TargetSearchFilter )
+    //         : array< Entity >
+    //
+    // Je demandais `array<GameObject>` — c'est `Entity`. Et je ne passais qu'UN parametre alors
+    // qu'il y en a deux. L'appel rendait donc `false`, que je lisais comme « aucune entite autour ».
+    //
+    // ⚠️ **C'est la meme faute que celle du dump RTTI, prise par l'autre bout** : j'ai suppose une
+    // signature au lieu de la LIRE dans le script decompile, qui est la source de verite. Deux
+    // correctifs (rayon 12->150 m, puis retrait du filtre par record) ont ete ecrits contre une
+    // panne qui n'etait ni l'un ni l'autre — parce que mon message confondait « rien vu » et
+    // « pas pu regarder ». Le drapeau `interrogeable` existe pour que ca n'arrive plus.
+    //
+    // LES DEUX FORMES SONT ESSAYEES, et le journal dit laquelle a mordu. Ce n'est pas de
+    // l'indecision : chaque essai en jeu coute une fermeture, un deploiement et deux
+    // rechargements. Quand un aller-retour est cher, on demande TOUT ce qu'on veut savoir d'un
+    // coup — c'est la meme discipline que grouper les mesures qui exigent Lucas.
+    RED4ext::DynArray<RED4ext::Handle<RED4ext::ent::Entity>> autour;
+    RED4ext::game::TargetSearchFilter filtre{};
+
+    // ⚠️ LA FORME SANS FILTRE D'ABORD, et ce n'est pas un detail de style.
+    //
+    // La sonde CET (`TesseraApparence`) appelle `p:GetEntitiesAroundObject(rayon)` avec le SEUL
+    // rayon, et elle trouve ces corps depuis toujours — elle en a deja enumere 200 d'un coup
+    // (F-PLY-170). C'est donc la forme PROUVEE sur ces entites precises.
+    //
+    // La forme a deux parametres se lie aussi (mesure du 2026-08-23 : elle rend 128 entites), mais
+    // elle passe un `TargetSearchFilter` construit par defaut — dont on ne sait PAS ce qu'il exclut.
+    // Un filtre inconnu qui rend beaucoup d'entites ressemble a un filtre inoffensif ; il peut
+    // parfaitement ecarter la seule qui nous interesse.
+    if (Red::CallVirtual(joueur, "GetEntitiesAroundObject", autour, kRayonRecherche))
     {
+        aOut.forme = "1 param";
+    }
+    else if (Red::CallVirtual(joueur, "GetEntitiesAroundObject", autour, kRayonRecherche, filtre))
+    {
+        aOut.forme = "2 params";
+    }
+    else
+    {
+        aOut.forme = "AUCUNE";
         return;
     }
+    aOut.interrogeable = true;
     // ⚠️ DEUX TYPES DE TABLEAU DANS CE MEME FICHIER, et ils n'ont pas la meme convention.
     // Celui du SDK RED4ext expose `size()` — une METHODE. Celui du MOTEUR, qu'on manipule par
     // offsets pour la charge de customisation, expose un CHAMP `size`. Les confondre donne une
@@ -133,15 +258,53 @@ void EnumererCorps(std::uint64_t aRecord, std::vector<std::uint64_t>& aOut)
     {
         auto& obj = autour[i];
         if (obj == nullptr) { continue; }
+        aOut.tous.push_back(obj->entityID.hash);
         RED4ext::TweakDBID rec{};
-        if (!Red::CallVirtual(obj, "GetRecordID", rec)) { continue; }
-        if (rec.value != aRecord) { continue; }
-        aOut.push_back(obj->entityID.hash);
+        if (Red::CallVirtual(obj, "GetRecordID", rec) && rec.value == aRecord)
+        {
+            ++aOut.duRecord;
+        }
     }
 }
 }  // namespace
 
-Resultat Tenter(const std::vector<std::uint8_t>& aBlob, const RED4ext::Vector4& aPosition)
+/// Ce qu'on retient d'un appel deja lance, en attendant que son corps apparaisse.
+///
+/// ⭐⭐ POURQUOI CETTE ATTENTE EXISTE — mesure du 2026-08-23, 17:20.
+///
+/// Le journal rendait `autour 128->128` : l'enumeration fonctionnait (128 entites vues), et
+/// pourtant RIEN de neuf apres l'appel. Or Lucas voyait le corps a l'ecran. Les deux faits ne se
+/// contredisent pas : **la creation d'entite est ASYNCHRONE**. On cherchait dans la meme frame que
+/// l'appel, c'est-a-dire avant que le corps n'existe.
+///
+/// C'est d'ailleurs pour ca que la sonde, elle, les trouve : elle enumere par une commande
+/// separee, des secondes plus tard.
+///
+/// ⚠️ ET L'APPEL NE DOIT PARTIR QU'UNE FOIS. L'appelant retente le spawn a CHAQUE snapshot tant
+/// que l'entite manque — rappeler le spawner a chaque passage fabriquerait un corps par tick.
+/// `appele` est ce qui l'empeche, et c'est le champ le plus important de cette structure.
+struct EnAttente
+{
+    /// Les identifiants vus AVANT l'appel. La difference se fait contre eux, pas contre le passage
+    /// precedent : un voisin qui arrive entre deux passages ne doit pas etre pris pour notre corps.
+    std::vector<std::uint64_t> avant;
+    RED4ext::Vector4 position{};
+    std::uint32_t passages = 0;
+    bool appele = false;
+};
+
+/// Combien de passages on accorde au moteur pour faire naitre le corps.
+///
+/// L'appelant repasse a chaque snapshot (20-25 Hz), donc ~30 passages valent un peu plus d'une
+/// seconde. Genereux exprès : un abandon trop tot retomberait sur la voie sure alors que le corps
+/// est en route, et on aurait alors DEUX corps — exactement le defaut qu'on repare.
+constexpr std::uint32_t kPassagesMax = 30;
+
+/// Les appels en cours, par identifiant reseau.
+static std::map<std::uint64_t, EnAttente> g_enAttente;
+
+Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob,
+                const RED4ext::Vector4& aPosition)
 {
     Resultat r;
 
@@ -158,6 +321,69 @@ Resultat Tenter(const std::vector<std::uint8_t>& aBlob, const RED4ext::Vector4& 
         return r;
     }
     r.tente = true;
+
+    // ── UN APPEL DEJA PARTI POUR CE VOISIN ? ALORS ON CHERCHE, ON NE RAPPELLE PAS ───────────────
+    //
+    // L'appelant repasse ici a CHAQUE snapshot tant que l'entite manque. Sans ce rendez-vous, on
+    // relancerait le spawner vingt fois par seconde — un corps par tick, tous invisibles a nos
+    // tables, tous impossibles a effacer.
+    {
+        const auto attente = g_enAttente.find(aNetworkId);
+        if (attente != g_enAttente.end() && attente->second.appele)
+        {
+            auto& a = attente->second;
+            ++a.passages;
+
+            Releve maintenant;
+            Relever(recordAttendu(), maintenant);
+            std::vector<std::uint64_t> neufs;
+            for (const auto id : maintenant.tous)
+            {
+                bool connu = false;
+                for (const auto v : a.avant)
+                {
+                    if (v == id) { connu = true; break; }
+                }
+                if (!connu) { neufs.push_back(id); }
+            }
+
+            const std::uint64_t trouve = ChoisirLePlusProche(neufs, a.position);
+            if (trouve != 0)
+            {
+                r.entite = RED4ext::ent::EntityID{trouve};
+                r.appelFait = true;
+                char b[300];
+                std::snprintf(b, sizeof(b),
+                              "corps enrichi TROUVE apres %u passage(s) — entite %llu · "
+                              "autour %u->%u · appel %s",
+                              a.passages, static_cast<unsigned long long>(trouve),
+                              static_cast<unsigned>(a.avant.size()),
+                              static_cast<unsigned>(maintenant.tous.size()), maintenant.forme);
+                r.diag = b;
+                g_enAttente.erase(attente);
+                return r;
+            }
+
+            if (a.passages < kPassagesMax)
+            {
+                // ⚠️ On rend un resultat SANS entite et SANS diagnostic : l'appelant doit patienter,
+                // pas retomber sur la voie sure. Journaliser ici ecrirait trente lignes par voisin.
+                r.appelFait = true;
+                return r;
+            }
+
+            char b[300];
+            std::snprintf(b, sizeof(b),
+                          "corps enrichi JAMAIS APPARU apres %u passage(s) — autour %u->%u, "
+                          "appel %s. Reprise par la voie sure.",
+                          a.passages, static_cast<unsigned>(a.avant.size()),
+                          static_cast<unsigned>(maintenant.tous.size()), maintenant.forme);
+            r.diag = b;
+            r.appelFait = true;
+            g_enAttente.erase(attente);
+            return r;
+        }
+    }
 
     // ── GARDE 2 : LA CHARGE, VALIDEE AVANT TOUT ─────────────────────────────────────────────────
     // Frontiere de confiance : ces octets viennent du reseau, et ils vont servir a calculer des
@@ -295,8 +521,8 @@ Resultat Tenter(const std::vector<std::uint8_t>& aBlob, const RED4ext::Vector4& 
     // ── L'ETAT DU MONDE AVANT L'APPEL ───────────────────────────────────────────────────────────
     // On photographie les corps de ce record AVANT, pour retrouver le neuf par difference. Sans
     // cette photo, un corps deja present serait pris pour celui qu'on vient de faire naitre.
-    std::vector<std::uint64_t> avant;
-    EnumererCorps(aRecord, avant);
+    Releve avant;
+    Relever(aRecord, avant);
 
     // ── L'APPEL ─────────────────────────────────────────────────────────────────────────────────
     const auto fn = reinterpret_cast<SpawnEnrichi_t>(base + kRvaSpawnEnrichi);
@@ -308,42 +534,35 @@ Resultat Tenter(const std::vector<std::uint8_t>& aBlob, const RED4ext::Vector4& 
     // `CName` de hachage nul) et le jeu est mort dans la foulee (F-PLY-225). « Lisible » n'est pas
     // « c'est un objet de la classe que je crois ».
 
-    // ── RETROUVER LE CORPS ──────────────────────────────────────────────────────────────────────
-    std::vector<std::uint64_t> apres;
-    EnumererCorps(aRecord, apres);
-    std::vector<std::uint64_t> neufs;
-    for (const auto id : apres)
+    // ── ON NE CHERCHE PAS MAINTENANT : ON PREND RENDEZ-VOUS ─────────────────────────────────────
+    //
+    // ⭐⭐ Mesure du 2026-08-23, 17:20 : le journal rendait `autour 128->128`. L'enumeration voyait
+    // 128 entites — elle fonctionnait donc parfaitement — et RIEN de neuf apres l'appel. Pendant ce
+    // temps Lucas voyait le corps a l'ecran.
+    //
+    // Les deux faits ne se contredisent pas : **la creation d'entite est ASYNCHRONE**. Chercher
+    // dans la meme frame que l'appel, c'est chercher un corps qui n'est pas encore ne. C'est aussi
+    // pourquoi la sonde, elle, les trouve depuis toujours : elle enumere par une commande separee,
+    // des secondes plus tard.
+    //
+    // On enregistre donc l'etat d'avant, et l'appelant — qui repasse a chaque snapshot tant que
+    // l'entite manque — fera la difference aux passages suivants (bloc en tete de cette fonction).
     {
-        bool connu = false;
-        for (const auto a : avant)
-        {
-            if (a == id) { connu = true; break; }
-        }
-        if (!connu) { neufs.push_back(id); }
+        EnAttente a;
+        a.avant = std::move(avant.tous);
+        a.position = aPosition;
+        a.appele = true;
+        a.passages = 0;
+        g_enAttente[aNetworkId] = std::move(a);
     }
-
-    char b[320];
-    if (neufs.size() == 1)
-    {
-        r.entite = RED4ext::ent::EntityID{neufs[0]};
-        std::snprintf(b, sizeof(b),
-                      "corps enrichi NE — entite %llu · %u paire(s) (%u+%u+%u) injectee(s), "
-                      "recolte %u, capacite %u · retour 0x%llX (non dereference)",
-                      static_cast<unsigned long long>(neufs[0]), nInj, nHead, nBody, nArms, recolte,
-                      charge.capacity, reinterpret_cast<unsigned long long>(sortie[0]));
-    }
-    else
-    {
-        // ⚠️ On ne DEVINE pas lequel. Rendre une entite au hasard ferait piloter le mauvais corps —
-        // un defaut qui se chercherait tres loin d'ici. On rend la main a la voie sure.
-        std::snprintf(b, sizeof(b),
-                      "corps enrichi INTROUVABLE apres l'appel — %zu entite(s) neuve(s) de ce "
-                      "record (attendu 1), %u avant / %u apres · retour 0x%llX. "
-                      "Reprise par la voie sure.",
-                      neufs.size(), static_cast<unsigned>(avant.size()),
-                      static_cast<unsigned>(apres.size()),
-                      reinterpret_cast<unsigned long long>(sortie[0]));
-    }
+    char b[300];
+    std::snprintf(b, sizeof(b),
+                  "appel enrichi PARTI — %u paire(s) (%u+%u+%u), recolte %u, capacite %u · "
+                  "%u entite(s) autour avant · retour 0x%llX. Recherche du corps aux passages "
+                  "suivants (creation asynchrone).",
+                  nInj, nHead, nBody, nArms, recolte, charge.capacity,
+                  static_cast<unsigned>(g_enAttente[aNetworkId].avant.size()),
+                  reinterpret_cast<unsigned long long>(sortie[0]));
     r.diag = b;
     return r;
 }

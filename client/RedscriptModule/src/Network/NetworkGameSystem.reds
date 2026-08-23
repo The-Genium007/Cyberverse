@@ -174,6 +174,17 @@ public native class NetworkGameSystem extends IGameSystem {
     // assigné d'office. Outil de DÉVELOPPEMENT — il court-circuite l'écran d'entrée, donc il n'a
     // rien à faire chez un joueur ; c'est aussi ce qui permet à un agent de tester sans humain.
     public native func Tessera_ModeDeveloppement() -> Bool;
+
+    /// Quel personnage le mode dev doit prendre — `--tessera-dev=2` rend **2**, en base 1.
+    /// `0` = rien de demandé : le script tire alors au sort, ce qui évite que deux instances
+    /// lancées sans numéro se disputent le même personnage.
+    ///
+    /// ⚠️ La déclaration ci-dessus n'est PAS redondante avec le `RTTI_METHOD` du C++, et l'oublier
+    /// coûte un lancement : `scc` compile **hors du jeu**, donc sans qu'aucun plugin RED4ext n'ait
+    /// enregistré quoi que ce soit au RTTI. Sans cette ligne, le compilateur rend
+    /// « method not found on NetworkGameSystem » — et comme redscript refuse TOUT `r6/scripts` dès
+    /// qu'un fichier échoue, le jeu ne démarre plus du tout.
+    public native func Tessera_PersonnageDemande() -> Int32;
     public native func Tessera_NomPersonnage(index: Int32) -> String;
     // L'origine du personnage, telle que le SERVEUR la connait : « corpo » | « gosse_des_rues » |
     // « nomade ». Chaine VIDE pour un personnage cree avant que le champ n'existe — l'UI doit

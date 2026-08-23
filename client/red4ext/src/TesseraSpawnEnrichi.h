@@ -75,5 +75,6 @@ struct Resultat
 ///
 /// Rend toujours — jamais d'exception, jamais de sortie sans diagnostic. `resultat.entite` vide
 /// signifie « l'appelant doit reprendre la voie sure », quelle qu'en soit la raison.
-Resultat Tenter(const std::vector<std::uint8_t>& aBlob, const RED4ext::Vector4& aPosition);
+Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob,
+                const RED4ext::Vector4& aPosition);
 }  // namespace Tessera::SpawnEnrichi

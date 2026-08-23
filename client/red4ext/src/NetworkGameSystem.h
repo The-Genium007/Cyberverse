@@ -836,6 +836,13 @@ public:
     // appel plutôt que mémorisé — la ligne de commande ne change pas en cours de session, et un
     // cache serait un état de plus à tenir pour rien.
     bool Tessera_ModeDeveloppement() const { return ModeDeveloppementDemande(GetCommandLineA()); }
+
+    /// Quel personnage le mode dev doit prendre — `--tessera-dev=2` rend 2, en BASE 1.
+    /// `0` = rien de demandé, le script tire alors au sort (voir `PersonnageDemande`).
+    std::int32_t Tessera_PersonnageDemande() const
+    {
+        return static_cast<std::int32_t>(PersonnageDemande(GetCommandLineA()));
+    }
     Red::CString Tessera_NomPersonnage(int32_t index) const
     {
         if (index < 0 || static_cast<size_t>(index) >= m_personnages.size())
@@ -1391,6 +1398,11 @@ public:
     /// — la sonde du 2026-08-16 a conclu au succes sur un dispositif qui ne mesurait rien.
     bool Tessera_SpawnEnrichi(bool actif);
 
+    /// Applique les drapeaux de ligne de commande qui règlent des globales d'autres unités de
+    /// compilation. Idempotent, appelé au premier spawn réseau.
+    void TesseraAppliquerDrapeauxUneFois();
+    bool m_drapeauxAppliques = false;
+
     /// SONDE (F-PLY-101, etape 1) — LIT la table d'alias FPP/TPP de l'etat de customisation, sans
     /// rien modifier. Ecrit le releve dans `TesseraLogs\alias-apparence.txt` et rend un resume.
     ///
@@ -1628,6 +1640,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_NombrePersonnages);
     RTTI_METHOD(Tessera_ListePersonnagesRecue);
     RTTI_METHOD(Tessera_ModeDeveloppement);
+    RTTI_METHOD(Tessera_PersonnageDemande);
     RTTI_METHOD(Tessera_NomPersonnage);
     RTTI_METHOD(Tessera_OriginePersonnage);
     RTTI_METHOD(Tessera_EsthetiquePersonnage);
