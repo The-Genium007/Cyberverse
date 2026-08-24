@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "TesseraEsthetiqueV.h"
 
 #include <windows.h>
@@ -61,7 +62,17 @@ constexpr Groupe kGroupes[] = {
     {0x80, 0xB85240ull, "genitals", 1},
     {0x80, 0xB85240ull, "breast", 1},                    // rend 0 sur un V masculin : inoffensif
     {0x90, 0x1192F2Cull, "character_customization", 2},  // Arms
-    {0x90, 0x1192F2Cull, "holstered_default", 2},        // bras au repos, sans cyberware degaine
+    // ⛔ `holstered_default` RETIRE le 2026-08-24 — il lisait le MEME offset 0x90 que la ligne
+    // au-dessus et rendait les MEMES paires, en double.
+    //
+    // Ce n'etait pas du poids mort : mesure `[Melange]`, chaque paire dupliquee produit un
+    // COMPOSANT DUPLIQUE sur l'avatar. `a0_000_ma_base__full_ag_hq1491` apparaissait exactement
+    // deux fois, comme sa paire, et `a0_001__personal_link_default_holstered` aussi (F-PLY-292).
+    //
+    // ⚠️ J'avais moi-meme ecrit, quelques heures plus tot, que ces doublons etaient « exacts donc
+    // inoffensifs » (F-PLY-291) — parce que je les avais compares entre eux au lieu de regarder ce
+    // qu'ils PRODUISENT. Deux fois la meme valeur ne se voit pas dans un blob ; ca se voit sur le
+    // corps.
 };
 
 /// Une adresse est-elle MAPPEE et lisible sur `aSize` octets ?
@@ -188,6 +199,55 @@ bool Decoder(const std::vector<std::uint8_t>& aBlob, std::uint32_t& aHead, std::
         for (int k = 7; k >= 0; --k) { c = (c << 8) | ou[8 + k]; }
         aPaires.push_back(a);
         aPaires.push_back(c);
+    }
+
+    // ── ⭐ LES DOUBLONS SE RETIRENT ICI, ET NULLE PART AILLEURS ──────────────────────────────
+    //
+    // Mesure du 2026-08-24 (F-PLY-292) : chaque paire dupliquee produit un COMPOSANT DUPLIQUE sur
+    // l'avatar. Le releve montrait `a0_000_ma_base__full_ag_hq1491` deux fois, et
+    // `a0_001__personal_link_default_holstered` deux fois — exactement leurs paires.
+    //
+    // ⚠️ POURQUOI ICI ET PAS A LA CAPTURE. La cause d'origine etait dans `kGroupes`, qui lisait le
+    // meme offset 0x90 deux fois ; elle est corrigee. Mais ca ne repare QUE LES CAPTURES FUTURES :
+    // la charge d'un avatar vient du blob DEJA STOCKE en base, ecrit avant le correctif. Retirer
+    // les doublons au decodage repare l'existant sans migration, et protege de toute autre source
+    // de doublon — y compris un serveur tiers.
+    //
+    // ⚠️ ON DE-DUPLIQUE PAR SECTION, et les compteurs suivent. Les sections sont contigues
+    // (`aHead` paires, puis `aBody`, puis `aArms`) : retirer une paire sans corriger le compteur
+    // decalerait toutes les suivantes de section, ce qui produirait un melange PIRE que celui
+    // qu'on repare.
+    //
+    // ⚠️ ET ON GARDE LA PREMIERE OCCURRENCE, jamais la derniere. Les doublons observes sont
+    // EXACTS (meme cle, meme valeur), donc le choix est sans effet aujourd'hui — mais si une clef
+    // portait un jour deux valeurs differentes, garder la premiere respecte l'ordre de recolte,
+    // qui est celui des groupes.
+    {
+        std::vector<std::uint64_t> propres;
+        propres.reserve(aPaires.size());
+        std::uint32_t* compteurs[3] = {&aHead, &aBody, &aArms};
+        std::size_t lu = 0;
+        for (int s = 0; s < 3; ++s)
+        {
+            const std::uint32_t avant = *compteurs[s];
+            std::uint32_t gardees = 0;
+            std::vector<std::uint64_t> vues;
+            vues.reserve(avant);
+            for (std::uint32_t i = 0; i < avant; ++i, ++lu)
+            {
+                const std::uint64_t cle = aPaires[lu * 2];
+                if (std::find(vues.begin(), vues.end(), cle) != vues.end())
+                {
+                    continue;   // deja vue dans CETTE section
+                }
+                vues.push_back(cle);
+                propres.push_back(cle);
+                propres.push_back(aPaires[lu * 2 + 1]);
+                ++gardees;
+            }
+            *compteurs[s] = gardees;
+        }
+        aPaires.swap(propres);
     }
     return true;
 }
