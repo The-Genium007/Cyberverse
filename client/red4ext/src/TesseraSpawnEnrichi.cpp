@@ -1,3 +1,4 @@
+#include "CommandLine.h"
 #include "TesseraSpawnEnrichi.h"
 
 #include "TesseraEsthetiqueV.h"
@@ -510,7 +511,16 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
         r.diag = "charge REFUSEE : " + pourquoi;
         return r;
     }
-    const std::uint32_t nInj = nHead + nBody + nArms;
+    std::uint32_t nInj = nHead + nBody + nArms;
+
+    // ── SONDE `--tessera-charge-minimale` ───────────────────────────────────────────────────
+    // Une seule paire injectee : tout ce qui apparait quand meme sur l'avatar vient d'AILLEURS que
+    // de notre charge. C'est la mesure qui manque pour nommer la source du melange (F-PLY-295).
+    const bool chargeMinimale = ChargeMinimaleDemandee(GetCommandLineA());
+    if (chargeMinimale && nInj > 1)
+    {
+        nInj = 1;
+    }
 
     // Le record est le NOTRE, jamais celui du serveur (voir `kRecordEnrichi`). Hache une seule fois
     // par appel : `TweakDBID` est un CRC32 du nom, plus la longueur dans les 32 bits hauts.
@@ -754,10 +764,10 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     // n'est pas celle qu'on croit. Deux nombres cote a cote, zero lancement de plus.
     char b[380];
     std::snprintf(b, sizeof(b),
-                  "appel enrichi PARTI — %u paire(s) (%u+%u+%u), recolte %u (local %u+%u+%u), "
+                  "appel enrichi PARTI%s — %u paire(s) (%u+%u+%u), recolte %u (local %u+%u+%u), "
                   "capacite %u · %u entite(s) autour avant · retour 0x%llX. Recherche du corps aux "
                   "passages suivants (creation asynchrone).",
-                  nInj, nHead, nBody, nArms, recolte,
+                  chargeMinimale ? " [SONDE charge minimale]" : "", nInj, nHead, nBody, nArms, recolte,
                   parSection[0], parSection[1], parSection[2], charge.capacity,
                   static_cast<unsigned>(g_enAttente[aNetworkId].avant.size()),
                   reinterpret_cast<unsigned long long>(sortie[0]));

@@ -106,6 +106,24 @@ inline bool SpawnEnrichiDemande(char* commandLine)
     return std::string(commandLine).find("--tessera-spawn-enrichi") != std::string::npos;
 }
 
+// `--tessera-charge-minimale` — SONDE. N'injecte qu'UNE SEULE paire d'esthetique au lieu de toutes.
+//
+// ⭐ CE QU'ELLE TRANCHE. L'avatar d'un joueur porte des options qui ne sont PAS dans sa charge
+// (F-PLY-295 : une teinte de cheveux presente dans le blob de l'AUTRE personnage). Le corps est
+// donc bati a partir de la charge PLUS autre chose — mais quelle part vient de quoi ?
+//
+// Avec une charge reduite a une paire, tout ce qui apparait quand meme vient forcement d'ailleurs.
+// Et la sonde `[Melange]` liste les composants sans l'oeil de personne : la reponse se lit dans un
+// journal, pas dans une impression visuelle.
+//
+// ⚠️ SONDE, PAS REGLAGE. Elle degrade deliberement l'avatar ; elle n'a rien a faire dans un
+// lancement joueur, ni meme dans un test qui ne porte pas sur cette question.
+inline bool ChargeMinimaleDemandee(char* commandLine)
+{
+    if (commandLine == nullptr) { return false; }
+    return std::string(commandLine).find("--tessera-charge-minimale") != std::string::npos;
+}
+
 // `--tessera-telemetrie` — écrit un journal JSONL de tout ce qu'on émet et de tout ce qu'on rend
 // (`PlayerSync/Telemetrie.h`). Séparé de `--tessera-dev` À DESSEIN : on veut pouvoir mesurer un
 // parcours JOUEUR normal, lobby compris, sans la dérogation qui saute l'écran d'entrée. Confondre
