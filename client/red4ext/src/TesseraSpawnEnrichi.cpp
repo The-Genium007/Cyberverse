@@ -738,12 +738,27 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
         a.retour = sortie[0];
         g_enAttente[aNetworkId] = std::move(a);
     }
-    char b[300];
+    // ⭐ LA REPARTITION DU JOUEUR LOCAL EST DESORMAIS DITE, a cote de la notre.
+    //
+    // `parSection` etait calcule par `Recolter` puis JETE. Or c'est exactement l'instrument dont on
+    // a besoin : la recolte concatene SIX groupes lus a des offsets fixes de l'etat (0x70 tete,
+    // 0x80 corps, 0x90 bras), et on ecrase le tableau resultant par NOS paires — sans jamais dire
+    // au moteur que la repartition a change.
+    //
+    // Hypothese (2026-08-24, NON MESUREE) : si le consommateur redecoupe par groupe en se fiant a
+    // la repartition du joueur LOCAL, nos paires sont attribuees aux mauvaises sections — et on
+    // obtient un melange entre deux personnages, ce que Lucas decrit : « la coiffure de REDDA PLUS
+    // la sienne » sur LUCAS1.
+    //
+    // Ce que la ligne tranche : si `(nHead+nBody+nArms)` differe de `parSection`, la repartition
+    // n'est pas celle qu'on croit. Deux nombres cote a cote, zero lancement de plus.
+    char b[380];
     std::snprintf(b, sizeof(b),
-                  "appel enrichi PARTI — %u paire(s) (%u+%u+%u), recolte %u, capacite %u · "
-                  "%u entite(s) autour avant · retour 0x%llX. Recherche du corps aux passages "
-                  "suivants (creation asynchrone).",
-                  nInj, nHead, nBody, nArms, recolte, charge.capacity,
+                  "appel enrichi PARTI — %u paire(s) (%u+%u+%u), recolte %u (local %u+%u+%u), "
+                  "capacite %u · %u entite(s) autour avant · retour 0x%llX. Recherche du corps aux "
+                  "passages suivants (creation asynchrone).",
+                  nInj, nHead, nBody, nArms, recolte,
+                  parSection[0], parSection[1], parSection[2], charge.capacity,
                   static_cast<unsigned>(g_enAttente[aNetworkId].avant.size()),
                   reinterpret_cast<unsigned long long>(sortie[0]));
     r.diag = b;
