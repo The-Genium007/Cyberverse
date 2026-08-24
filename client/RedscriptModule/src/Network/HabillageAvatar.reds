@@ -95,6 +95,52 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     // ferait quarante lignes par avatar et par seconde — le régime qui a produit 19 000 lignes le
     // 2026-08-22 et rendu le journal inutilisable.
     let bavard = passe == 0u || passe == 9u;
+
+    // ── ⭐ LE DÉCLENCHEUR NATIF SÉPARÉ, ENFIN NOMMÉ ───────────────────────────────────────────
+    //
+    // Le registre énonçait déjà la loi, trois fois vérifiée : « sur un pantin, écrire la DONNÉE
+    // d'équipement réussit toujours, et l'instanciation du VISUEL exige un déclencheur natif
+    // SÉPARÉ — arme par commande d'IA (F-PLY-036), garment par `EquipVisualsRequest` (F-PLY-010) ».
+    // Ce déclencheur passe par `EquipmentSystemPlayerData`, et notre pantin n'en a pas :
+    // `EquipmentSystem.GetData(corps)` rend `NULL`, parce que `GetPlayerData` ne cherche que dans
+    // `m_ownerData`, la liste des propriétaires ENREGISTRÉS.
+    //
+    // ⭐ Et la porte d'enregistrement n'est pas réservée au joueur. `OnPlayerAttach`
+    // (`equipmentSystem.script:5019`) prend `request.owner`, le caste en `ScriptedPuppet`, et lui
+    // crée ses données — **sans jamais vérifier que c'est un joueur**. Un `PlayerAttachRequest` mis
+    // en file sur le système suffit donc, en principe, à doter notre avatar du pipeline visuel
+    // d'habillement.
+    //
+    // ⚠️ NON MESURÉ au moment où ces lignes sont écrites : c'est une lecture de script décompilé,
+    // donc une hypothèse. Ce qui la tranche est la ligne de journal ci-dessous — `donnees=` dit si
+    // l'enregistrement a pris. Si elle reste `absentes`, la voie est fermée et il faut le dire.
+    //
+    // ⚠️ L'enregistrement est ASYNCHRONE (mise en file), donc il ne peut pas servir dès la passe 0.
+    // C'est sans conséquence : on a dix passes, et l'habillage se retente à chacune.
+    if passe == 0u {
+        let systeme = EquipmentSystem.GetInstance(corps);
+        if IsDefined(systeme) {
+            let demande = new PlayerAttachRequest();
+            demande.owner = corps;
+            systeme.QueueRequest(demande);
+        }
+    }
+    if bavard {
+        TesseraJournalHabillage(
+            s"donnees d'equipement du corps : "
+            + s"\(IsDefined(EquipmentSystem.GetData(corps)) ? "PRESENTES" : "absentes")");
+    }
+
+    if passe == 0u {
+        // ⚠️ ON N'HABILLE PAS À LA PASSE 0, ET C'EST LE POINT. L'enregistrement ci-dessus est
+        // mis en FILE : les données n'existent pas encore dans cette frame. Équiper maintenant,
+        // c'est équiper avant que le pipeline visuel ne soit là — et comme le slot passe alors
+        // en « apparition en cours », plus rien ne le réessaie. C'est exactement ce qui s'est
+        // produit au premier tir : `donnees=PRESENTES` à la passe 9, et quatre vêtements posés
+        // à la passe 0, donc trop tôt.
+        return false;
+    }
+
     let voulus = reseau.Tessera_NombreDeVetements(cible);
     let manquants = 0;
     let i = 0;
@@ -145,15 +191,50 @@ func TesseraPoserVetement(transactions: ref<TransactionSystem>, corps: ref<GameO
     //
     // `IsSlotEmpty` et lui seul : voir l'en-tête du fichier pour les trois instruments qui se sont
     // révélés faux avant celui-ci.
-    if !transactions.IsSlotEmpty(corps, slot) {
+    // ⚠️ DEUX CONDITIONS, ET LA SECONDE EST LA LEÇON DU JOUR. « Le slot n'est pas vide » ne veut
+    // PAS dire « le vêtement est là » : le `TransactionSystem` expose `IsSlotEmptySpawningItem` et
+    // `IsSlotSpawningAnyItem` précisément parce qu'un slot peut être RÉSERVÉ par une apparition
+    // d'entité en attente. Attacher un item fait NAÎTRE une entité, et c'est asynchrone.
+    //
+    // Se contenter de `!IsSlotEmpty` faisait déclarer « 4 pièces posées en 2 passes » sur un corps
+    // que Lucas voyait nu. C'est le même défaut que la veille avec `GetItemInSlot`, dans l'autre
+    // sens : un signal qui répond à côté de la question posée.
+    let enCoursDApparition = transactions.IsSlotSpawningAnyItem(corps, slot);
+    if !transactions.IsSlotEmpty(corps, slot) && !enCoursDApparition {
         return true;
     }
-    // Attacher fait NAÎTRE une entité d'item. Re-ordonner par-dessus une naissance en cours, c'est
-    // la relancer indéfiniment — et c'est peut-être ce qui se passait depuis hier.
-    if transactions.IsSlotSpawningAnyItem(corps, slot) {
-        if bavard {
+    // ⚠️ UN SLOT BLOQUÉ SE VIDE, IL NE S'ATTEND PAS. Mesuré : une « apparition en cours » sans
+    // objet dure indéfiniment — dix secondes, puis toute la session. Ce n'est pas une latence,
+    // et patienter dessus revient à ne rien faire. On repart donc de zéro sur ce slot, ce que
+    // fait aussi l'aperçu d'inventaire avant de poser (`RemoveItemFromSlot` en tête de sa
+    // séquence).
+    if enCoursDApparition && !IsDefined(transactions.GetItemInSlot(corps, slot)) {
+        transactions.RemoveItemFromSlot(corps, slot, true);
+        enCoursDApparition = transactions.IsSlotSpawningAnyItem(corps, slot);
+    }
+    if enCoursDApparition {
+        // On n'ordonne PAS par-dessus une naissance en cours : ce serait la relancer indéfiniment.
+        // Mais on le DIT à la dernière passe — une apparition qui dure dix secondes n'est plus une
+        // latence, c'est une panne, et c'est la seule ligne qui pourrait le révéler.
+        if passe == 9u {
+            // ⭐ ET LE TEMOIN, dans la meme ligne : le meme slot sur le JOUEUR LOCAL, qui porte un
+            // vetement visible. C'est la quatrieme fois aujourd'hui qu'un signal est interroge sans
+            // temoin ; les trois premieres fois il repondait a cote de la question
+            // (F-PLY-276, F-PLY-277). Si `apparition` est vrai la-bas aussi, ce drapeau est
+            // COLLANT et ne dit rien — et toute la conclusion tombe.
+            let joueur = GameInstance.GetPlayerSystem(GetGameInstance())
+                .GetLocalPlayerControlledGameObject();
+            let sTemoin = "pas de joueur";
+            if IsDefined(joueur) {
+                sTemoin = s"vide=\(transactions.IsSlotEmpty(joueur, slot))"
+                    + s" apparition=\(transactions.IsSlotSpawningAnyItem(joueur, slot))"
+                    + s" objet=\(IsDefined(transactions.GetItemInSlot(joueur, slot)))";
+            }
             TesseraJournalHabillage(
-                s"\(TDBID.ToStringDEBUG(vetement)) — item EN COURS d'apparition, on attend");
+                s"⚠ \(TDBID.ToStringDEBUG(vetement)) — apparition TOUJOURS en cours après 10 passes"
+                + s" · avatar : vide=\(transactions.IsSlotEmpty(corps, slot))"
+                + s" objet=\(IsDefined(transactions.GetItemInSlot(corps, slot)))"
+                + s" · TEMOIN joueur : \(sTemoin)");
         }
         return false;
     }
