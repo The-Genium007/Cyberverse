@@ -62,8 +62,21 @@ constexpr Groupe kGroupes[] = {
     {0x80, 0xB85240ull, "genitals", 1},
     {0x80, 0xB85240ull, "breast", 1},                    // rend 0 sur un V masculin : inoffensif
     {0x90, 0x1192F2Cull, "character_customization", 2},  // Arms
-    // ⛔ `holstered_default` RETIRE le 2026-08-24 — il lisait le MEME offset 0x90 que la ligne
-    // au-dessus et rendait les MEMES paires, en double.
+    {0x90, 0x1192F2Cull, "holstered_default", 2},        // bras au repos, sans cyberware degaine
+    // ⚠️⚠️ `holstered_default` A ETE RETIRE PUIS REMIS, le 2026-08-24, et les deux gestes sont
+    // instructifs.
+    //
+    // RETIRE parce qu'il lit le MEME offset 0x90 que la ligne au-dessus et rend trois paires sur
+    // quatre en commun avec elle — et parce que chaque paire dupliquee produit un COMPOSANT
+    // duplique sur l'avatar (F-PLY-292, releve a l'appui).
+    //
+    // REMIS parce que le bloc d'audit ci-dessus, ecrit le 2026-08-21, dit ce que le retrait
+    // coutait : sa QUATRIEME option est unique, et c'est celle qui porte l'etat des bras. Le
+    // retirer echangeait un defaut visible contre une perte d'information silencieuse.
+    //
+    // ⭐ Les doublons se retirent donc au DECODAGE, qui garde la premiere occurrence de chaque cle
+    // et jette les suivantes : rien n'est perdu, rien n'est double. Et ca repare AUSSI les blobs
+    // deja stockes, ce que corriger cette table ne fait pas.
     //
     // Ce n'etait pas du poids mort : mesure `[Melange]`, chaque paire dupliquee produit un
     // COMPOSANT DUPLIQUE sur l'avatar. `a0_000_ma_base__full_ag_hq1491` apparaissait exactement
