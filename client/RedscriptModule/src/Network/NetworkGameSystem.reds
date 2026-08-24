@@ -53,6 +53,10 @@ public native class NetworkGameSystem extends IGameSystem {
     // ⚠️ Renvoie un `TweakDBID` et non un `Uint64`, parce que redscript expose `TDBID.ToNumber`
     // mais **aucune conversion inverse** : un hash 64 bits y est un cul-de-sac. La conversion se
     // fait donc côté C++, où le hash EST déjà un TweakDBID.
+    // Verrou d'une sonde a usage unique : rend `true` la premiere fois, `false` ensuite.
+    // Il vit cote C++ parce que l'appelant est rappele pour CHAQUE avatar.
+    public native func Tessera_PremierVidageEtat() -> Bool;
+
     public native func Tessera_ArmeDeLEntite(cible: EntityID) -> TweakDBID;
 
     // ── CE QUE LE SERVEUR VEUT VOIR SUR LE DOS DE CETTE ENTITÉ ──────────────────────────────

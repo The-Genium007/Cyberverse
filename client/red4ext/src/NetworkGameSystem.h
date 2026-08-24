@@ -559,6 +559,7 @@ private:
     // ne re-appliquer que sur changement réel (`ScheduleAppearanceChange` a un effet différé et
     // relire immédiatement renvoie l'ancienne valeur — F-PNJ-050).
     std::map<uint64_t, uint64_t> m_appliedAppearance;
+    bool m_vidageEtatFait = false;
 
     // --- Horloge monde serveur (`WorldState`) ---
     // Aucun état ici : le seuil de resynchronisation vit côté redscript, seul endroit d'où l'on
@@ -1168,6 +1169,18 @@ public:
     // impossible a retransformer en identifiant utilisable. La conversion doit donc se faire ICI,
     // ou le hash EST deja un TweakDBID. Verifie dans `core/data/tweakDBID.script` avant d'ecrire
     // la premiere ligne du cote script — sans quoi tout le chemin de reception aurait ete a jeter.
+    // Rend `true` UNE SEULE FOIS par session — le verrou d'une sonde qui ne doit pas se repeter.
+    //
+    // ⚠️ Le verrou vit ICI et pas cote script parce que la fonction appelante est rappelee pour
+    // CHAQUE avatar : sans lui, une sonde destructrice s'executerait vingt fois, et sa mesure
+    // n'aurait aucun sens.
+    bool Tessera_PremierVidageEtat()
+    {
+        if (m_vidageEtatFait) { return false; }
+        m_vidageEtatFait = true;
+        return true;
+    }
+
     RED4ext::TweakDBID Tessera_ArmeDeLEntite(RED4ext::ent::EntityID cible) const
     {
         const auto* a = ApparencePourEntite(cible);
@@ -1699,6 +1712,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_EstEntiteReseau);
     RTTI_METHOD(Tessera_RapporterDegats);
     RTTI_METHOD(Tessera_RapporterArme);
+    RTTI_METHOD(Tessera_PremierVidageEtat);
     RTTI_METHOD(Tessera_ArmeDeLEntite);
     RTTI_METHOD(Tessera_NombreDeVetements);
     RTTI_METHOD(Tessera_VetementDeLEntite);

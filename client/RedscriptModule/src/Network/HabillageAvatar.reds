@@ -1,36 +1,36 @@
 module Cyberverse.Network.Managers
 
-// ⛔ L'HABILLAGE NE SE FAIT PLUS ICI — et ce fichier sert maintenant à MESURER le mélange.
+// ⛔ L'HABILLAGE NE SE FAIT PLUS ICI — ce fichier MESURE le mélange, et prépare son correctif.
 //
-// L'habillage de l'avatar distant a fini par marcher (F-PLY-286, 2026-08-24), mais dans l'ASSET :
-// les vêtements sont des composants de `avatar_distant_ma.ent`, posés par
-// `tools/re-probe/entites/habiller-avatar.py`. Rien ne se joue plus à l'exécution.
+// Les vêtements sont des composants de `avatar_distant_ma.ent` depuis F-PLY-286. Ce qui reste ici
+// est l'instrument qui a permis de comprendre pourquoi les avatars se mélangent.
 //
-// ── LES TROIS VOIES ESSAYÉES ICI, ET POURQUOI AUCUNE NE TIENT ────────────────────────────────
+// ── LES TROIS IMPASSES DE CE FICHIER, à ne pas rouvrir sans mesure neuve ─────────────────────
 //
-//   1. **L'ÉQUIPEMENT** (`GiveItem` + `AddItemToSlot`) — 🔴 impasse F-PLY-275. L'appel met en file
-//      une naissance d'entité d'item qui n'aboutit **jamais**, sur un pantin de photomode enrichi
-//      comme sur un pantin de passant, avec ou sans `EquipmentSystemPlayerData`.
-//   2. **DEMANDER UNE APPARENCE APRÈS LA NAISSANCE** — l'ordre PREND et le corps DISPARAÎT
-//      (F-PLY-283).
-//   3. **RIEN NE SE DÉCIDE APRÈS LA CONSTRUCTION** — la loi générale (F-PLY-191).
+//   1. **L'ÉQUIPEMENT** — 🔴 F-PLY-275 : l'entité d'item ne naît jamais.
+//   2. **L'APPARENCE APRÈS LA NAISSANCE** — F-PLY-283 : l'ordre prend, le corps disparaît.
+//   3. **RIEN NE SE DÉCIDE APRÈS LA CONSTRUCTION** — F-PLY-191, la loi qui explique les deux.
 //
-// ⚠️ Ne pas rouvrir ces voies sans une mesure neuve : elles ont coûté sept lancements.
+// ── ⭐ CE QU'ON SAIT DU MÉLANGE, ET CE QUE CE FICHIER MESURE ─────────────────────────────────
 //
-// ── ⭐ CE QUE CE FICHIER MESURE MAINTENANT : D'OÙ VIENT LE MÉLANGE ───────────────────────────
+// **Chaque spectateur imprime son propre V sur l'avatar qu'il regarde** (F-PLY-296, prouvé en
+// réduisant la charge à une seule paire : la coiffure et le teint du spectateur restaient sur le
+// corps d'en face). Le corps est donc bâti à partir de notre charge **et** de l'état de
+// customisation, qui est un singleton portant le V du joueur local.
 //
-// Le corps d'un joueur distant montre un mélange avec le V du SPECTATEUR — Lucas joue REDDA et voit
-// la coiffure de REDDA sur l'avatar de LUCAS1 (F-PLY-290). Deux causes sont déjà écartées, hors jeu
-// (F-PLY-291) : le transport (la charge est copiée en profondeur, `size × 16` octets) et les
-// données (les deux blobs stockés n'ont AUCUNE paire en commun).
+// ⚠️ Et « couvrir tous les slots du voisin » ne suffirait pas : les deux esthétiques de test ne
+// partagent que **8 slots sur 21 et 18** — les slots encodent le sexe. Treize slots du spectateur
+// resteraient non surchargés, et ce sont exactement ceux qui fuient (coiffure, organes).
 //
-// Reste un phénomène d'exécution. Cette sonde le tranche **sans l'œil de personne** : elle lit
-// l'apparence RÉELLEMENT posée sur chaque composant de l'avatar, et la journalise en hexadécimal.
-// Hors jeu, on confronte ces valeurs aux deux blobs — celui du joueur qu'on affiche et celui du
-// spectateur. Une valeur qui vient du second est la preuve du mélange, et elle NOMME la pièce.
+// D'où la question que ce fichier a posée : **peut-on faire taire l'état ?**
 //
-// ⚠️ ON LIT, ON N'ÉCRIT PAS. Écrire `meshAppearance` est une impasse mesurée (F-PLY-191) ; la lire
-// ne l'est pas, et c'est exactement la différence entre une sonde et une tentative.
+// ⛔ **RÉPONSE : NON, ET C'EST MESURÉ (F-PLY-297).** `ClearState()` rend **`false`** en cours de
+// partie — elle refuse — et le joueur local est rigoureusement inchangé : 28 composants de mesh
+// avant, 28 après ; 26 avant, 26 après sur l'autre instance. La méthode n'est utilisable que dans
+// le parcours du créateur de personnage.
+//
+// La voie est donc fermée, et elle l'a été en un lancement, sans rien casser. La sonde reste ici
+// parce qu'elle est **inerte** et qu'elle documente le refus : quelqu'un aura l'idée à nouveau.
 //
 //   grep "\[Melange\]" <jeu>/red4ext/logs/cyberverse.red4ext-*.log
 
@@ -42,9 +42,6 @@ func TesseraJournalMelange(texte: String) -> Void {
 }
 
 // Le corps derrière un `EntityID`, quelle que soit la voie qui l'a fait naître.
-//
-// ⚠️ `DynamicEntitySystem.GetEntity` ne connaît pas les corps de la voie enrichie : ils ne sont pas
-// nés par lui. `GameInstance.FindEntityByID`, lui, interroge le monde.
 func TesseraCorpsDeLEntite(cible: EntityID) -> ref<Entity> {
     let entite = GameInstance.GetDynamicEntitySystem().GetEntity(cible);
     if !IsDefined(entite) {
@@ -54,37 +51,32 @@ func TesseraCorpsDeLEntite(cible: EntityID) -> ref<Entity> {
 }
 
 // Appelée par `PiloterAvatar` (C++) par créneaux bornés — le seul chemin qui atteint les corps de la
-// voie enrichie (F-PLY-278). Rend `true` quand le relevé est fait : l'appelant cesse de repasser.
+// voie enrichie (F-PLY-278). Rend `true` quand le relevé est fait.
 func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     // ⚠️ On attend quelques passes : un corps qui vient de naître n'a pas fini de monter ses
     // composants, et relever trop tôt donnerait une liste courte qu'on lirait comme une absence.
-    // C'est la même leçon que la fenêtre morte de l'habillage (F-PLY-279).
     if passe < 3u {
         return false;
     }
     let corps = TesseraCorpsDeLEntite(cible);
     if !IsDefined(corps) {
-        return false; // pas encore né — l'appelant repassera
+        return false;
     }
-
-    // Le V du SPECTATEUR, relevé dans la même frame. Sans ce témoin, les valeurs de l'avatar ne se
-    // comparent à rien : c'est lui qui transforme une liste de hachages en verdict.
-    let joueur = GameInstance.GetPlayerSystem(GetGameInstance())
-        .GetLocalPlayerControlledGameObject();
-
     TesseraJournalMelange(s"=== avatar \(EntityID.ToDebugString(cible)) ===");
     TesseraReleverApparences(corps, "avatar");
-    if IsDefined(joueur) {
-        TesseraReleverApparences(joueur, "TEMOIN-spectateur");
-    }
+
+    // ── ⭐ LA SONDE DU JOUR : VIDER L'ÉTAT CASSE-T-IL LE JOUEUR LOCAL ? ──────────────────────
+    //
+    // Une seule fois par session — le drapeau vit dans le système réseau, pas ici, parce que cette
+    // fonction est rappelée pour chaque avatar et qu'on ne veut pas vider l'état vingt fois.
+    TesseraSonderVidageEtat();
     return true;
 }
 
-// Journalise, pour chaque composant de mesh, le nom et l'apparence RÉELLEMENT posée.
+// Relève, pour chaque composant de mesh, le nom et l'apparence RÉELLEMENT posée.
 //
-// ⚠️ Le `meshAppearance` est un `CName` : son hachage est directement comparable aux valeurs des
-// paires du blob `TSV1`, qui sont des hachages de `CName`. La confrontation se fait donc hors jeu,
-// sans interpréter quoi que ce soit ici.
+// ⚠️ Le `meshAppearance` est un `CName` ; c'est le contenu réel de l'entité, pas ce qu'on croit lui
+// avoir donné. Lire ce champ est fiable ; l'écrire est une impasse (F-PLY-191).
 func TesseraReleverApparences(entite: ref<Entity>, etiquette: String) -> Void {
     let composants = entite.GetComponents();
     let n = 0;
@@ -99,4 +91,36 @@ func TesseraReleverApparences(entite: ref<Entity>, etiquette: String) -> Void {
         i += 1;
     }
     TesseraJournalMelange(s"  \(etiquette) : \(n) composant(s) de mesh sur \(ArraySize(composants))");
+}
+
+// ⚠️ SONDE DESTRUCTIVE POTENTIELLE — elle appelle `ClearState()` sur le système de customisation.
+//
+// C'est le geste dont on veut savoir s'il est sûr : si l'état peut être vidé sans abîmer le V du
+// joueur local, alors on tient la voie pour empêcher ce V de contaminer les avatars des voisins
+// (F-PLY-296). On relève donc le joueur AVANT et APRÈS, dans la même session, et la comparaison des
+// deux listes est le verdict.
+//
+// ⚠️ Une seule fois par session : vider l'état à chaque avatar serait une mesure ininterprétable, et
+// un martèlement d'un système partagé.
+func TesseraSonderVidageEtat() -> Void {
+    let reseau = GameInstance.GetNetworkGameSystem();
+    if !IsDefined(reseau) || !reseau.Tessera_PremierVidageEtat() {
+        return;
+    }
+    let joueur = GameInstance.GetPlayerSystem(GetGameInstance())
+        .GetLocalPlayerControlledGameObject();
+    if !IsDefined(joueur) {
+        TesseraJournalMelange("sonde vidage : pas de joueur local, abandon");
+        return;
+    }
+    let systeme = GameInstance.GetCharacterCustomizationSystem(GetGameInstance());
+    if !IsDefined(systeme) {
+        TesseraJournalMelange("sonde vidage : systeme de customisation INJOIGNABLE");
+        return;
+    }
+    TesseraJournalMelange("--- sonde vidage : AVANT ClearState ---");
+    TesseraReleverApparences(joueur, "joueur-AVANT");
+    let vide = systeme.ClearState();
+    TesseraJournalMelange(s"--- ClearState rend \(vide) ---");
+    TesseraReleverApparences(joueur, "joueur-APRES");
 }
