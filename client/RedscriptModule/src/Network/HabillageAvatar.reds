@@ -2,47 +2,56 @@ module Cyberverse.Network.Managers
 
 // L'AVATAR D'UN JOUEUR PORTE CE QUE LE SERVEUR DIT QU'IL PORTE.
 //
-// ── Ce que ce fichier fait, et d'où vient sa recette ──────────────────────────────────────────
+// ── Ce que ce fichier fait ────────────────────────────────────────────────────────────────────
 //
 // Le serveur est l'autorité sur l'inventaire ET sur l'équipement (demande de Lucas du 2026-08-23 :
 // « il faut que ce soit le serveur qui arbitre et qui soit l'autorité pour ce qu'on possède et ce
 // qu'on a d'équipé »). Sa base de données porte, pour chaque item d'un personnage, s'il est
 // simplement possédé ou effectivement **porté** (colonne `contenus.porte`, migration 0012). Ces
-// items descendent dans `AppearanceSync.garments` avec `drawn = false`, et le C++ les range
-// (`NetworkAppearance::vetements`). Ce fichier les pose sur le pantin.
+// items descendent dans `AppearanceSync.garments` avec `drawn = false`, le C++ les range
+// (`NetworkAppearance::vetements`) et les expose par deux natives. Ce fichier les pose sur le corps.
 //
-// La recette vient de F-PLY-203 : c'est celle du **photomode**, lue dans
-// `photoModePlayerEntity.script:91-101` (`PutOnFakeItem`), et nos pantins sont justement des
-// pantins de photomode enrichis. Elle tient en quatre gestes :
+// ── ⚠️⚠️ QUI DÉCLENCHE, ET POURQUOI CE N'EST PAS `OnGameAttached` ────────────────────────────
 //
-//     GivePreviewItemByItemID  →  CreatePreviewItemID  →  GetPlacementSlot  →  AddItemToSlot(…, true)
+// La première version accrochait `@wrapMethod(ScriptedPuppet) OnGameAttached`, en copiant
+// `ArmeAvatar.reds`. Mesuré le 2026-08-24 : sur un corps né de la **voie enrichie** — celui qui
+// porte le V du joueur — ce hook ne se déclenche **jamais**. Zéro ligne de journal, deux instances.
+// Il ne marchait que sur les pantins de passant de la voie sûre.
 //
-// ⚠️ **STATUT : F-PLY-203 est une HYPOTHÈSE.** Elle a été lue dans le script décompilé de CDPR et
-// JAMAIS exécutée ici. Ce fichier est donc la sonde qui la tranche — pas l'application d'un fait
-// acquis. Si l'habillage ne prend pas, la recette est en cause avant le câblage.
+// Le déclencheur est donc `PiloterAvatar`, côté C++ : le seul chemin dont on sait qu'il atteint ces
+// corps, puisque c'est lui qui les fait marcher. Il appelle `TesseraHabillerAvatar` par créneaux,
+// borné, et s'arrête dès que cette fonction rend `true`.
 //
-// ⚠️ **CE QUE L'IMPASSE F-PLY-185 NE COUVRE PAS.** Elle dit que « les items de customization ne se
-// posent pas sur un pantin du monde », et elle a essayé cette voie exacte — mais avec
-// `Items.CharacterCustomizationMaHead`, dont l'`equipArea` est VIDE : `GetPlacementSlot` ne rend
-// rien, et le pipeline visuel sort immédiatement. Un vêtement réel a une zone d'équipement valide.
-// L'impasse porte sur les items de CUSTOMISATION, pas sur les VÊTEMENTS — c'est pourquoi D3 ne
-// nous arrête pas ici.
+// ── ⭐ AVEC QUOI ON MESURE, ET LES TROIS INSTRUMENTS QUI ÉTAIENT FAUX ────────────────────────
 //
-// ── Pourquoi une boucle qui VÉRIFIE, et pas une pose unique ───────────────────────────────────
+// Ça vaut d'être écrit plutôt que réappris :
 //
-// C'est la leçon déjà payée par `ArmeAvatar.reds` le 2026-08-10 : un système qui envoie un ordre et
-// tient sa propre comptabilité pour la vérité ne remarque jamais qu'un ordre a été avalé. Un pantin
-// qui vient de naître n'a fini ni son inventaire ni ses slots d'attache — les ordres y sont
-// acceptés **sans effet**, ce que D1 appelle un succès trompeur.
+//   1. `GetItemInSlot` — ⚠️ **PAS FIABLE**. Mesuré le 2026-08-24 avec un témoin : sur le JOUEUR
+//      LOCAL, qui porte visiblement des vêtements, il rend `null` pour `AttachmentSlots.Chest`
+//      pendant que `IsSlotEmpty` rend `false`. Un objet peut donc être là sans que cette fonction
+//      le rende. F-PLY-185 recommandait cet appel — c'était vrai pour son cas, pas pour celui-ci.
+//   2. `InitializeSlots` — ⚠️ **NE COMPTE RIEN D'UTILE**. Rend `0` emplacement sur notre avatar…
+//      **et `0` sur le joueur local aussi**. Le chiffre ne distingue pas « ce corps ne peut rien
+//      porter » de « rien de neuf à monter ». Hypothèse morte en un seul lancement, grâce au témoin.
+//   3. La valeur de retour de `AddItemToSlot` — elle rend `true` en ayant seulement accepté
+//      (D1 : « accepté » ≠ « exécuté »).
 //
-// On ne mémorise donc rien : à chaque passe on lit ce que l'avatar porte RÉELLEMENT
-// (`GetItemInSlot`, jamais la valeur de retour de `AddItemToSlot` — c'est la règle que F-PLY-185 a
-// établie au prix de quatre voies) et on repose ce qui manque. La seule mémoire est l'avatar.
+// **Le verdict retenu est `IsSlotEmpty`**, corroboré par le témoin : `false` sur le joueur habillé,
+// `true` sur notre avatar nu. Et `IsSlotSpawningAnyItem` à côté, parce qu'attacher un item fait
+// NAÎTRE une entité — c'est asynchrone, et « rien » ne doit pas se confondre avec « en cours ».
 //
-// ⚠️ ET LA BOUCLE SE RÉ-ARME TOUJOURS, sans condition — la leçon du battement de l'écran de mort
-// (2026-08-09) : un ré-armement enfermé dans un test s'arrête un jour, et plus personne ne comprend
-// pourquoi l'état s'est figé. C'est aussi ce qui fait qu'un CHANGEMENT de tenue en cours de partie
-// est ramassé sans qu'aucun événement n'ait à être câblé.
+// ── ⭐ QUELLE RECETTE, ET POURQUOI PAS CELLE DU PHOTOMODE ────────────────────────────────────
+//
+// La recette du photomode (F-PLY-203, `photoModePlayerEntity.script:91-101`) a été exécutée le
+// 2026-08-24. Chaque geste réussit — l'item est donné, le slot est valide, `CanPlaceItemInSlot`
+// accepte, `AddItemToSlot` rend `true`, et `IsSlotEmpty` rend ensuite `false` : l'item OCCUPE
+// réellement le slot. Et pourtant Lucas confirme à l'œil, deux fois : **le corps est nu**. Un item
+// de prévisualisation ne se rend apparemment que dans le contexte qui l'a inventé.
+//
+// La recette retenue est celle de l'**aperçu d'inventaire**
+// (`BaseGarmentItemPreviewGameController`, `ItemPreviewGameController.script:195-210`) : c'est le
+// seul témoin QUI MARCHE dont on dispose — il habille un `gamePuppet`, comme le nôtre, et le rend
+// visible à l'écran. Deux gestes, sans item de prévisualisation et sans haute priorité.
 //
 //   grep "\[Habillage\]" <jeu>/red4ext/logs/cyberverse.red4ext-*.log
 
@@ -53,171 +62,135 @@ func TesseraJournalHabillage(texte: String) -> Void {
     }
 }
 
-// ⚠️ Différé de 2 s après l'attachement, exactement comme l'arme et pour la même raison mesurée :
-// avant ça, le pantin accepte les ordres sans les exécuter.
-@wrapMethod(ScriptedPuppet)
-protected cb func OnGameAttached() -> Bool {
-    let resultat = wrappedMethod();
-    if TesseraEstSousAutoriteServeur(this.GetEntityID()) {
-        GameInstance.GetDelaySystem(GetGameInstance())
-            .DelayCallback(TesseraHabillageAvatar.Creer(this.GetEntityID(), 0u), 2.0, false);
+// Le corps derrière un `EntityID`, quelle que soit la voie qui l'a fait naître.
+//
+// ⚠️ `DynamicEntitySystem.GetEntity` ne connaît pas les corps de la voie enrichie : ils ne sont pas
+// nés par lui. `GameInstance.FindEntityByID`, lui, interroge le monde. Un corps non résolu n'est
+// pas une erreur, c'est « pas encore né » — l'appelant repassera.
+func TesseraCorpsDeLEntite(cible: EntityID) -> ref<GameObject> {
+    let jeu = GetGameInstance();
+    let entite = GameInstance.GetDynamicEntitySystem().GetEntity(cible);
+    if !IsDefined(entite) {
+        entite = GameInstance.FindEntityByID(jeu, cible);
     }
-    return resultat;
+    return entite as GameObject;
 }
 
-public class TesseraHabillageAvatar extends DelayCallback {
-    let cible: EntityID;
-    // Passes depuis la dernière convergence. Sert au JOURNAL, pas au contrôle : une boucle qui
-    // retente en silence cache sa propre panne.
-    let essais: Uint32;
-
-    public static func Creer(cible: EntityID, essais: Uint32) -> ref<TesseraHabillageAvatar> {
-        let h = new TesseraHabillageAvatar();
-        h.cible = cible;
-        h.essais = essais;
-        return h;
+// Habille le corps avec CE QUE LE SERVEUR ANNONCE. Rend `true` quand tout est en place.
+func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
+    let reseau = GameInstance.GetNetworkGameSystem();
+    if !IsDefined(reseau) {
+        return false;
+    }
+    let corps = TesseraCorpsDeLEntite(cible);
+    if !IsDefined(corps) {
+        return false; // pas encore né — l'appelant repassera
+    }
+    let transactions = GameInstance.GetTransactionSystem(GetGameInstance());
+    if !IsDefined(transactions) {
+        return false;
     }
 
-    public func Call() -> Void {
-        let jeu = GetGameInstance();
-        let reseau = GameInstance.GetNetworkGameSystem();
-        if !IsDefined(reseau) {
-            return; // plus de session réseau — on s'arrête, et c'est une condition nommée
+    // On ne parle qu'à la première passe et à la dernière : une ligne par vêtement et par passe
+    // ferait quarante lignes par avatar et par seconde — le régime qui a produit 19 000 lignes le
+    // 2026-08-22 et rendu le journal inutilisable.
+    let bavard = passe == 0u || passe == 9u;
+    let voulus = reseau.Tessera_NombreDeVetements(cible);
+    let manquants = 0;
+    let i = 0;
+    while i < voulus {
+        // ⚠️ RELU À CHAQUE TOUR, jamais mis en cache : un `AppearanceSync` peut avoir changé la
+        // tenue entre deux passes. Un index hors bornes rend un TweakDBID invalide, que la ligne
+        // suivante écarte.
+        let vetement = reseau.Tessera_VetementDeLEntite(cible, i);
+        if TDBID.IsValid(vetement)
+            && !TesseraPoserVetement(transactions, corps, vetement, passe, bavard) {
+            manquants += 1;
         }
-        // ⚠️ L'AVATAR DISPARU ARRÊTE LA BOUCLE. Une sortie d'AoI détruit l'entité ; se ré-armer
-        // dessus laisserait une callback par avatar jamais revu tourner jusqu'à la fin de la
-        // session. Au respawn, `OnGameAttached` en repose une neuve.
-        let avatar = GameInstance.GetDynamicEntitySystem().GetEntity(this.cible) as ScriptedPuppet;
-        if !IsDefined(avatar) {
-            return;
-        }
-        let transactions = GameInstance.GetTransactionSystem(jeu);
-        if !IsDefined(transactions) {
-            return;
-        }
+        i += 1;
+    }
 
-        let voulus = reseau.Tessera_NombreDeVetements(this.cible);
-        let manquants = 0;
-        let i = 0;
-        while i < voulus {
-            // ⚠️ RELU À CHAQUE TOUR, jamais mis en cache : un `AppearanceSync` peut avoir changé la
-            // tenue entre deux passes. Un index hors bornes rend un TweakDBID invalide, que la
-            // ligne suivante écarte.
-            let vetement = reseau.Tessera_VetementDeLEntite(this.cible, i);
-            if TDBID.IsValid(vetement) && !this.Poser(transactions, avatar, vetement) {
-                manquants += 1;
-            }
-            i += 1;
-        }
-
-        if manquants == 0 {
-            // On ne journalise QUE si ça a demandé des essais : une ligne par tour et par avatar
-            // noierait le fichier — c'est ce qui est arrivé le 2026-08-22 (19 000 lignes).
-            if this.essais > 0u {
-                TesseraJournalHabillage(
-                    s"\(voulus) pièce(s) posée(s) en \(this.essais + 1u) passe(s)");
-            }
-            // Converge : on repasse lentement, pour ramasser un changement de tenue.
-            GameInstance.GetDelaySystem(jeu)
-                .DelayCallback(TesseraHabillageAvatar.Creer(this.cible, 0u), 2.0, false);
-            return;
-        }
-
-        // ⚠️ ON NOMME CE QUI RÉSISTE, et on continue quand même. Dix passes sans effet est une
-        // information — mais abandonner rendrait l'avatar définitivement nu là où la passe suivante
-        // aurait pu réussir (l'inventaire du pantin finit de se monter à son rythme).
-        if this.essais == 9u {
+    if manquants > 0 {
+        if passe == 9u {
             TesseraJournalHabillage(
                 s"⚠ \(manquants)/\(voulus) pièce(s) toujours absentes après 10 passes");
         }
-        GameInstance.GetDelaySystem(jeu)
-            .DelayCallback(TesseraHabillageAvatar.Creer(this.cible, this.essais + 1u), 0.5, false);
-    }
-
-    // Pose UN vêtement, et rend « ce vêtement est bien sur le dos de l'avatar ».
-    //
-    // ⚠️ LE VERDICT EST `GetItemInSlot`, PAS LA VALEUR DE RETOUR DES ORDRES. `AddItemToSlot` rend
-    // `true` en ayant seulement accepté (D1 : « accepté » ≠ « exécuté »). C'est la règle que
-    // F-PLY-185 a établie au prix de quatre voies explorées.
-    //
-    // ── DEUX RECETTES, EN ALTERNANCE — et c'est délibéré ──────────────────────────────────────
-    //
-    // Mesuré le 2026-08-23, premier passage en jeu : la recette du photomode (F-PLY-203) ne pose
-    // RIEN sur nos pantins — « 4/4 pièces toujours absentes après 10 passes ». C'était une
-    // hypothèse, jamais exécutée ; elle vient d'être exécutée, et elle ne suffit pas.
-    //
-    // Or ce dépôt en connaît une SECONDE, celle-là mesurée : `ArmeAvatar.reds` équipe réellement
-    // une arme sur un pantin distant, par `GiveItem` + `AddItemToSlot` avec l'`ItemID` DIRECT — pas
-    // un item de prévisualisation. Elle marche depuis le 2026-07-24.
-    //
-    // Plutôt que de choisir à l'aveugle, on les alterne : passe paire = photomode, passe impaire =
-    // arme. Chacune a cinq tentatives sur les dix, le journal nomme celle qui a été essayée, et
-    // celle qui converge gagne. Un aller-retour en jeu coûte cinq minutes ; en faire un par
-    // hypothèse quand une seule suffit est du temps qu'on ne remet pas.
-    private func Poser(transactions: ref<TransactionSystem>, avatar: ref<ScriptedPuppet>,
-                       vetement: TweakDBID) -> Bool {
-        let identifiant = ItemID.FromTDBID(vetement);
-        let slot = EquipmentSystem.GetPlacementSlot(identifiant);
-        // On ne parle qu'à la première passe et à la dixième : une ligne par vêtement et par passe
-        // ferait quarante lignes par avatar et par seconde — le régime qui a produit 19 000 lignes
-        // le 2026-08-22 et rendu le journal inutilisable.
-        let bavard = this.essais == 0u || this.essais == 9u;
-
-        if !TDBID.IsValid(slot) {
-            // ⚠️ RENDU « POSÉ » DÉLIBÉRÉMENT, alors que rien n'a été posé. Un item sans slot de
-            // placement ne l'aura jamais — le retenter dix fois par avatar ne ferait que masquer
-            // les vraies pièces manquantes derrière du bruit. C'est exactement le défaut de
-            // F-PLY-185 : `equipArea` vide, donc aucun slot, donc pipeline visuel sans objet.
-            if this.essais == 0u {
-                TesseraJournalHabillage(
-                    s"⚠ \(TDBID.ToStringDEBUG(vetement)) n'a aucun slot de placement — ignoré");
-            }
-            return true;
-        }
-
-        // ── CE QUE L'AVATAR PORTE VRAIMENT, avant qu'on touche à quoi que ce soit ────────────
-        let present = transactions.GetItemInSlot(avatar, slot);
-        let occupant = "vide";
-        if IsDefined(present) {
-            occupant = TDBID.ToStringDEBUG(ItemID.GetTDBID(present.GetItemID()));
-            if TDBID.ToNumber(ItemID.GetTDBID(present.GetItemID())) == TDBID.ToNumber(vetement) {
-                return true;
-            }
-        }
-
-        let recette = "";
-        let peut = false;
-        let pose = false;
-        if this.essais % 2u == 0u {
-            // ── RECETTE PHOTOMODE (F-PLY-203) — item de PRÉVISUALISATION ────────────────
-            recette = "photomode";
-            transactions.GivePreviewItemByItemID(avatar, identifiant);
-            let apercu = transactions.CreatePreviewItemID(identifiant);
-            peut = transactions.CanPlaceItemInSlot(avatar, slot, apercu);
-            if peut {
-                pose = transactions.AddItemToSlot(avatar, slot, apercu, true);
-            }
-        } else {
-            // ── RECETTE ARME (mesurée sur pantin distant depuis le 2026-07-24) ──────────
-            //
-            // ⚠️ On donne l'item AVANT de l'équiper, et par le MÊME identifiant que celui demandé.
-            // Un item donné par une autre voie reçoit un `ItemID` dynamique différent, et
-            // l'équipement échoue ensuite sur un item que le pantin possède pourtant
-            // (`ArmeAvatar.reds`, mesuré).
-            recette = "arme";
-            if !transactions.HasItem(avatar, identifiant) {
-                transactions.GiveItem(avatar, identifiant, 1);
-            }
-            peut = transactions.CanPlaceItemInSlot(avatar, slot, identifiant);
-            pose = transactions.AddItemToSlot(avatar, slot, identifiant, true);
-        }
-
-        if bavard {
-            TesseraJournalHabillage(
-                s"\(TDBID.ToStringDEBUG(vetement)) · slot=\(TDBID.ToStringDEBUG(slot))"
-                + s" · occupant=\(occupant) · recette=\(recette) · peut=\(peut) · pose=\(pose)");
-        }
-        // Jamais `true` ici : c'est la passe SUIVANTE qui constatera, sur l'avatar lui-même.
         return false;
     }
+    if voulus > 0 && passe > 0u {
+        TesseraJournalHabillage(s"\(voulus) pièce(s) posée(s) en \(passe + 1u) passe(s)");
+    }
+    return true;
+}
+
+// Pose UN vêtement, et rend « ce vêtement est bien sur le dos du corps ».
+func TesseraPoserVetement(transactions: ref<TransactionSystem>, corps: ref<GameObject>,
+                          vetement: TweakDBID, passe: Uint32, bavard: Bool) -> Bool {
+    let identifiant = ItemID.FromTDBID(vetement);
+    let slot = EquipmentSystem.GetPlacementSlot(identifiant);
+    if !TDBID.IsValid(slot) {
+        // ⚠️ RENDU « POSÉ » DÉLIBÉRÉMENT, alors que rien n'a été posé. Un item sans slot de
+        // placement ne l'aura jamais — le retenter dix fois ne ferait que masquer les vraies pièces
+        // manquantes derrière du bruit. C'est le défaut de F-PLY-185 : `equipArea` vide, donc aucun
+        // slot, donc pipeline visuel sans objet. On le NOMME, parce qu'un serveur qui distribue un
+        // item inportable a un problème que personne ne verrait autrement.
+        if bavard {
+            TesseraJournalHabillage(
+                s"⚠ \(TDBID.ToStringDEBUG(vetement)) n'a aucun slot de placement — ignoré");
+        }
+        return true;
+    }
+
+    // ── LE VERDICT, avant qu'on touche à quoi que ce soit ────────────────────────────────────
+    //
+    // `IsSlotEmpty` et lui seul : voir l'en-tête du fichier pour les trois instruments qui se sont
+    // révélés faux avant celui-ci.
+    if !transactions.IsSlotEmpty(corps, slot) {
+        return true;
+    }
+    // Attacher fait NAÎTRE une entité d'item. Re-ordonner par-dessus une naissance en cours, c'est
+    // la relancer indéfiniment — et c'est peut-être ce qui se passait depuis hier.
+    if transactions.IsSlotSpawningAnyItem(corps, slot) {
+        if bavard {
+            TesseraJournalHabillage(
+                s"\(TDBID.ToStringDEBUG(vetement)) — item EN COURS d'apparition, on attend");
+        }
+        return false;
+    }
+
+    // ── LA RECETTE DE L'APERÇU D'INVENTAIRE ──────────────────────────────────────────────────
+    //
+    // ⭐ C'est LE témoin qui marche, et il a mis longtemps à être trouvé :
+    // `BaseGarmentItemPreviewGameController` (`ItemPreviewGameController.script:195-210`) habille
+    // un `gamePuppet` — pas le joueur — et **le rend visible à l'écran**, dans l'écran d'inventaire.
+    // Notre corps est un `gamePuppet`. C'est donc exactement notre cas, en fonctionnement.
+    //
+    //     transactionSystem.GiveItem( puppet, m_givenItem, 1 );
+    //     transactionSystem.AddItemToSlot( puppet, m_placementSlot, m_givenItem );
+    //
+    // ⚠️ NI ITEM DE PRÉVISUALISATION, NI HAUTE PRIORITÉ. La recette du photomode (F-PLY-203) posait
+    // un item créé par `CreatePreviewItemID` : mesuré le 2026-08-24, il OCCUPE bien le slot
+    // (`IsSlotEmpty` rend `false`, sur les deux instances) et **n'affiche rien** — Lucas l'a
+    // confirmé à l'œil deux fois. Un item de prévisualisation ne se rend apparemment que dans le
+    // contexte qui l'a inventé.
+    //
+    // ⚠️ ET L'ITEM SE DONNE PAR LE MÊME IDENTIFIANT que celui qu'on équipe : un item donné par une
+    // autre voie reçoit un `ItemID` dynamique différent, et l'équipement échoue ensuite sur un item
+    // que le pantin possède pourtant (`ArmeAvatar.reds`, mesuré le 2026-07-24).
+    let donne = true;
+    if !transactions.HasItem(corps, identifiant) {
+        donne = transactions.GiveItem(corps, identifiant, 1);
+    }
+    let peut = transactions.CanPlaceItemInSlot(corps, slot, identifiant);
+    let pose = transactions.AddItemToSlot(corps, slot, identifiant);
+
+    if bavard {
+        TesseraJournalHabillage(
+            s"\(TDBID.ToStringDEBUG(vetement)) · slot=\(TDBID.ToStringDEBUG(slot))"
+            + s" · donne=\(donne) · peut=\(peut) · pose=\(pose)"
+            + s" · slot_vide=\(transactions.IsSlotEmpty(corps, slot))"
+            + s" · apparition=\(transactions.IsSlotSpawningAnyItem(corps, slot))");
+    }
+    // Jamais `true` ici : c'est la passe SUIVANTE qui constatera, sur le corps lui-même.
+    return false;
 }

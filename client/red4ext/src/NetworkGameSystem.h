@@ -179,6 +179,22 @@ struct SuiviAvatar
     int dernierRetourCommande = -1;
     std::uint8_t derniereMoveDir = 0;
     float dernierYawEntree = 0.0f;
+    /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
+    /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
+    /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans
+    /// qu'aucun evenement n'ait a etre cable.
+    std::uint64_t signatureVetements = 0;
+    /// Passes d'habillage deja tentees pour CETTE tenue. Bornees : marteler le
+    /// `TransactionSystem` a chaque instantane est le regime qui a fait tomber le jeu deux fois
+    /// le 2026-08-06. `kPassesHabillage` = plus aucune tentative.
+    std::uint32_t passesHabillage = 0;
+    /// Quand tenter la prochaine passe. ⚠️ UNE HORLOGE, PAS UN COMPTEUR D'APPELS — et ça a
+    /// coûté un aller-retour en jeu. La première version comptait « 20 instantanés » en supposant
+    /// que `PiloterAvatar` tournait à 20 Hz ; il tourne beaucoup plus vite, et les dix passes
+    /// tenaient en 2,6 s — TOUTES dans la fenêtre où un pantin qui vient de naître accepte les
+    /// ordres sans les exécuter. `ArmeAvatar.reds` attend 2 s pour cette raison exacte, mesurée
+    /// le 2026-08-10 ; je l'avais lu et je l'ai quand même reperdu en changeant d'unité.
+    std::chrono::steady_clock::time_point prochainePasseHabillage{};
 
     /// ── OU ON A LAISSE L'AVATAR A LA FRAME PRECEDENTE ────────────────────────────────────────
     ///

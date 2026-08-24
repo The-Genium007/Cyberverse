@@ -706,6 +706,20 @@ StatsRoster g_statsRoster;
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
+
+// Habillage : au plus dix tentatives par tenue, cadencees a l'HORLOGE.
+//
+// ⚠️ `kDelaiAvantHabillage` n'est pas une precaution, c'est une mesure : un pantin qui vient de
+// naitre n'a fini ni son inventaire ni ses slots d'attache, et les ordres y sont ACCEPTES SANS
+// EFFET — le succes trompeur que D1 interdit de compter. `ArmeAvatar.reds` attend deux secondes
+// pour cette raison depuis le 2026-08-10.
+//
+// La premiere version comptait des appels de `PiloterAvatar` en supposant 20 Hz. Il tourne
+// beaucoup plus vite : les dix passes tenaient en 2,6 s, toutes DANS la fenetre morte. D'ou
+// l'horloge — une cadence ne se deduit pas d'un compteur dont on ne connait pas la frequence.
+constexpr std::uint32_t kPassesHabillage = 10;
+constexpr auto kDelaiAvantHabillage = std::chrono::milliseconds(2000);
+constexpr auto kIntervallePasseHabillage = std::chrono::milliseconds(1000);
 bool g_localEtaitEnLair = false;
 
 /// Dernier masque d'etats de locomotion releve sur la population NATIVE autour du
@@ -5404,6 +5418,69 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 g_telemetrie.Evenement("arme_posture", networkId,
                                        degainee ? (pousse ? "degainee" : "degainee_refuse")
                                                 : (pousse ? "rangee" : "rangee_refuse"));
+            }
+        }
+
+        // -- L'HABILLAGE, PAR CRENEAUX ET BORNE (2026-08-24) ---------------------------------
+        //
+        // ⚠️ POURQUOI ICI ET PAS DANS UN HOOK redscript. La premiere version accrochait
+        // `@wrapMethod(ScriptedPuppet) OnGameAttached`, en copiant `ArmeAvatar.reds`. Mesure du
+        // 2026-08-24 : sur un corps ne de la voie ENRICHIE — celui qui porte le V du joueur — ce
+        // hook ne se declenche JAMAIS. Zero ligne de journal, sur deux instances. Il ne marchait
+        // que sur les pantins de passant de la voie sure, c'est-a-dire exactement les corps qu'on
+        // ne veut plus.
+        //
+        // `PiloterAvatar` est le seul chemin dont on SAIT qu'il atteint ces corps : c'est lui qui
+        // les fait marcher, et Lucas l'a confirme a l'ecran.
+        //
+        // ⚠️ PAR CRENEAUX, JAMAIS A CHAQUE INSTANTANE. Une passe d'habillage touche le
+        // `TransactionSystem` quatre fois ; le faire vingt fois par seconde et par avatar est le
+        // regime qui a fait tomber le jeu deux fois le 2026-08-06.
+        {
+            const auto apparence = m_appearances.find(networkId);
+            std::uint64_t signature = 0;
+            if (apparence != m_appearances.end())
+            {
+                for (const auto v : apparence->second.vetements)
+                {
+                    signature = (signature * 1099511628211ull) ^ v;
+                }
+            }
+            const auto maintenantHab = std::chrono::steady_clock::now();
+            if (suiviPosture.signatureVetements != signature)
+            {
+                // Tenue neuve (ou premiere) : on repart a zero. ⚠️ ET ON LAISSE LE CORPS FINIR DE
+                // SE MONTER avant la premiere passe — tenter tout de suite, c'est tenter dans la
+                // fenetre ou tout est accepte et rien n'est execute.
+                suiviPosture.signatureVetements = signature;
+                suiviPosture.passesHabillage = 0;
+                suiviPosture.prochainePasseHabillage = maintenantHab + kDelaiAvantHabillage;
+            }
+            if (signature != 0 && suiviPosture.passesHabillage < kPassesHabillage)
+            {
+                if (maintenantHab >= suiviPosture.prochainePasseHabillage)
+                {
+                    suiviPosture.prochainePasseHabillage =
+                        maintenantHab + kIntervallePasseHabillage;
+                    bool habille = false;
+                    Red::CallVirtual(this, "TesseraHabillerAvatar", habille, entityId,
+                                     suiviPosture.passesHabillage);
+                    if (habille)
+                    {
+                        // Convergé : on arrete. Un changement de tenue relancera les passes par la
+                        // signature ci-dessus — il n'y a donc rien a re-armer.
+                        suiviPosture.passesHabillage = kPassesHabillage;
+                        g_telemetrie.Evenement("habillage", networkId, "pose");
+                    }
+                    else
+                    {
+                        ++suiviPosture.passesHabillage;
+                        if (suiviPosture.passesHabillage == kPassesHabillage)
+                        {
+                            g_telemetrie.Evenement("habillage", networkId, "abandon");
+                        }
+                    }
+                }
             }
         }
 

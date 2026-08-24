@@ -1696,6 +1696,17 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // Habille l'avatar avec ce que le SERVEUR annonce. Rend `true` quand tout est en place.
+    //
+    // ⚠️ Le corps de la fonction vit dans `HabillageAvatar.reds` ; ce pont existe parce que
+    // `Red::CallVirtual` ne sait appeler qu'une méthode DE CETTE CLASSE, et que c'est le C++
+    // (`PiloterAvatar`) qui déclenche — le seul chemin dont on sait qu'il atteint les corps nés de
+    // la voie enrichie. Le hook `OnGameAttached(ScriptedPuppet)`, lui, ne s'y déclenche jamais
+    // (mesuré le 2026-08-24 : zéro ligne de journal sur deux instances).
+    public func TesseraHabillerAvatar(entityId: EntityID, passe: Uint32) -> Bool {
+        return TesseraHabillerLeCorps(entityId, passe);
+    }
+
     public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
