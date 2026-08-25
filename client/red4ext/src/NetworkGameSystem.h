@@ -27,6 +27,7 @@
 #include <map>
 #include <set>   // suivi des apparences statiques deja appliquees (hydratation discrete)
 #include <cmath> // std::floor pour le decoupage en cellules de halo
+#include <deque>
 #include <string>
 #include <vector>
 #include <steam/isteamnetworkingsockets.h>
@@ -62,11 +63,44 @@ namespace cyberpunk_rp::protocol {
     // 'const InventaireAutoritaire *' en 'const int' », qui pointe vers l'appelant alors que le
     // defaut est ICI). Le build local l'a attrape en une minute ; la relecture, non.
     struct InventaireAutoritaire;
+    // Ascenseurs (ADR 0012). CINQUIEME fois que ce bloc est oublie -- 2026-08-24, meme
+    // message a la lettre ("impossible de convertir 'const ElevatorStateMsg *' en 'const
+    // int'", pointe sur l'appelant, le defaut est ICI). Le commentaire du dessus l'annoncait
+    // mot pour mot et je l'ai lu APRES l'erreur. Le build local l'attrape en une minute.
+    struct ElevatorStateMsg;
 }
 
 // Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
 // Hors de la classe : `NetworkGameSystem` est alloué par le moteur (`RTTI_IMPL_ALLOCATOR`), lui
 // ajouter un membre corrompt la mémoire voisine (mesuré le 2026-08-06).
+// ── ASCENSEURS : la file des états reçus, DRAINÉE PAR REDSCRIPT ──────────────────────────────
+//
+// Pourquoi une file et pas un appel direct dans redscript : trois voies de PUSH ont été essayées
+// le 2026-08-24 et ont toutes échoué à la résolution de nom
+// (`@addMethod` sur une classe de module, `Red::CallGlobal` sur une fonction globale,
+// `Red::CallStatic` sur une classe globale) — chacune compile, se déploie, et laisse le netcode
+// journaliser « absent du modset » au runtime. Le PULL est le patron déjà utilisé partout ici
+// (`Tessera_SacRecu`, `Tessera_NombreActions`, `Tessera_ListePersonnagesRecue`) : il ne dépend
+// d'aucune résolution de symbole scripté, seulement des natifs que la DLL enregistre elle-même.
+//
+// ⚠️ HORS DE LA CLASSE, comme `g_apparencesStatiques` : `NetworkGameSystem` est alloué par le
+// moteur (`RTTI_IMPL_ALLOCATOR`), lui ajouter un membre corrompt la mémoire voisine (mesuré le
+// 2026-08-06).
+struct EtatAscenseurRecu
+{
+    uint64_t elevatorId = 0;
+    int32_t etageActif = 0;
+    int32_t etageCible = -1;
+    int32_t departTick = 0;
+    int32_t elapsedMs = 0;
+};
+extern std::deque<EtatAscenseurRecu> g_ascenseursRecus;
+// Compteur MONOTONE de tout ce que le C++ a recu, jamais decremente. La file, elle, est
+// drainee toutes les 50 ms : la lire ne dit donc RIEN sur ce qui est arrive. Ce compteur
+// est le seul moyen de distinguer « rien n'arrive au client » de « tout arrive et le script
+// n'en fait rien » -- deux pannes opposees qui produisent le meme ecran.
+extern int32_t g_ascenseursTotalRecus;
+
 extern std::map<uint64_t, uint64_t> g_apparencesStatiques;
 // Ce qu'il faut pour REFABRIQUER un statique absent chez ce client : record, apparence, pose.
 // Distinct de `g_apparencesStatiques`, qui ne sert qu'a corriger un PNJ deja present. Voir
@@ -240,6 +274,11 @@ struct SuiviAvatar
     /// Un avatar qui apparaît DEJA accroupi recoit quand meme sa pousse : son etat voulu vaut 1,
     /// donc different de 0. Le tri-etat ne servait a rien.
     std::int8_t dernierePostureAccroupie = 0;
+    /// Derniere POSE TENUE (assis, adosse) vue pour cet avatar. Sentinelle a 0xFFFFFFFF et non
+    /// a 0 : `0` est une valeur LEGITIME (« aucune posture »), donc l'initialiser a 0 ferait
+    /// taire la premiere transition d'un avatar qui naît deja assis. Meme piege que le -1 de
+    /// l'accroupissement, et meme famille que le `Bool` non initialise de `UiKitPosture.reds`.
+    std::uint32_t derniereSustained = 0xFFFFFFFFu;
 
     /// L'avatar etait-il EN VOL au dernier passage ? Sert a ne pousser l'animation de
     /// franchissement qu'aux deux transitions -- decollage et atterrissage -- et jamais entre les
@@ -350,6 +389,20 @@ struct NetworkAppearance
     // quand le joueur range son arme, et le confondre avec « pas d'info » laisserait l'arme dans
     // les mains de l'avatar pour toujours.
     uint64_t arme = 0;
+    // ── LE SEXE DU CORPS, et ce qu'il commande VRAIMENT ───────────────────────────────────────
+    //
+    // ⚠️ IL NE CHOISIT PAS LE CORPS. Le sexe du corps suit la CHARGE d'esthetique, jamais le record
+    // (F-PLY-267) — un V feminin s'applique tres bien a l'entite masculine, et c'est mesure.
+    //
+    // Il choisit les MESHES DE VETEMENTS. Ceux-ci sont des composants de l'entite (F-PLY-286), donc
+    // figes a sa construction (F-PLY-191) : il faut donc connaitre le sexe AVANT le spawn, et
+    // basculer sur une entite derivee differente. Sans lui, une joueuse porte un t-shirt `_ma_` sur
+    // un corps de femme — defaut rapporte par Lucas le 2026-08-24.
+    //
+    // ⚠️ DEFAUT `true`. Le champ est arrive en fin de table le 2026-08-24 ; un serveur qui ne
+    // l'emet pas, ou un personnage anterieur a la capture d'esthetique, donnent « masculin » — le
+    // comportement d'avant, a l'identique.
+    bool corpsMasculin = true;
     // ── L'ESTHETIQUE DE V, transportee telle quelle ───────────────────────────────────────────
     //
     // Blob `TSV1` opaque : magic, trois compteurs de section, puis des paires (uiSlot, name). 440
@@ -797,6 +850,17 @@ protected:
     // Declenche une recette du catalogue sur une cible. `kind = 2` (Interagit), `param` = l'id de
     // la recette : le canal montant existe depuis le gel, zero octet ajoute au fil.
     void SendActionJoueur(uint64_t target, uint32_t recette);
+    // ── ASCENSEURS (ADR 0012) ────────────────────────────────────────────────────────────
+    // Rapporte au serveur qu'un joueur a demande un etage. Le serveur ARBITRE (file SCAN) et
+    // renvoie un `ElevatorStateMsg` a tout le monde ; c'est ce message-la qui fait partir la
+    // cabine, jamais l'appui local — la boucle locale est coupee cote redscript.
+    void SendElevatorCall(uint64_t elevatorId, int32_t floor);
+    // Signale l'entree (mount=true) ou la sortie d'une cabine. `kind=6/7` d'EntityInteraction.
+    // Sert au RENDU chez les autres : le serveur relaie le porteur dans `PlayerState.frame`, et
+    // l'observateur accroche l'interpolation de l'avatar a la cabine (ADR 0039).
+    void SendElevatorMount(uint64_t elevatorId, bool mount);
+    // Etat autoritaire d'une cabine -> redscript, qui rejoue l'ordre ou recale l'etage.
+    void HandleElevatorState(const cyberpunk_rp::protocol::ElevatorStateMsg* msg);
     // Le sac autoritaire. REMPLACE integralement l'etat precedent (contrairement aux identites, qui
     // s'accumulent) : c'est un ETAT, pas un ajout. Le rejouer ne fait donc rien de plus, et un
     // message perdu se rattrape au suivant.
@@ -1586,6 +1650,80 @@ public:
         return true;
     }
 
+    /// Combien d'états de cabine attendent d'être appliqués. Redscript draine cette file dans sa
+    /// boucle de veille (`TesseraAscenseurVeille`, ElevatorBridge.reds).
+    /// Total MONOTONE des etats recus depuis le lancement. Voir `g_ascenseursTotalRecus`.
+    int32_t Tessera_AscenseurTotalRecus()
+    {
+        return g_ascenseursTotalRecus;
+    }
+
+    int32_t Tessera_AscenseurEnAttente()
+    {
+        return static_cast<int32_t>(g_ascenseursRecus.size());
+    }
+
+    /// Les cinq champs de l'état EN TÊTE de file, puis `Tessera_AscenseurRetirer` pour avancer.
+    /// Cinq accesseurs plutôt qu'un objet : redscript ne sait pas recevoir une struct C++ non
+    /// enregistrée au RTTI, et enregistrer un type pour cinq entiers coûterait plus que ces cinq
+    /// lignes.
+    RED4ext::ent::EntityID Tessera_AscenseurCabine()
+    {
+        if (g_ascenseursRecus.empty()) { return RED4ext::ent::EntityID{}; }
+        return RED4ext::ent::EntityID{g_ascenseursRecus.front().elevatorId};
+    }
+    int32_t Tessera_AscenseurEtageActif()
+    {
+        return g_ascenseursRecus.empty() ? 0 : g_ascenseursRecus.front().etageActif;
+    }
+    int32_t Tessera_AscenseurEtageCible()
+    {
+        return g_ascenseursRecus.empty() ? -1 : g_ascenseursRecus.front().etageCible;
+    }
+    int32_t Tessera_AscenseurDepart()
+    {
+        return g_ascenseursRecus.empty() ? 0 : g_ascenseursRecus.front().departTick;
+    }
+    int32_t Tessera_AscenseurElapsedMs()
+    {
+        return g_ascenseursRecus.empty() ? 0 : g_ascenseursRecus.front().elapsedMs;
+    }
+    void Tessera_AscenseurRetirer()
+    {
+        if (!g_ascenseursRecus.empty()) { g_ascenseursRecus.pop_front(); }
+    }
+
+    /// ASCENSEURS — le joueur a demande `etage` sur la cabine `cabine`.
+    ///
+    /// `cabine` est l'EntityID STATIQUE de la cabine, LU sur l'entite par redscript et jamais
+    /// recalcule (ADR 0012 §5 : l'algorithme du hash n'est pas confirme, F-ASC-011). On passe donc
+    /// `cabine.hash` tel quel — contrairement a `Tessera_EnvoyerAction`, aucune traduction par
+    /// `m_networkedEntitiesLookup` : une cabine n'est pas une entite reseau, c'est un decor que
+    /// les deux cotes designent par la meme cle stable.
+    ///
+    /// Rend true si le message est PARTI. Jamais qu'il a ete accepte (D1) : le serveur revalide
+    /// l'existence de la cabine et la viabilite de l'etage, et ignore en silence ce qui ne va pas.
+    bool Tessera_AppelerAscenseur(RED4ext::ent::EntityID cabine, int32_t etage)
+    {
+        if (!cabine.IsDefined())
+        {
+            return false;
+        }
+        SendElevatorCall(cabine.hash, etage);
+        return true;
+    }
+
+    /// ASCENSEURS — le joueur vient d'entrer (monte=true) ou de sortir d'une cabine.
+    bool Tessera_MonterAscenseur(RED4ext::ent::EntityID cabine, bool monte)
+    {
+        if (!cabine.IsDefined())
+        {
+            return false;
+        }
+        SendElevatorMount(cabine.hash, monte);
+        return true;
+    }
+
     // Demande au serveur de prendre un figurant sous son autorite (ADR 0022).
     //
     // On envoie de quoi le REFABRIQUER, pas un identifiant : le pantin n'existe que sur cette
@@ -1761,6 +1899,16 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ActionPorteeM);
     RTTI_METHOD(Tessera_NomConnu);
     RTTI_METHOD(Tessera_EnvoyerAction);
+    RTTI_METHOD(Tessera_AscenseurTotalRecus);
+    RTTI_METHOD(Tessera_AscenseurEnAttente);
+    RTTI_METHOD(Tessera_AscenseurCabine);
+    RTTI_METHOD(Tessera_AscenseurEtageActif);
+    RTTI_METHOD(Tessera_AscenseurEtageCible);
+    RTTI_METHOD(Tessera_AscenseurDepart);
+    RTTI_METHOD(Tessera_AscenseurElapsedMs);
+    RTTI_METHOD(Tessera_AscenseurRetirer);
+    RTTI_METHOD(Tessera_AppelerAscenseur);
+    RTTI_METHOD(Tessera_MonterAscenseur);
     RTTI_METHOD(Tessera_AvatarParIndex);
     // ⚠️ Ces deux-là comptent des JOUEURS, contrairement aux deux ci-dessus (F-PLY-047).
     RTTI_METHOD(Tessera_SuspendreCommandes);

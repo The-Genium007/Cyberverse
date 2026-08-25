@@ -681,6 +681,8 @@ constexpr uint8_t kComportementATerre = 5;
 /// Apparence faisant autorite, telle que le serveur l'a dite, par EntityID de statique.
 /// Conservee meme quand l'application echoue : l'entite peut n'etre pas encore streamee, et c'est
 /// cette table qui permet de rejouer l'apparence a son attachement.
+std::deque<EtatAscenseurRecu> g_ascenseursRecus;
+int32_t g_ascenseursTotalRecus = 0;
 std::map<uint64_t, uint64_t> g_apparencesStatiques;
 /// Le ROSTER : de quoi RECREER un statique chez un client a qui il manque (spec 2026-08-09).
 /// Distinct de `g_apparencesStatiques`, qui ne sert qu'a corriger un PNJ deja present.
@@ -1478,13 +1480,16 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_InventaireAutoritaire:
                     HandleInventaireAutoritaire(env->msg_as_InventaireAutoritaire());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_ElevatorStateMsg:
+                    HandleElevatorState(env->msg_as_ElevatorStateMsg());
+                    break;
                 default:
                     // Reste non câblé : CommandResult, PermissionSync,
-                    // QueueStatus, InteractionOpen, InteractionResult,
-                    // ElevatorStateMsg. Le serveur les émet déjà — les brancher est le chantier
-                    // « autorité totale », étapes 2 et 6. Journalisé au lieu d'être jeté en
-                    // silence : un message serveur ignoré sans trace est exactement ce qui a fait
-                    // croire pendant des semaines que le protocole n'était pas implémenté.
+                    // QueueStatus, InteractionOpen, InteractionResult. Le serveur les émet déjà —
+                    // les brancher est le chantier « autorité totale », étapes 2 et 6. Journalisé
+                    // au lieu d'être jeté en silence : un message serveur ignoré sans trace est
+                    // exactement ce qui a fait croire pendant des semaines que le protocole
+                    // n'était pas implémenté.
                     LogUnhandledServerMsg(static_cast<int>(env->msg_type()));
                     break;
                 }
@@ -2239,6 +2244,11 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // marche en crabe ou a reculons etait rendu de face. On le RANGE des maintenant ; ce
             // qu'on saura en faire depend du backlog Q7.
             pose.moveDir = ps->move_dir();
+            // LA POSE TENUE (assis, adosse). Le champ voyage depuis le palier 2 et n'etait lu
+            // NULLE PART : le serveur l'ecrivait, le fil le transportait, le client le jetait
+            // (F-PLY-303, mesure du 2026-08-24 — recensement exhaustif des accesseurs `ps->...()`).
+            // Toute la moitie « les autres me voient assis » reposait sur un canal a zero lecteur.
+            pose.sustained = ps->sustained();
             g_tamponsJoueurs[ps->id()].Pousser(snapshot->tick(), pose);
         }
     }
@@ -2336,6 +2346,37 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     }
 
     const auto* vehicles = snapshot->vehicles();
+    // ── LA TRACE QUI SEPARE TROIS PANNES QUI SE RESSEMBLENT ────────────────────────────────
+    //
+    // « Aucune voiture a l'ecran » a trois causes possibles, et AUCUN journal ne les distinguait
+    // le 2026-08-24 : (1) le serveur n'envoie rien, (2) il envoie et on saute le traitement,
+    // (3) on traite et le spawn echoue. Sans cette ligne, un correctif sur (2) qui ne change rien
+    // se lit comme « le correctif ne marche pas » alors que la panne etait en (1).
+    //
+    // Bornee a une ligne toutes les 5 s : le chemin est chaud (un passage par snapshot).
+    {
+        static std::chrono::steady_clock::time_point s_dernierBilanVehicules{};
+        const auto maintenant = std::chrono::steady_clock::now();
+        if (maintenant - s_dernierBilanVehicules > std::chrono::seconds(5))
+        {
+            s_dernierBilanVehicules = maintenant;
+            size_t recus = (vehicles != nullptr) ? vehicles->size() : 0;
+            size_t connus = 0;
+            if (vehicles != nullptr)
+            {
+                for (const auto* vs : *vehicles)
+                {
+                    if (vs != nullptr
+                        && m_networkedEntitiesLookup.find(vs->id())
+                            != m_networkedEntitiesLookup.end())
+                    {
+                        ++connus;
+                    }
+                }
+            }
+            SDK->logger->InfoF(PLUGIN, "[vehicules] recus du serveur=%zu deja nes cote client=%zu", recus, connus);
+        }
+    }
     if (vehicles != nullptr)
     {
         for (const auto* vs : *vehicles)
@@ -2374,7 +2415,28 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 const float dx = posee.X - precedente.X;
                 const float dy = posee.Y - precedente.Y;
                 const float dz = posee.Z - precedente.Z;
-                const bool immobile = precedente.W != 0.0f
+                // ⚠️⚠️ LA BANDE MORTE NE VAUT QUE POUR UN VEHICULE QUI EXISTE DEJA.
+                //
+                // MESURE le 2026-08-24 : le serveur semait trois voitures GAREES a six metres du
+                // joueur, et le client n'en avait AUCUNE — sans une ligne d'erreur nulle part.
+                //
+                // Cause : `applyPose` est le SEUL endroit qui appelle `SpawnNetworkEntity`. Une
+                // voiture garee ne l'atteignait qu'au tout PREMIER snapshot ; ensuite la bande
+                // morte `continue`ait avant. Or un spawn peut echouer ou etre DIFFERE — c'est meme
+                // le cas nominal, le journal le dit pour les avatars (« spawn differe le temps que
+                // l'AppearanceSync arrive, retente au prochain snapshot »). Le mecanisme de reprise
+                // EST le rappel d'`applyPose` au snapshot suivant. La bande morte le supprimait.
+                //
+                // Et `s_dernierePoseVehicule` est `static` : il survit a la deconnexion. A la
+                // reconnexion suivante, une voiture immobile depuis la session precedente etait
+                // jugee immobile DES LE PREMIER snapshot — donc jamais creee du tout.
+                //
+                // Regle generale, et elle depasse ce fichier : une optimisation qui saute la MISE A
+                // JOUR ne doit jamais sauter la CREATION. « Rien n'a change » et « ca n'existe pas
+                // encore » sont deux etats differents, et un seul des deux se passe de travail.
+                const bool dejaPresent =
+                    m_networkedEntitiesLookup.find(vs->id()) != m_networkedEntitiesLookup.end();
+                const bool immobile = dejaPresent && precedente.W != 0.0f
                     && (dx * dx + dy * dy + dz * dz) < (0.05f * 0.05f);
                 if (immobile)
                 {
@@ -3182,6 +3244,88 @@ void NetworkGameSystem::HandleInventaireAutoritaire(
 
     SDK->logger->InfoF(PLUGIN, "InventaireAutoritaire : %zu item(s), %zu a preserver",
         m_sacAutoritaire.size(), m_aPreserver.size());
+}
+
+// ── ASCENSEURS : les deux envois montants (ADR 0012) ─────────────────────────────────────────
+void NetworkGameSystem::SendElevatorCall(uint64_t elevatorId, int32_t floor)
+{
+    if (m_pInterface == nullptr || elevatorId == 0)
+    {
+        return;
+    }
+    // `Reliable` et pas `Unreliable` : un appel d'ascenseur perdu ne se rattrape pas tout seul du
+    // cote montant (le serveur n'a rien a re-demander), alors qu'un rappel d'ETAT descendant, lui,
+    // repart chaque seconde. L'asymetrie est voulue.
+    flatbuffers::FlatBufferBuilder builder;
+    const auto call = cyberpunk_rp::protocol::CreateElevatorCall(builder, elevatorId, floor);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_ElevatorCall, call.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+void NetworkGameSystem::SendElevatorMount(uint64_t elevatorId, bool mount)
+{
+    if (m_pInterface == nullptr || elevatorId == 0)
+    {
+        return;
+    }
+    // kind=6=MountElevator, kind=7=UnmountElevator (protocol.fbs, EntityInteraction). `target` est
+    // un elevator_id, JAMAIS un id de la plage vehicule : c'est le kind seul qui desambiguise.
+    constexpr uint8_t kMountElevator = 6;
+    constexpr uint8_t kUnmountElevator = 7;
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ei = cyberpunk_rp::protocol::CreateEntityInteraction(
+        builder, elevatorId, mount ? kMountElevator : kUnmountElevator, 0);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_EntityInteraction, ei.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+// ── ASCENSEURS : l'etat autoritaire descendant ───────────────────────────────────────────────
+//
+// On ne decide RIEN ici : tout le raisonnement (rejouer ? recaler ? ignorer ?) vit en redscript,
+// parce qu'il a besoin du `LiftControllerPS` et des actions quest, qui n'existent pas cote C++.
+// Ce handler est un pur relais typé.
+void NetworkGameSystem::HandleElevatorState(const cyberpunk_rp::protocol::ElevatorStateMsg* msg)
+{
+    if (msg == nullptr || msg->elevator_id() == 0)
+    {
+        return;
+    }
+    // CINQ arguments, pas neuf. `Red::CallVirtual` a une arite bornee, et surtout : le client n'a
+    // PAS besoin des durees. Il ne calcule aucune trajectoire — c'est le moteur du jeu qui deplace
+    // la cabine, avec ses propres constantes. `start_delay_ms`/`travel_time_ms`/`movement_state`
+    // restent sur le fil pour le serveur et pour un futur affichage, pas pour ce pont.
+    // int32 pour le tick et l'elapsed : redscript n'a d'operateur de comparaison ni pour `Uint64`
+    // ni pour `Uint32`. `depart_tick` n'est pas une date pour le client, c'est un IDENTIFIANT DE
+    // TRAJET (« ai-je deja rejoue celui-ci ? ») — le tronquer garde deux departs consecutifs
+    // distincts. `elapsed_ms` se compare a un seuil de 500 ms.
+    EtatAscenseurRecu etat;
+    etat.elevatorId = msg->elevator_id();
+    etat.etageActif = static_cast<int32_t>(msg->active_floor());
+    etat.etageCible = static_cast<int32_t>(msg->target_floor());
+    etat.departTick = static_cast<int32_t>(msg->depart_tick() & 0x7FFFFFFF);
+    etat.elapsedMs = static_cast<int32_t>(msg->elapsed_ms() & 0x7FFFFFFF);
+
+    // BORNE DE FILE. Sans mod ascenseur installe, personne ne draine : la file grossirait d'un
+    // element par transition et par rappel periodique, indefiniment. On jette les PLUS ANCIENS —
+    // un etat perime n'a aucune valeur, le dernier recu porte toute la verite.
+    //
+    // ⚠️ 256 ET PAS 64. A la connexion, le serveur envoie l'etat de TOUTES les cabines d'un coup :
+    // 98 aujourd'hui. Un plafond de 64 en jetait 34 — silencieusement, et seulement pour les
+    // cabines les plus anciennes de la liste. Mesure du 2026-08-24 : une cabine marchait, sa
+    // voisine non, sans rien dans aucun journal pour distinguer les deux.
+    constexpr std::size_t kFileMax = 256;
+    while (g_ascenseursRecus.size() >= kFileMax)
+    {
+        g_ascenseursRecus.pop_front();
+    }
+    g_ascenseursRecus.push_back(etat);
+    ++g_ascenseursTotalRecus;
 }
 
 void NetworkGameSystem::SendActionJoueur(uint64_t target, uint32_t recette)
@@ -4539,6 +4683,9 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
     NetworkAppearance appearance;
     appearance.baseRecord = sync->spec()->base_record();
     appearance.appearance = sync->spec()->appearance();
+    // ⭐ Le sexe du corps, qui choisit la TENUE de l'avatar (voir `NetworkAppearance`). Defaut
+    // `true` cote schema : un serveur qui ne l'emet pas se comporte comme avant ce champ.
+    appearance.corpsMasculin = sync->spec()->corps_masculin();
 
     // ── L'ARME EN MAIN, TRANSPORTEE PAR `garments` ────────────────────────────────────────────
     //
@@ -4767,7 +4914,8 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
     // pas de chemin ou l'on perd un voisin parce qu'on a voulu lui donner son visage.
     if (it != m_appearances.end() && !it->second.esthetique.empty())
     {
-        const auto essai = Tessera::SpawnEnrichi::Tenter(networkId, it->second.esthetique, worldPosition);
+        const auto essai = Tessera::SpawnEnrichi::Tenter(networkId, it->second.esthetique,
+                                                         worldPosition, it->second.corpsMasculin);
         if (essai.tente && !essai.diag.empty())
         {
             // Journalise MEME en cas de succes : c'est ce qui distingue « la voie enrichie a
@@ -5397,6 +5545,31 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             g_telemetrie.Evenement("posture", networkId,
                                    accroupi ? (pousse ? "accroupi" : "accroupi_refuse")
                                             : (pousse ? "debout" : "debout_refuse"));
+        }
+
+        // -- LA POSE TENUE, SUR CHANGEMENT (cablee le 2026-08-24) -----------------------------
+        //
+        // `PlayerState.sustained` voyage depuis le palier 2 et n'avait AUCUN lecteur cote client
+        // (F-PLY-303) : le serveur ecrivait, le fil transportait, le client jetait. Toute la
+        // moitie « quand un joueur s'assied, les autres le voient assis » — la demande d'origine
+        // de Lucas — reposait donc sur un canal a zero consommateur, et vingt tests verts cote
+        // serveur n'en disaient rien.
+        //
+        // Ce bloc-ci ne fait pas encore JOUER la posture sur l'avatar : poser une pose sur un
+        // pantin distant reste ouvert. Il rend le canal OBSERVABLE, ce qui est la condition pour
+        // que la suite soit mesurable au lieu d'etre supposee.
+        //
+        // Meme discipline que l'accroupissement juste au-dessus : SUR CHANGEMENT, jamais en
+        // continu — une ecriture par avatar et par frame a fait tomber le jeu deux fois le
+        // 2026-08-06.
+        if (suiviPosture.derniereSustained != pose.sustained)
+        {
+            const std::uint32_t precedente = suiviPosture.derniereSustained;
+            suiviPosture.derniereSustained = pose.sustained;
+            char detail[64];
+            std::snprintf(detail, sizeof(detail), "%u->%u",
+                          precedente == 0xFFFFFFFFu ? 0u : precedente, pose.sustained);
+            g_telemetrie.Evenement("sustained", networkId, detail);
         }
 
         // -- L'ARME EN MAIN, SUR CHANGEMENT (F-PLY-138 : une COUCHE, pas un etat) -----------

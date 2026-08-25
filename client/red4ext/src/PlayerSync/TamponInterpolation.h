@@ -124,6 +124,10 @@ struct Pose
     float yaw = 0.0f; // degrés
     std::uint8_t locomotion = 0;
     std::uint8_t moveDir = 0;
+    /// POSE TENUE (assis, adosse, allonge) : code de posture, 0 = aucune. Voyage sur le fil dans
+    /// `PlayerState.sustained` depuis le palier 2 — et n'etait lu NULLE PART cote client jusqu'au
+    /// 2026-08-24 (F-PLY-303). Le serveur ecrivait, le fil transportait, le client jetait.
+    std::uint32_t sustained = 0;
     /// Le REGARD, en degres — distinct de `yaw`, qui est l'orientation du CORPS.
     /// C'est `lookState.lookDir` de gameMuppetState (spec 2026-08-15). (0,0) = non rapporte.
     float lookYaw = 0.0f;
@@ -151,6 +155,10 @@ struct PoseRendue
     float vz = 0.0f;
     std::uint8_t locomotion = 0;
     std::uint8_t moveDir = 0;
+    /// La pose TENUE, transportee jusqu'a la boucle de rendu. Etat discret comme `locomotion` :
+    /// on prend celle de l'echantillon courant, on ne l'interpole pas — une posture est ou n'est
+    /// pas, il n'y a pas de demi-assise.
+    std::uint32_t sustained = 0;
     /// Vrai quand la pose est DEVINÉE (tampon à sec) plutôt qu'interpolée entre deux
     /// échantillons réels. L'appelant a le droit de traiter les deux différemment ; il
     /// n'a pas le droit de l'ignorer sans le savoir.
@@ -514,6 +522,7 @@ private:
         r.lookPitch = p.lookPitch;
         r.locomotion = p.locomotion;
         r.moveDir = p.moveDir;
+        r.sustained = p.sustained;
         return r;
     }
 
@@ -533,6 +542,7 @@ private:
         r.lookPitch = a.pose.lookPitch + (b.pose.lookPitch - a.pose.lookPitch) * t;
         r.locomotion = a.pose.locomotion;
         r.moveDir = a.pose.moveDir;
+        r.sustained = a.pose.sustained;
         PoserVitesse(r, a, b, duree);
         return r;
     }
