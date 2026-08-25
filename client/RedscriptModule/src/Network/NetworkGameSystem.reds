@@ -306,6 +306,50 @@ public native class NetworkGameSystem extends IGameSystem {
     // Renvoie true si le message est PARTI — jamais qu'il a été accepté.
     public native func Tessera_EnvoyerAction(cible: EntityID, recette: Uint32) -> Bool;
 
+    // ── ASCENSEURS (ADR 0012) ───────────────────────────────────────────────────────────────
+    //
+    // `cabine` est l'EntityID STATIQUE de la cabine, LU sur l'entité et jamais recalculé : le hash
+    // runtime est un compound hash dont l'algorithme n'est pas confirmé (F-ASC-011, re-mesuré le
+    // 2026-08-24 — aucune variante FNV1a64 du chemin `$/...` ne le redonne).
+    //
+    // ⚠️ Ne PAS passer par `EntityID.GetHash` côté script pour fabriquer une clé : il rend un
+    // **Uint32**, donc les 32 bits de poids faible. Le natif lit les 64 bits lui-même.
+    //
+    // Rend true si le message est PARTI — jamais qu'il a été accepté. Le serveur revalide
+    // l'existence de la cabine et la viabilité de l'étage, et ignore en silence ce qui ne va pas.
+    public native func Tessera_AppelerAscenseur(cabine: EntityID, etage: Int32) -> Bool;
+    // ── La FILE des etats de cabine recus, drainee par redscript ──────────────────────────
+    //
+    // Un PULL et non un push : trois voies d'appel C++ -> redscript ont ete essayees le
+    // 2026-08-24 (`@addMethod` + CallVirtual, fonction globale + CallGlobal, methode statique +
+    // CallStatic) et les trois echouent a la RESOLUTION DE NOM au runtime, en journalisant une
+    // seule ligne. Le pull ne depend d'aucune resolution de symbole scripte -- et un natif absent
+    // fait echouer la COMPILATION, bruyamment.
+    // POSTURES — l'annonce montante. Le client DEMANDE, le serveur DECIDE : on n'envoie pas
+    // « je suis assis » mais « je voudrais l'emplacement N », et `postures.rs` accorde ou
+    // refuse (occupe, trop loin, inconnu) puis pose `PlayerState.sustained` que tous les
+    // clients recoivent. `emplacement = 0` libere.
+    //
+    // ⚠️ Le serveur ecoute ce message depuis le 2026-08-19 et personne ne l'envoyait — comme
+    // personne ne LISAIT `sustained` en retour (F-PLY-303). Les deux moities du canal etaient
+    // absentes, chacune supposant que l'autre existait.
+    public native func Tessera_SignalerPosture(emplacement: Uint64, code: Uint32) -> Bool;
+    public native func Tessera_AscenseurTotalRecus() -> Int32;
+    public native func Tessera_AscenseurEnAttente() -> Int32;
+    public native func Tessera_AscenseurCabine() -> EntityID;
+    public native func Tessera_AscenseurEtageActif() -> Int32;
+    public native func Tessera_AscenseurEtageCible() -> Int32;
+    public native func Tessera_AscenseurDepart() -> Int32;
+    public native func Tessera_AscenseurElapsedMs() -> Int32;
+    public native func Tessera_AscenseurRetirer() -> Void;
+
+
+    // Le joueur local vient d'entrer (monte=true) ou de sortir d'une cabine. Sert au RENDU chez
+    // les autres : le serveur relaie le porteur, et l'observateur accroche l'interpolation de
+    // l'avatar à la cabine au lieu de le laisser flotter entre deux snapshots (ADR 0039).
+    // Aucune coordonnée n'est concernée — la position reste en monde des deux côtés.
+    public native func Tessera_MonterAscenseur(cabine: EntityID, monte: Bool) -> Bool;
+
     // L'EntityID du N-ième avatar réseau, pour les PARCOURIR sans que le joueur en vise un.
     // Le compte se lit avec `Tessera_GetVisiblePlayerCount` — même table, donc un seul natif de plus.
     //

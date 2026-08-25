@@ -859,6 +859,7 @@ protected:
     // Sert au RENDU chez les autres : le serveur relaie le porteur dans `PlayerState.frame`, et
     // l'observateur accroche l'interpolation de l'avatar a la cabine (ADR 0039).
     void SendElevatorMount(uint64_t elevatorId, bool mount);
+    bool EnvoyerPosture(uint64_t emplacementId, uint32_t code);
     // Etat autoritaire d'une cabine -> redscript, qui rejoue l'ordre ou recale l'etage.
     void HandleElevatorState(const cyberpunk_rp::protocol::ElevatorStateMsg* msg);
     // Le sac autoritaire. REMPLACE integralement l'etat precedent (contrairement aux identites, qui
@@ -1653,6 +1654,32 @@ public:
     /// Combien d'états de cabine attendent d'être appliqués. Redscript draine cette file dans sa
     /// boucle de veille (`TesseraAscenseurVeille`, ElevatorBridge.reds).
     /// Total MONOTONE des etats recus depuis le lancement. Voir `g_ascenseursTotalRecus`.
+    /// POSTURES — l'annonce montante. `emplacement == 0` libere. Le serveur decide.
+    ///
+    /// ⚠️ DECLAREE ICI, EN PORTEE PUBLIQUE, ET C'EST LA RAISON D'ETRE DE CE COMMENTAIRE.
+    /// Premiere version posee a cote de `SendElevatorMount` (portee `protected`) : la DLL a
+    /// compile et lie sans un mot, et le nom N'ETAIT PAS dans le binaire — donc le `native
+    /// func` cote redscript n'aurait eu aucun backing et TOUT `r6/scripts` serait tombe au
+    /// lancement. Le controle en une ligne de la skill (chercher le nom dans la DLL) l'a
+    /// attrape avant le jeu. Les natifs se declarent avec les autres, en public.
+    /// ⚠️ CORPS EN LIGNE, ET C'EST LA LECON DU 2026-08-24. Premiere version : declaree ici,
+    /// definie dans le .cpp. Ca compile, ca lie — et le nom N'ARRIVE PAS dans la DLL. Controle :
+    /// sur les 78 `RTTI_METHOD` du fichier, 77 sont dans le binaire et seule celle-la manquait.
+    /// Un `native func` sans backing fait tomber TOUT `r6/scripts` au lancement, sans un mot
+    /// (F-PLF-020). Les 77 qui marchent ont toutes leur corps ICI : on copie ce qui marche, et
+    /// le travail reel (flatbuffers, socket) reste dans le .cpp derriere ce relais d'une ligne.
+    /// ⚠️ RETOURNE UN BOOL, ET CE N'EST PAS UN CHOIX DE STYLE. Premiere version en `void` :
+    /// declaree, compilee, liee — et ABSENTE du binaire. Controle : sur les 78 `RTTI_METHOD` du
+    /// fichier, 77 dans la DLL, seule celle-la manquante ; et la fonction de travail derriere
+    /// elle etait eliminee comme inutilisee, preuve que la macro ne la referencait pas. Les 77
+    /// qui marchent rendent toutes une valeur (`Tessera_EnvoyerAction` prend meme des parametres
+    /// et rend `bool`). Un `native func` sans backing fait tomber TOUT `r6/scripts` au lancement,
+    /// sans un mot (F-PLF-020) : le controle en une ligne l'a attrape avant le jeu.
+    bool Tessera_SignalerPosture(uint64_t emplacementId, uint32_t code)
+    {
+        return EnvoyerPosture(emplacementId, code);
+    }
+
     int32_t Tessera_AscenseurTotalRecus()
     {
         return g_ascenseursTotalRecus;
@@ -1842,6 +1869,7 @@ private:
 };
 
 RTTI_DEFINE_CLASS(NetworkGameSystem, {
+    RTTI_METHOD(Tessera_SignalerPosture);
     RTTI_METHOD(EnqueueLoadLastCheckpoint);
     RTTI_METHOD(Tessera_GetServerShard);
     RTTI_METHOD(Tessera_GetServerOverlaps);
@@ -1899,6 +1927,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ActionPorteeM);
     RTTI_METHOD(Tessera_NomConnu);
     RTTI_METHOD(Tessera_EnvoyerAction);
+    /// Annonce montante d'une demande de POSTURE (s'asseoir, s'appuyer). `emplacementId == 0`
+    /// libere. Le serveur decide — le client ne fait que demander.
     RTTI_METHOD(Tessera_AscenseurTotalRecus);
     RTTI_METHOD(Tessera_AscenseurEnAttente);
     RTTI_METHOD(Tessera_AscenseurCabine);

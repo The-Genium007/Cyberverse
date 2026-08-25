@@ -3285,6 +3285,42 @@ void NetworkGameSystem::SendElevatorMount(uint64_t elevatorId, bool mount)
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
+// ── POSTURES : l'annonce montante ────────────────────────────────────────────────────────────
+//
+// Le client DEMANDE, le serveur DECIDE. On n'envoie pas « je suis assis » : on envoie « je
+// voudrais l'emplacement N », et c'est `postures.rs` qui accorde ou refuse (occupe, trop loin,
+// inconnu) puis pose `PlayerState.sustained` que TOUS les clients recoivent.
+//
+// ⚠️ POURQUOI CETTE FONCTION MANQUAIT, ET CE QUE CA COUTAIT. Le serveur ecoute `EntityInteraction`
+// kind=13 depuis le 2026-08-19 (20 tests verts) et le client ne l'a jamais envoye — exactement
+// comme il ne LISAIT jamais `sustained` en retour (F-PLY-303). Les deux moities du canal etaient
+// absentes, chacune supposant que l'autre existait. Un canal se verifie AUX DEUX BOUTS.
+//
+// `emplacementId == 0` = liberation. C'est la meme convention que le serveur applique deja
+// (`postures.rs::liberer`), et elle evite un second kind pour dire le contraire du premier.
+bool NetworkGameSystem::EnvoyerPosture(uint64_t emplacementId, uint32_t code)
+{
+    if (m_pInterface == nullptr)
+    {
+        return false;
+    }
+    // kind=13 = posture (protocol.fbs, EntityInteraction ; plage CORE 0-63, cf. postures.rs).
+    constexpr uint8_t kPosture = 13;
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ei = cyberpunk_rp::protocol::CreateEntityInteraction(
+        builder, emplacementId, kPosture, code);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_EntityInteraction, ei.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    char detail[64];
+    std::snprintf(detail, sizeof(detail), "emplacement=%llu,code=%u",
+                  static_cast<unsigned long long>(emplacementId), code);
+    g_telemetrie.Evenement("posture_demande", 0, detail);
+    return true;
+}
+
 // ── ASCENSEURS : l'etat autoritaire descendant ───────────────────────────────────────────────
 //
 // On ne decide RIEN ici : tout le raisonnement (rejouer ? recaler ? ignorer ?) vit en redscript,
