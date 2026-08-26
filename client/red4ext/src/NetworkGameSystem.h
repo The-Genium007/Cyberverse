@@ -68,6 +68,17 @@ namespace cyberpunk_rp::protocol {
     // int'", pointe sur l'appelant, le defaut est ICI). Le commentaire du dessus l'annoncait
     // mot pour mot et je l'ai lu APRES l'erreur. Le build local l'attrape en une minute.
     struct ElevatorStateMsg;
+    struct DeviceStateMsg;
+    // Coffre de vehicule. SIXIEME fois que ce bloc est oublie -- 2026-08-25. Les deux commentaires
+    // ci-dessus l'annoncent mot pour mot, et je les ai lus APRES l'erreur, comme les deux fois
+    // precedentes. Le message ne designe jamais ce bloc : il pointe l'APPELANT.
+    //
+    // ⚠️ Six oublis identiques ne sont plus une inattention, c'est un defaut de conception : ce
+    // fichier oblige a declarer le type DEUX fois, a deux endroits eloignes, sans que rien ne relie
+    // l'un a l'autre. Le correctif structurel serait d'inclure `protocol_generated.h` ici — au prix
+    // d'un en-tete lourd, ce qui est un vrai cout et un vrai arbitrage. Tant qu'on ne le fait pas,
+    // ce commentaire est le seul garde-fou, et il ne marche visiblement pas.
+    struct InteractionOpen;
 }
 
 // Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
@@ -95,11 +106,53 @@ struct EtatAscenseurRecu
     int32_t elapsedMs = 0;
 };
 extern std::deque<EtatAscenseurRecu> g_ascenseursRecus;
+
+// APPAREILS DU MONDE (portes, portiques, contenants...) — spec 2026-08-26.
+//
+// Meme forme que la file ascenseur, et pour la meme raison : le redscript ne peut pas recevoir un
+// push du C++ (les trois voies echouent a la resolution de nom au RUNTIME, en silence — voir
+// l'en-tete de `ElevatorRelaisReseau.reds`). Il vient donc CHERCHER, et cette file est le guichet.
+//
+// ⚠️ HORS DE LA CLASSE, comme les autres : `NetworkGameSystem` est alloue par le moteur, lui
+// ajouter un membre corrompt la memoire voisine (mesure le 2026-08-06).
+struct EtatAppareilRecu
+{
+    uint64_t device = 0;
+    int32_t famille = 0;
+    int32_t etat = 0;
+    uint64_t proprietaire = 0;
+};
+extern std::deque<EtatAppareilRecu> g_appareilsRecus;
+// Meme role que `g_ascenseursTotalRecus` : distinguer « rien n'arrive » de « tout arrive et le
+// script n'en fait rien ». Deux pannes opposees, un seul ecran.
+extern int32_t g_appareilsTotalRecus;
 // Compteur MONOTONE de tout ce que le C++ a recu, jamais decremente. La file, elle, est
 // drainee toutes les 50 ms : la lire ne dit donc RIEN sur ce qui est arrive. Ce compteur
 // est le seul moyen de distinguer « rien n'arrive au client » de « tout arrive et le script
 // n'en fait rien » -- deux pannes opposees qui produisent le meme ecran.
 extern int32_t g_ascenseursTotalRecus;
+
+/// Un joueur DISTANT est-il porte par cette cabine ? Lit `g_porteurParAvatar`, alimente par
+/// `PlayerState.frame` a chaque snapshot. Fonction libre parce que la table est un statique de
+/// fichier, et que le natif qui l'expose est une methode INLINE de l'en-tete.
+bool CabinePorteQuelquun(uint64_t cabineHash);
+
+/// ── LA HAUTEUR VIVANTE DU PLANCHER D'UNE CABINE ────────────────────────────────────────────
+///
+/// Publiee par redscript (tick de 50 ms du mod ascenseur), qui lit le composant `movingPlatform`.
+/// C'est LE seul endroit ou cette valeur existe : l'ENTITE de l'ascenseur, elle, ne bouge pas d'un
+/// millimetre pendant le trajet (F-ASC-032, mesure du 2026-08-25), seuls ses composants descendent.
+void PoserHauteurCabine(uint64_t cabineHash, float z, double instant);
+
+/// Garde une POIGNEE sur le composant qui porte le plancher, pour le lire dans la frame ou l'on
+/// rend plutot que d'echantillonner sa hauteur a 20 Hz. C'est ce qui supprime la derniere source
+/// de tremblement : la pente reconstituee entre deux releves, et la gigue de leur cadence.
+void PoserPlancherCabine(uint64_t cabineHash, const Red::Handle<RED4ext::IScriptable>& composant);
+
+/// Hauteur du plancher a `instant`, EXTRAPOLEE lineairement depuis les deux derniers releves.
+/// Rend `false` si on n'a pas encore deux points — l'appelant doit alors garder son comportement
+/// habituel plutot que d'inventer une hauteur.
+bool HauteurCabineA(uint64_t cabineHash, double instant, float& sortie, bool& enMouvement);
 
 extern std::map<uint64_t, uint64_t> g_apparencesStatiques;
 // Ce qu'il faut pour REFABRIQUER un statique absent chez ce client : record, apparence, pose.
@@ -676,6 +729,38 @@ private:
     /// joueurs d'un serveur qui n'a jamais parle d'inventaire.
     bool m_sacRecu = false;
 
+    // --- LE COFFRE D'UN VEHICULE, meme doctrine que le sac ---
+    //
+    // Le serveur enonce l'etat complet du coffre a l'ouverture ; le client s'y aligne. C'est
+    // volontairement la MEME structure que le sac : « voici le contenu du conteneur X » est un
+    // seul concept, et le sac du joueur n'est que le conteneur par defaut.
+    std::vector<ItemAutoritaire> m_coffreAutoritaire;
+    /// L'id RESEAU du vehicule dont on tient le coffre. 0 = aucun coffre en cours.
+    uint64_t m_coffreVehicule = 0;
+    /// La session d'interaction ouverte par le serveur — a renvoyer telle quelle a la fermeture.
+    uint64_t m_coffreSession = 0;
+    uint16_t m_coffreCapacite = 0;
+    /// ⚠️ UN NUMERO DE SEQUENCE, PAS UN BOOLEEN « recu ». Le sac, lui, se contente d'un drapeau
+    /// parce qu'il n'arrive qu'une fois par etat. Un coffre s'ouvre PLUSIEURS fois, et deux
+    /// ouvertures successives du MEME coffre avec le MEME contenu sont indiscernables par un
+    /// booleen — redscript croirait n'avoir rien recu la seconde fois. Le compteur, lui, change
+    /// toujours.
+    int32_t m_coffreSeq = 0;
+    /// Le rapport en cours de construction (fermeture du coffre). Vide entre deux rapports.
+    std::vector<ItemAutoritaire> m_coffreRapport;
+
+    // --- LA CASSE VUE PAR LES TEMOINS ---
+    //
+    // Le serveur diffuse `VehicleState.degats` a tout le monde. Chez un temoin, le moteur n'a
+    // AUCUN moyen de le savoir : il ne simule pas cette voiture, donc il ne lui calcule pas de
+    // degats (F-VEH-041). On lui donne le nombre, et il deroule le reste tout seul.
+    //
+    // ⚠️ UNE FILE, PAS UNE TABLE INTERROGEABLE. Redscript ne peut pas balayer tous les vehicules
+    // proches a chaque battement pour voir lesquels ont change — ce serait un cout par frame pour
+    // un evenement rare. On ne pousse que les CHANGEMENTS, et il draine.
+    std::map<uint64_t, uint8_t> m_degatsConnus;
+    std::deque<std::pair<uint64_t, uint8_t>> m_degatsAAppliquer;
+
 private:
     // Appelé à chaque échec de `SpawnTransientEntity`. Agrège les logs et déclenche UNE fois
     // l'alerte native quand le seuil est franchi.
@@ -850,11 +935,16 @@ protected:
     // Declenche une recette du catalogue sur une cible. `kind = 2` (Interagit), `param` = l'id de
     // la recette : le canal montant existe depuis le gel, zero octet ajoute au fil.
     void SendActionJoueur(uint64_t target, uint32_t recette);
+    void SendVehiculeVerbe(uint64_t target, uint8_t verbe, uint32_t param);
+    void SendCoffreRapport();
+    void HandleInteractionOpen(const cyberpunk_rp::protocol::InteractionOpen* msg);
     // ── ASCENSEURS (ADR 0012) ────────────────────────────────────────────────────────────
     // Rapporte au serveur qu'un joueur a demande un etage. Le serveur ARBITRE (file SCAN) et
     // renvoie un `ElevatorStateMsg` a tout le monde ; c'est ce message-la qui fait partir la
     // cabine, jamais l'appui local — la boucle locale est coupee cote redscript.
     void SendElevatorCall(uint64_t elevatorId, int32_t floor);
+    void SendDeviceCall(uint64_t device, uint8_t famille, uint8_t action, uint8_t etatObserve);
+    void SendAdminCommand(const char* texte);
     // Signale l'entree (mount=true) ou la sortie d'une cabine. `kind=6/7` d'EntityInteraction.
     // Sert au RENDU chez les autres : le serveur relaie le porteur dans `PlayerState.frame`, et
     // l'observateur accroche l'interpolation de l'avatar a la cabine (ADR 0039).
@@ -862,6 +952,7 @@ protected:
     bool EnvoyerPosture(uint64_t emplacementId, uint32_t code);
     // Etat autoritaire d'une cabine -> redscript, qui rejoue l'ordre ou recale l'etage.
     void HandleElevatorState(const cyberpunk_rp::protocol::ElevatorStateMsg* msg);
+    void HandleDeviceState(const cyberpunk_rp::protocol::DeviceStateMsg* msg);
     // Le sac autoritaire. REMPLACE integralement l'etat precedent (contrairement aux identites, qui
     // s'accumulent) : c'est un ETAT, pas un ajout. Le rejouer ne fait donc rien de plus, et un
     // message perdu se rattrape au suivant.
@@ -1263,6 +1354,22 @@ public:
         return a == nullptr ? 0 : static_cast<std::int32_t>(a->vetements.size());
     }
 
+    // Le sexe du CORPS de cet avatar — `true` masculin. Vient du serveur
+    // (`AppearanceSpec.corps_masculin`), qui le lit dans `characters.corps_masculin`.
+    //
+    // ⚠️ IL NE CHOISIT PAS LE CORPS. Le corps suit la charge d'esthetique, jamais le record
+    // (F-PLY-267). Il choisit quelle moitie de la GARDE-ROBE allumer : chaque vetement est cuit en
+    // deux exemplaires dans l'entite (`..._m` et `..._w`) parce qu'un vetement est genre a la
+    // source — `t1_004_wa_tshirt__longsleeve` n'existe tout simplement pas (F-PLY-300).
+    //
+    // ⚠️ Defaut `true` quand l'entite est inconnue de nos tables : c'est le comportement d'avant ce
+    // champ, donc aucun avatar existant ne change d'aspect a cause d'une table pas encore remplie.
+    bool Tessera_AvatarCorpsMasculin(RED4ext::ent::EntityID cible)
+    {
+        const auto* a = ApparencePourEntite(cible);
+        return a == nullptr ? true : a->corpsMasculin;
+    }
+
     // Le n-ieme vetement, dans l'ORDRE DE POSE decide par le serveur.
     //
     // ⚠️ RENVOIE UN `TweakDBID`, PAS UN `uint64_t`, pour exactement la raison ecrite au-dessus de
@@ -1453,6 +1560,185 @@ public:
         return static_cast<int32_t>(m_sacAutoritaire[static_cast<size_t>(index)].quantite);
     }
 
+    // ── LE COFFRE : lecture (serveur -> client) ──────────────────────────────────────────────
+    //
+    // ⚠️ On rend le numero de sequence, jamais un booleen. Voir `m_coffreSeq` : un coffre s'ouvre
+    // plusieurs fois, et un booleen ne distingue pas deux ouvertures identiques.
+    /// Ce vehicule est-il connu du SERVEUR ? Vrai pour un vehicule ne d'un snapshot, faux pour la
+    /// circulation native.
+    ///
+    /// ⚠️ C'est le predicat qui remplace `GetIsPlayerVehicle()` cote redscript — le drapeau vanilla
+    /// qui decide si le coffre est propose. Sans lui, il faudrait ecrire dans `m_playerVehicle`,
+    /// un champ PERSISTANT du systeme de sauvegarde : un etat qu'on pose et qu'il faut ensuite
+    /// penser a retirer. Repondre a une question coute moins cher que modifier un etat.
+    bool Tessera_EstVehiculeReseau(RED4ext::ent::EntityID cible) const
+    {
+        if (!cible.IsDefined())
+        {
+            return false;
+        }
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ── LA CASSE : la file que redscript draine ──────────────────────────────────────────────
+    /// La derniere casse que le SERVEUR a annoncee pour ce vehicule, ou -1 s'il n'en a jamais
+    /// parle.
+    ///
+    /// ⚠️ C'EST LE GARDE-FOU CONTRE L'ECHO, et il n'est pas cosmetique. Un temoin qui ecrit les PV
+    /// que le serveur lui donne redeclenche `ReactToHPChange` chez lui ; s'il conduit, il
+    /// RENVERRAIT la casse qu'il vient de recevoir. Comme la casse est MONOTONE cote serveur, un
+    /// aller-retour ne peut que la faire MONTER — les voitures se degraderaient toutes seules,
+    /// sans que personne ne les touche.
+    ///
+    /// Un simple drapeau « je suis en train d'appliquer » ne suffirait pas : l'ecriture passe par
+    /// `RequestSettingStatPoolValue`, une DEMANDE, dont le rappel arrive plus tard — apres que le
+    /// drapeau soit retombe. Comparer a ce que le serveur sait deja est la seule garde qui ne
+    /// depende pas du moment.
+    int32_t Tessera_DegatsConnus(RED4ext::ent::EntityID cible) const
+    {
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                const auto it = m_degatsConnus.find(paire.first);
+                return (it == m_degatsConnus.end()) ? -1 : static_cast<int32_t>(it->second);
+            }
+        }
+        return -1;
+    }
+
+    int32_t Tessera_DegatsEnAttente() const
+    {
+        return static_cast<int32_t>(m_degatsAAppliquer.size());
+    }
+
+    /// L'`EntityID` LOCALE du vehicule en tete de file. Vide si la file est vide, ou si le
+    /// vehicule n'est plus dans le monde — auquel cas l'appelant doit quand meme defiler.
+    RED4ext::ent::EntityID Tessera_DegatsVehicule() const
+    {
+        RED4ext::ent::EntityID vide{};
+        if (m_degatsAAppliquer.empty())
+        {
+            return vide;
+        }
+        const auto it = m_networkedEntitiesLookup.find(m_degatsAAppliquer.front().first);
+        return (it == m_networkedEntitiesLookup.end()) ? vide : it->second;
+    }
+
+    int32_t Tessera_DegatsValeur() const
+    {
+        return m_degatsAAppliquer.empty() ? 0 : static_cast<int32_t>(m_degatsAAppliquer.front().second);
+    }
+
+    /// Defile. ⚠️ A appeler MEME quand le vehicule est introuvable, sinon la file se bouche sur
+    /// une entree impossible a traiter et plus aucune casse n'arrive — une panne qui ressemble a
+    /// « le serveur n'envoie plus rien ».
+    void Tessera_DegatsDefiler()
+    {
+        if (!m_degatsAAppliquer.empty())
+        {
+            m_degatsAAppliquer.pop_front();
+        }
+    }
+
+    int32_t Tessera_CoffreSeq() const { return m_coffreSeq; }
+
+    /// L'`EntityID` LOCALE du vehicule dont on tient le coffre — pas l'id reseau. C'est celle-la
+    /// que redscript sait manipuler ; la traduction vit ici, ou vit la table.
+    RED4ext::ent::EntityID Tessera_CoffreVehicule() const
+    {
+        RED4ext::ent::EntityID vide{};
+        if (m_coffreVehicule == 0)
+        {
+            return vide;
+        }
+        const auto it = m_networkedEntitiesLookup.find(m_coffreVehicule);
+        return (it == m_networkedEntitiesLookup.end()) ? vide : it->second;
+    }
+
+    int32_t Tessera_CoffreCapacite() const { return static_cast<int32_t>(m_coffreCapacite); }
+
+    int32_t Tessera_CoffreTaille() const { return static_cast<int32_t>(m_coffreAutoritaire.size()); }
+
+    Red::CString Tessera_CoffreItemId(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_coffreAutoritaire.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_coffreAutoritaire[static_cast<size_t>(index)].id.c_str());
+    }
+
+    int32_t Tessera_CoffreItemQuantite(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_coffreAutoritaire.size())
+        {
+            return 0;
+        }
+        return static_cast<int32_t>(m_coffreAutoritaire[static_cast<size_t>(index)].quantite);
+    }
+
+    // ── LE COFFRE : rapport (client -> serveur) ──────────────────────────────────────────────
+    //
+    // Trois natifs plutot qu'un seul prenant des tableaux : le marshalling d'un `array<String>`
+    // par RTTI est exactement le genre d'endroit ou l'on echoue EN SILENCE (une table Lua convertie
+    // en struct vide a deja fait accepter un `Mount` qui n'a rien fait, 2026-07-21). Empiler ligne
+    // a ligne ne peut pas se tromper a moitie.
+    void Tessera_CoffreViderRapport() { m_coffreRapport.clear(); }
+
+    void Tessera_CoffreAjouterAuRapport(const Red::CString& id, int32_t quantite)
+    {
+        if (quantite <= 0 || id.Length() == 0)
+        {
+            return;
+        }
+        ItemAutoritaire ligne;
+        ligne.id = id.c_str();
+        ligne.quantite = static_cast<uint32_t>(quantite);
+        m_coffreRapport.push_back(std::move(ligne));
+    }
+
+    /// Envoie le rapport accumule. Renvoie true si le message est PARTI — jamais qu'il a ete
+    /// accepte : le serveur revalide la capacite et peut REFUSER, auquel cas il renvoie la verite
+    /// et le client se recale.
+    bool Tessera_CoffreEnvoyerRapport()
+    {
+        if (m_coffreSession == 0 || m_coffreVehicule == 0)
+        {
+            return false;
+        }
+        SendCoffreRapport();
+        m_coffreRapport.clear();
+        // ⛔ LA SESSION DE COFFRE SE FERME ICI, ET SON ABSENCE ETAIT UNE PERTE DE DONNEES.
+        //
+        // `m_coffreVehicule` n'etait jamais remis a zero. Or c'est LUI que redscript interroge
+        // pour savoir si l'ecran qui vient de se fermer etait un coffre :
+        //
+        //     OnUninitialize -> Tessera_CoffreVehicule() defini ? -> rapporter le contenu
+        //
+        // Il reste donc defini pour toute la session APRES la premiere ouverture. Le prochain
+        // ecran de VENDEUR — un ripperdoc, un armurier — se ferme, le crochet se declenche, lit
+        // un contenant qui n'a rien a voir, et annonce au serveur que le coffre est VIDE. Le
+        // serveur, qui fait confiance a l'etat complet (c'est la doctrine), l'efface.
+        //
+        // Le joueur perdrait le contenu de son coffre en allant acheter des munitions, sans que
+        // rien ne le signale nulle part.
+        //
+        // ⚠️ Remettre a zero rend aussi l'appel IDEMPOTENT — un second `OnUninitialize` pour le
+        // meme ecran ne renvoie plus rien. C'est la regle du depot sur les effets de bord
+        // destructifs : ils DOIVENT l'etre, sinon leur appelant est un champ de mines.
+        m_coffreVehicule = 0;
+        m_coffreSession = 0;
+        return true;
+    }
+
     int32_t Tessera_PreserverTaille() const { return static_cast<int32_t>(m_aPreserver.size()); }
 
     Red::CString Tessera_PreserverId(int32_t index) const
@@ -1621,6 +1907,70 @@ public:
         return RED4ext::ent::EntityID{};
     }
 
+    // ── LE ROSTER DES VEHICULES — parce que la requete spatiale du JEU ne les voit pas ────────
+    //
+    // ⛔ MESURE DU 2026-08-26, et elle invalide un idiome utilise partout dans le harnais :
+    // `GetEntitiesAroundObject(40)` NE REND PAS les entites nees du netcode. Sonde faite dans
+    // l'appartement de V, avec un avatar distant a 4 m et une voiture serveur a 1 m :
+    //
+    //     128 entites trouvees — 115 objets statiques, 5 items, 5 PNJ. ZERO vehicule, ZERO joueur.
+    //
+    // Les entites EXISTENT pourtant : `Tessera_AvatarJoueurParIndex(0)` rend un `EntityID` que
+    // `FindEntityByID` resout, avec ses 188 composants — et l'avatar est visible a l'ecran sur la
+    // capture prise a la meme minute. Ce que la requete spatiale indexe, ce n'est donc pas « ce
+    // qu'il y a autour », c'est ce que le STREAMING du monde a pose. Nos entites sont dans le
+    // monde sans etre dans cet index-la.
+    //
+    // Consequence pratique : tout designateur de cible base sur la proximite est AVEUGLE a nos
+    // propres objets — il ne trouve que le decor natif. C'est ce qui a fait rendre une PORTE a
+    // `veh_etat` plus tot dans la journee : les trois voies du designateur echouaient sur nos
+    // vehicules, et la seule qui repondait rendait n'importe quoi.
+    //
+    // La reponse est de demander au netcode, qui tient SA propre table. `m_degatsConnus` est
+    // alimente pour CHAQUE vehicule de CHAQUE snapshot (les deux branches y ecrivent, y compris
+    // celle du vehicule intact) : ses cles sont donc le roster complet des vehicules serveur.
+    // Aucune table supplementaire a tenir synchronisee.
+    int32_t Tessera_CompteVehiculesReseau() const
+    {
+        int32_t n = 0;
+        for (const auto& [reseauId, casse] : m_degatsConnus)
+        {
+            if (m_networkedEntitiesLookup.find(reseauId) != m_networkedEntitiesLookup.end())
+            {
+                ++n;
+            }
+        }
+        return n;
+    }
+
+    /// L'`EntityID` LOCALE du N-ieme vehicule serveur. Vide hors bornes — l'appelant doit tester.
+    ///
+    /// ⚠️ L'index n'est PAS un identifiant : il se decale des qu'un vehicule est destreame. Il ne
+    /// sert qu'a parcourir le roster dans l'instant, jamais a designer une voiture d'un appel a
+    /// l'autre.
+    RED4ext::ent::EntityID Tessera_VehiculeReseauParIndex(int32_t index) const
+    {
+        if (index < 0)
+        {
+            return RED4ext::ent::EntityID{};
+        }
+        int32_t n = 0;
+        for (const auto& [reseauId, casse] : m_degatsConnus)
+        {
+            const auto corps = m_networkedEntitiesLookup.find(reseauId);
+            if (corps == m_networkedEntitiesLookup.end())
+            {
+                continue;
+            }
+            if (n == index)
+            {
+                return corps->second;
+            }
+            ++n;
+        }
+        return RED4ext::ent::EntityID{};
+    }
+
     /// Declenche une recette sur une cible. `recette` est l'id rendu par `Tessera_ActionId`.
     ///
     /// Renvoie true si le message est PARTI — jamais qu'il a ete accepte (D1). Le serveur reverifie
@@ -1648,6 +1998,53 @@ public:
             return false;
         }
         SendActionJoueur(idReseau, recette);
+        return true;
+    }
+
+    /// UN SEUL natif pour TOUS les verbes vehicule (verrou, revendication, radio, degats, coffre).
+    ///
+    /// ⚠️ POURQUOI IL N'EXISTAIT PAS, ET CE QUE CA COUTAIT. Le serveur ecoute les kinds 9 a 12
+    /// depuis le 2026-08-15 — verrou, revendication, radio, casse — avec leurs tests verts, et
+    /// AUCUN client ne les a jamais envoyes. Exactement la panne des postures (kind 13, ecoute
+    /// depuis le 19 aout, jamais emise) : du code serveur juste, teste, et injoignable. Un canal
+    /// montant qui manque ne casse rien et ne dit rien ; il rend simplement toute la
+    /// fonctionnalite inerte, et on croit que c'est le serveur qui ne repond pas.
+    ///
+    /// ⚠️ LA PLAGE EST GARDEE, ET CE N'EST PAS DE LA PRUDENCE DECORATIVE. Un natif « envoie
+    /// n'importe quel kind » laisserait une faute de frappe partir en verbe d'ascenseur ou de
+    /// posture — et cote serveur, `target` serait alors lu dans un AUTRE espace d'identifiants.
+    /// La collision kinds 6/7 (MountElevator reutilise par erreur pour le vehicule) a fait tomber
+    /// dix-sept tests d'ascenseur d'un coup. Ici elle serait silencieuse.
+    ///
+    /// Renvoie true si le message est PARTI — jamais qu'il a ete accepte (D1). Le serveur
+    /// reverifie propriete, siege et portee, et peut refuser sans le dire.
+    bool Tessera_VehiculeVerbe(RED4ext::ent::EntityID cible, uint8_t verbe, uint32_t param)
+    {
+        // 9=verrou 10=revendiquer 11=radio 12=degats 14=ouvrir le coffre (13 = POSTURE, pas nous).
+        if (verbe < 9 || verbe > 14 || verbe == 13)
+        {
+            return false;
+        }
+        if (!cible.IsDefined())
+        {
+            return false;
+        }
+        uint64_t idReseau = 0;
+        for (const auto& paire : m_networkedEntitiesLookup)
+        {
+            if (paire.second == cible)
+            {
+                idReseau = paire.first;
+                break;
+            }
+        }
+        if (idReseau == 0)
+        {
+            // Une voiture de la circulation native ne designe personne chez le serveur. Lui
+            // inventer une identite serait un mensonge sur le fil.
+            return false;
+        }
+        SendVehiculeVerbe(idReseau, verbe, param);
         return true;
     }
 
@@ -1720,6 +2117,106 @@ public:
         if (!g_ascenseursRecus.empty()) { g_ascenseursRecus.pop_front(); }
     }
 
+    // ── APPAREILS DU MONDE ───────────────────────────────────────────────────────────────────
+    //
+    // Le guichet du PULL. Meme decoupage que les ascenseurs : un accesseur par champ, parce que
+    // redscript ne sait pas recevoir une struct C++ non enregistree au RTTI, et qu'enregistrer un
+    // type pour quatre entiers couterait plus cher que ces quatre lignes.
+
+    /// Total MONOTONE recu depuis le lancement, jamais decremente. La file est drainee toutes les
+    /// 50 ms : la lire ne dit RIEN sur ce qui est arrive. Ce compteur, si.
+    int32_t Tessera_AppareilTotalRecus()
+    {
+        return g_appareilsTotalRecus;
+    }
+    int32_t Tessera_AppareilEnAttente()
+    {
+        return static_cast<int32_t>(g_appareilsRecus.size());
+    }
+    RED4ext::ent::EntityID Tessera_AppareilId()
+    {
+        if (g_appareilsRecus.empty()) { return RED4ext::ent::EntityID{}; }
+        return RED4ext::ent::EntityID{g_appareilsRecus.front().device};
+    }
+    int32_t Tessera_AppareilFamille()
+    {
+        return g_appareilsRecus.empty() ? 0 : g_appareilsRecus.front().famille;
+    }
+    int32_t Tessera_AppareilEtat()
+    {
+        return g_appareilsRecus.empty() ? -1 : g_appareilsRecus.front().etat;
+    }
+    /// `0` = appareil du monde, sans proprietaire. Ce n'est pas une sentinelle d'erreur : c'est
+    /// l'etat par defaut de toute la carte.
+    ///
+    /// ⚠️ Tronque en int32 : redscript n'a d'operateur de comparaison ni pour `Uint64` ni pour
+    /// `Uint32` (meme piege que `depart_tick`, paye sur les ascenseurs). Un `characters.id` reste
+    /// tres en dessous de 2^31 sur toute duree d'exploitation plausible.
+    int32_t Tessera_AppareilProprietaire()
+    {
+        return g_appareilsRecus.empty()
+            ? 0
+            : static_cast<int32_t>(g_appareilsRecus.front().proprietaire & 0x7FFFFFFF);
+    }
+    /// ⚠️ REND UN BOOL alors qu'il n'a rien a rendre. Voir le commentaire de
+    /// `Tessera_SignalerPosture` : une `RTTI_METHOD` en `void` a deja ete declaree, compilee,
+    /// liee — et ABSENTE du binaire, ce qui fait tomber TOUT `r6/scripts` au lancement sans un mot
+    /// (F-PLF-020). On ne rejoue pas ce diagnostic pour economiser un `return`.
+    bool Tessera_AppareilRetirer()
+    {
+        if (g_appareilsRecus.empty()) { return false; }
+        g_appareilsRecus.pop_front();
+        return true;
+    }
+
+    /// LE CANAL DE COMMANDE D'ADMINISTRATION — et il MANQUAIT ENTIEREMENT.
+    ///
+    /// ⚠️ Constate le 2026-08-26 : le serveur comprend `ClientMsg::AdminCommand` depuis toujours
+    /// (`gateway_routing::extract_admin_command`), et **AUCUN client ne l'a jamais emis**. Tout le
+    /// vocabulaire d'administration — `/promote`, `/grant`, `/ban`, `/vehicule`, `/besoins`, et
+    /// maintenant `/porte` — etait donc du code injoignable depuis le jeu. Seuls les tests Rust en
+    /// construisaient.
+    ///
+    /// C'est le meme mode de panne que les sept fils debranches du chantier « autorite totale » :
+    /// un producteur complet, teste, documente, dont la sortie n'allait nulle part.
+    ///
+    /// L'AUTORITE NE BOUGE PAS D'UN POUCE. Le serveur decide seul de ce qu'il accepte : il
+    /// revalide le rang de l'appelant (`is_root`) et ses permissions avant d'executer quoi que ce
+    /// soit. Ce natif ne fait qu'ouvrir le tuyau — il ne donne aucun droit.
+    ///
+    /// Rend true si le message est PARTI. Jamais qu'il a ete accepte (doctrine D1).
+    bool Tessera_EnvoyerCommandeAdmin(const Red::CString& texte)
+    {
+        if (texte.Length() == 0)
+        {
+            return false;
+        }
+        SendAdminCommand(texte.c_str());
+        return true;
+    }
+
+    /// APPAREILS — le joueur vient d'agir sur `device`, et l'a laisse dans l'etat `etat`.
+    ///
+    /// `device` est l'`EntityID` de l'appareil, LU sur l'entite et jamais recalcule (meme regle
+    /// que les cabines, F-ASC-027 : le hash n'est pas reconstructible hors jeu). Aucune traduction
+    /// par `m_networkedEntitiesLookup` : un appareil est du decor que les deux cotes designent par
+    /// la meme cle stable, pas une entite repliquee.
+    ///
+    /// Rend true si le message est PARTI. Jamais qu'il a ete accepte (doctrine D1) : le serveur
+    /// revalide la famille, l'etat, la distance et les droits, et refuse en silence cote fil.
+    bool Tessera_RapporterAppareil(RED4ext::ent::EntityID device, int32_t famille, int32_t action,
+        int32_t etat)
+    {
+        if (!device.IsDefined() || famille < 0 || famille > 255 || action < 0 || action > 255
+            || etat < 0 || etat > 255)
+        {
+            return false;
+        }
+        SendDeviceCall(device.hash, static_cast<uint8_t>(famille), static_cast<uint8_t>(action),
+            static_cast<uint8_t>(etat));
+        return true;
+    }
+
     /// ASCENSEURS — le joueur a demande `etage` sur la cabine `cabine`.
     ///
     /// `cabine` est l'EntityID STATIQUE de la cabine, LU sur l'entite par redscript et jamais
@@ -1750,6 +2247,47 @@ public:
         SendElevatorMount(cabine.hash, monte);
         return true;
     }
+
+    /// ASCENSEURS — un joueur DISTANT est-il dans cette cabine ?
+    ///
+    /// ⭐ C'est la notion d'occupation qui MANQUAIT au moteur. Le sien, `IsPlayerInsideLift()`,
+    /// interroge le tableau noir du joueur LOCAL (`door.script:589`, `liftController.script:567`) :
+    /// une cabine pleine de monde est donc « vide » pour tous ceux qui n'y sont pas. Trois
+    /// comportements natifs en dependent et divergent donc d'un ecran a l'autre — la vitesse
+    /// (x2 a vide, `GetLiftSpeed`), l'ouverture des portes de palier, et l'obstruction du passage.
+    ///
+    /// Le remede n'est pas de repliquer chaque comportement, c'est de partager la QUESTION : le
+    /// redscript compose ce resultat avec le verdict local, et les trois se remettent d'accord.
+    ///
+    /// Ne compte QUE les distants, volontairement : le joueur local est deja couvert par le
+    /// tableau noir, et l'ajouter ici en ferait un cas double.
+    bool Tessera_CabineOccupee(RED4ext::ent::EntityID cabine)
+    {
+        if (!cabine.IsDefined())
+        {
+            return false;
+        }
+        return CabinePorteQuelquun(cabine.hash);
+    }
+
+    /// ASCENSEURS — redscript PUBLIE la hauteur vivante du plancher d'une cabine.
+    ///
+    /// ⭐ C'est la piece qui manquait pour rendre un passager distant sans sautillement, et elle ne
+    /// pouvait venir que de la : le C++ ne sait pas atteindre un COMPOSANT d'entite, et l'entite
+    /// elle-meme ne bouge pas (F-ASC-032). Redscript, lui, lit `movingPlatform` sans peine.
+    ///
+    /// Avec ca, la verticale d'un passager cesse de venir du reseau — donc cesse d'avoir un retard,
+    /// donc cesse de sautiller. C'est le patron des moteurs du metier : repliquer la position
+    /// RELATIVE au porteur et recomposer avec la position LOCALE du porteur au moment du rendu
+    /// (Unreal `ReplicatedBasedMovement`, Unity `NetworkTransform` en espace local).
+    bool Tessera_PoserHauteurCabine(RED4ext::ent::EntityID cabine, float z);
+
+    /// ASCENSEURS — redscript confie le COMPOSANT du plancher, une fois pour toutes.
+    ///
+    /// Preferable a publier sa hauteur : le rendu la lit alors dans SA frame, sans echantillonnage
+    /// ni extrapolation. `Tessera_PoserHauteurCabine` reste comme repli.
+    bool Tessera_PoserPlancherCabine(RED4ext::ent::EntityID cabine,
+                                     const Red::Handle<RED4ext::IScriptable>& plancher);
 
     // Demande au serveur de prendre un figurant sous son autorite (ADR 0022).
     //
@@ -1881,6 +2419,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_PremierVidageEtat);
     RTTI_METHOD(Tessera_ArmeDeLEntite);
     RTTI_METHOD(Tessera_NombreDeVetements);
+    RTTI_METHOD(Tessera_AvatarCorpsMasculin);
     RTTI_METHOD(Tessera_VetementDeLEntite);
     RTTI_METHOD(Tessera_DemanderReapparition);
     RTTI_METHOD(Tessera_RapporterVariation);
@@ -1927,8 +2466,33 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ActionPorteeM);
     RTTI_METHOD(Tessera_NomConnu);
     RTTI_METHOD(Tessera_EnvoyerAction);
+    RTTI_METHOD(Tessera_VehiculeVerbe);
+    RTTI_METHOD(Tessera_EstVehiculeReseau);
+    RTTI_METHOD(Tessera_DegatsConnus);
+    RTTI_METHOD(Tessera_DegatsEnAttente);
+    RTTI_METHOD(Tessera_DegatsVehicule);
+    RTTI_METHOD(Tessera_DegatsValeur);
+    RTTI_METHOD(Tessera_DegatsDefiler);
+    RTTI_METHOD(Tessera_CoffreSeq);
+    RTTI_METHOD(Tessera_CoffreVehicule);
+    RTTI_METHOD(Tessera_CoffreCapacite);
+    RTTI_METHOD(Tessera_CoffreTaille);
+    RTTI_METHOD(Tessera_CoffreItemId);
+    RTTI_METHOD(Tessera_CoffreItemQuantite);
+    RTTI_METHOD(Tessera_CoffreViderRapport);
+    RTTI_METHOD(Tessera_CoffreAjouterAuRapport);
+    RTTI_METHOD(Tessera_CoffreEnvoyerRapport);
     /// Annonce montante d'une demande de POSTURE (s'asseoir, s'appuyer). `emplacementId == 0`
     /// libere. Le serveur decide — le client ne fait que demander.
+    RTTI_METHOD(Tessera_AppareilTotalRecus);
+    RTTI_METHOD(Tessera_AppareilEnAttente);
+    RTTI_METHOD(Tessera_AppareilId);
+    RTTI_METHOD(Tessera_AppareilFamille);
+    RTTI_METHOD(Tessera_AppareilEtat);
+    RTTI_METHOD(Tessera_AppareilProprietaire);
+    RTTI_METHOD(Tessera_AppareilRetirer);
+    RTTI_METHOD(Tessera_RapporterAppareil);
+    RTTI_METHOD(Tessera_EnvoyerCommandeAdmin);
     RTTI_METHOD(Tessera_AscenseurTotalRecus);
     RTTI_METHOD(Tessera_AscenseurEnAttente);
     RTTI_METHOD(Tessera_AscenseurCabine);
@@ -1939,6 +2503,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AscenseurRetirer);
     RTTI_METHOD(Tessera_AppelerAscenseur);
     RTTI_METHOD(Tessera_MonterAscenseur);
+    RTTI_METHOD(Tessera_CabineOccupee);
+    RTTI_METHOD(Tessera_PoserHauteurCabine);
+    RTTI_METHOD(Tessera_PoserPlancherCabine);
     RTTI_METHOD(Tessera_AvatarParIndex);
     // ⚠️ Ces deux-là comptent des JOUEURS, contrairement aux deux ci-dessus (F-PLY-047).
     RTTI_METHOD(Tessera_SuspendreCommandes);
@@ -1948,6 +2515,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_LireTableAlias);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);
     RTTI_METHOD(Tessera_AvatarJoueurParIndex);
+    RTTI_METHOD(Tessera_CompteVehiculesReseau);
+    RTTI_METHOD(Tessera_VehiculeReseauParIndex);
     RTTI_METHOD(Tessera_SacRecu);
     RTTI_METHOD(Tessera_SacTaille);
     RTTI_METHOD(Tessera_SacItemId);

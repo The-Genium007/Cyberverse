@@ -75,6 +75,8 @@ public native class NetworkGameSystem extends IGameSystem {
     // `0` vêtement signifie « ne porte rien » AUSSI BIEN QUE « entité inconnue » : dans les deux
     // cas il n'y a rien à poser, donc rien à décider ici.
     public native func Tessera_NombreDeVetements(cible: EntityID) -> Int32;
+    // Le sexe du corps de cet avatar — choisit quelle moitie de la garde-robe allumer.
+    public native func Tessera_AvatarCorpsMasculin(cible: EntityID) -> Bool;
     public native func Tessera_VetementDeLEntite(cible: EntityID, index: Int32) -> TweakDBID;
 
     // ── Coma et réapparition (chantier autorité totale, 2026-08-09) ─────────────────────────
@@ -306,6 +308,59 @@ public native class NetworkGameSystem extends IGameSystem {
     // Renvoie true si le message est PARTI — jamais qu'il a été accepté.
     public native func Tessera_EnvoyerAction(cible: EntityID, recette: Uint32) -> Bool;
 
+    // ── LES VERBES VÉHICULE (protocol.fbs, EntityInteraction) ───────────────────────────────
+    //
+    // UN seul natif pour les cinq verbes : ils ne diffèrent que par deux entiers.
+    //
+    //    9  → verrou           param : 0 ouvre, non-nul ferme   (PROPRIÉTAIRE, refus serveur)
+    //    10 → revendiquer      param ignoré                     (sans effet si déjà possédé)
+    //    11 → radio            param : station, 0 = éteinte      (CONDUCTEUR)
+    //    12 → casse            param : 0..100, MONOTONE          (CONDUCTEUR)
+    //    14 → ouvrir le coffre param ignoré                      (réponse : InteractionOpen)
+    //
+    // ⚠️ 13 est la POSTURE, pas nous. Le natif refuse toute valeur hors 9..14 et rejette 13 :
+    // une faute de frappe partirait sinon dans un AUTRE espace d'identifiants, où `target` ne
+    // désigne pas la même chose. La collision des kinds 6/7 a déjà fait tomber dix-sept tests.
+    //
+    // Renvoie true si le message est PARTI — jamais qu'il a été accepté.
+    public native func Tessera_VehiculeVerbe(cible: EntityID, verbe: Uint8, param: Uint32) -> Bool;
+
+    // Ce vehicule est-il connu du SERVEUR ? Faux pour la circulation native.
+    public native func Tessera_EstVehiculeReseau(cible: EntityID) -> Bool;
+
+    // ── LA CASSE VUE PAR LES TÉMOINS ────────────────────────────────────────────────────────
+    //
+    // Le serveur diffuse la casse à tout le monde ; chez un témoin, le moteur ne la calcule pas
+    // (il ne simule pas cette voiture, F-VEH-041). On lui donne le nombre, il déroule le reste.
+    //
+    // ⚠️ `Tessera_DegatsConnus` est le GARDE-FOU CONTRE L'ÉCHO : un témoin qui applique
+    // redéclenche `ReactToHPChange` chez lui, et s'il conduit il renverrait ce qu'il vient de
+    // recevoir. La casse étant MONOTONE, l'aller-retour ne pourrait que la faire MONTER — les
+    // voitures se dégraderaient toutes seules. On ne rapporte que ce que le serveur ignore encore.
+    public native func Tessera_DegatsConnus(cible: EntityID) -> Int32;
+    public native func Tessera_DegatsEnAttente() -> Int32;
+    public native func Tessera_DegatsVehicule() -> EntityID;
+    public native func Tessera_DegatsValeur() -> Int32;
+    public native func Tessera_DegatsDefiler() -> Void;
+
+    // ── LE COFFRE ────────────────────────────────────────────────────────────────────────────
+    //
+    // Lecture : le serveur ENONCE le contenu, le client s'y aligne (meme doctrine que le sac).
+    // ⚠️ `Tessera_CoffreSeq` est un COMPTEUR, pas un booleen « recu » : un coffre s'ouvre
+    // plusieurs fois, et deux ouvertures identiques seraient indiscernables par un drapeau.
+    public native func Tessera_CoffreSeq() -> Int32;
+    public native func Tessera_CoffreVehicule() -> EntityID;
+    public native func Tessera_CoffreCapacite() -> Int32;
+    public native func Tessera_CoffreTaille() -> Int32;
+    public native func Tessera_CoffreItemId(index: Int32) -> String;
+    public native func Tessera_CoffreItemQuantite(index: Int32) -> Int32;
+
+    // Rapport : trois natifs plutot qu'un prenant des tableaux — le marshalling d'un
+    // `array<String>` par RTTI est exactement le genre d'endroit ou l'on echoue EN SILENCE.
+    public native func Tessera_CoffreViderRapport() -> Void;
+    public native func Tessera_CoffreAjouterAuRapport(item: String, quantite: Int32) -> Void;
+    public native func Tessera_CoffreEnvoyerRapport() -> Bool;
+
     // ── ASCENSEURS (ADR 0012) ───────────────────────────────────────────────────────────────
     //
     // `cabine` est l'EntityID STATIQUE de la cabine, LU sur l'entité et jamais recalculé : le hash
@@ -343,12 +398,63 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_AscenseurElapsedMs() -> Int32;
     public native func Tessera_AscenseurRetirer() -> Void;
 
+    // ── APPAREILS DU MONDE (portes, portiques, contenants…) — spec 2026-08-26 ─────────────────
+    //
+    // Le guichet du PULL. Le C++ ne pousse pas : les trois voies de push echouent a la resolution
+    // de nom AU RUNTIME, en silence (voir l'en-tete de `ElevatorRelaisReseau.reds`). Le client
+    // vient donc chercher — `Tessera_AppareilEnAttente`, les quatre champs de la tete de file,
+    // puis `Tessera_AppareilRetirer` pour avancer.
+    public native func Tessera_AppareilTotalRecus() -> Int32;
+    public native func Tessera_AppareilEnAttente() -> Int32;
+    public native func Tessera_AppareilId() -> EntityID;
+    public native func Tessera_AppareilFamille() -> Int32;
+    public native func Tessera_AppareilEtat() -> Int32;
+    public native func Tessera_AppareilProprietaire() -> Int32;
+    // Rend `false` quand la file est vide. Le `Bool` n'est pas decoratif : une `RTTI_METHOD` en
+    // `void` a deja ete compilee, liee et ABSENTE du binaire (F-PLF-020), ce qui fait tomber tout
+    // `r6/scripts` sans un mot.
+    public native func Tessera_AppareilRetirer() -> Bool;
+    /// Rapporte au serveur l'etat ou le joueur vient de laisser un appareil. Rend `true` si le
+    /// message est PARTI — jamais qu'il a ete accepte (doctrine D1) : le serveur revalide la
+    /// famille, l'etat, la distance et les droits.
+    public native func Tessera_RapporterAppareil(device: EntityID, famille: Int32, action: Int32, etat: Int32) -> Bool;
+
+    /// ⭐ LE CANAL DE COMMANDE D'ADMINISTRATION — il n'existait PAS avant le 2026-08-26.
+    ///
+    /// Le serveur comprend `ClientMsg::AdminCommand` depuis toujours, et aucun client ne l'a jamais
+    /// emis : `/promote`, `/grant`, `/ban`, `/vehicule`, `/besoins`, `/porte` etaient tous
+    /// injoignables depuis le jeu. Meme mode de panne que les sept fils debranches du chantier
+    /// « autorite totale » — un producteur complet dont la sortie n'allait nulle part.
+    ///
+    /// ⚠️ N'ACCORDE AUCUN DROIT. Le serveur revalide le rang et les permissions de l'appelant
+    /// avant d'executer quoi que ce soit ; ceci n'ouvre que le tuyau.
+    public native func Tessera_EnvoyerCommandeAdmin(texte: String) -> Bool;
+
 
     // Le joueur local vient d'entrer (monte=true) ou de sortir d'une cabine. Sert au RENDU chez
     // les autres : le serveur relaie le porteur, et l'observateur accroche l'interpolation de
     // l'avatar à la cabine au lieu de le laisser flotter entre deux snapshots (ADR 0039).
     // Aucune coordonnée n'est concernée — la position reste en monde des deux côtés.
     public native func Tessera_MonterAscenseur(cabine: EntityID, monte: Bool) -> Bool;
+
+    // Un joueur DISTANT est-il dans cette cabine ? La notion d'occupation PARTAGÉE qui manque au
+    // moteur : le sien (`IsPlayerInsideLift`) ne connaît que le joueur local, si bien qu'une cabine
+    // pleine est « vide » pour tous ceux qui n'y sont pas — et la vitesse, les portes de palier et
+    // l'obstruction en dépendent toutes les trois.
+    public native func Tessera_CabineOccupee(cabine: EntityID) -> Bool;
+
+    // Publie la hauteur VIVANTE du plancher d'une cabine (composant `movingPlatform`).
+    //
+    // ⭐ Le C++ ne sait pas atteindre un composant d'entité, et l'entité de l'ascenseur ne bouge PAS
+    // pendant le trajet (F-ASC-032) : ce natif est le SEUL chemin par lequel le rendu apprend où se
+    // trouve réellement le plancher. Sans lui, la verticale d'un passager distant vient du réseau,
+    // donc avec un retard, donc elle sautille — d'autant plus que la cabine va vite.
+    public native func Tessera_PoserHauteurCabine(cabine: EntityID, z: Float) -> Bool;
+
+    // Confie le COMPOSANT du plancher, une fois pour toutes. Le rendu lit alors sa hauteur dans SA
+    // frame, au lieu de l'échantillonner à 20 Hz et d'en reconstituer la pente — c'est ce qui
+    // supprime la dernière source de tremblement d'un passager distant.
+    public native func Tessera_PoserPlancherCabine(cabine: EntityID, plancher: ref<IScriptable>) -> Bool;
 
     // L'EntityID du N-ième avatar réseau, pour les PARCOURIR sans que le joueur en vise un.
     // Le compte se lit avec `Tessera_GetVisiblePlayerCount` — même table, donc un seul natif de plus.
@@ -375,6 +481,15 @@ public native class NetworkGameSystem extends IGameSystem {
     // mémoriser l'`EntityID`, jamais l'index.
     public native func Tessera_CompteAvatarsJoueurs() -> Int32;
     public native func Tessera_AvatarJoueurParIndex(index: Int32) -> EntityID;
+
+    // Le roster des VÉHICULES serveur. Mêmes règles que la paire ci-dessus.
+    //
+    // ⛔ Sa raison d'être : `GetEntitiesAroundObject` — la requête spatiale du JEU — ne rend AUCUNE
+    // entité née du netcode (mesuré le 2026-08-26 : 128 entités autour du joueur, zéro véhicule et
+    // zéro joueur, avec un avatar distant à 4 m et une voiture à 1 m). Toute désignation par
+    // proximité est donc aveugle à nos objets ; il faut demander au netcode.
+    public native func Tessera_CompteVehiculesReseau() -> Int32;
+    public native func Tessera_VehiculeReseauParIndex(index: Int32) -> EntityID;
 
     // ── Le sac AUTORITAIRE (ADR 0026) — le serveur énonce, le client s'aligne ────────────────
     //
@@ -683,6 +798,50 @@ public native class NetworkGameSystem extends IGameSystem {
         let ev = new LookAtAddEvent();
         ev.SetStaticTarget(cible);
         ev.SetStyle(animLookAtStyle.Normal);
+
+        // ── ⭐ LE POINTAGE : LE BUSTE SUIT LA VISÉE, MAIS SEULEMENT ARME EN MAIN ──────────────
+        //
+        // Lucas, 2026-08-25 : *« on voit l'arme en main. Par contre, quand on pointe, ça ne
+        // fonctionne pas. »* L'arme est tenue (F-PLY-314) ; l'avatar ne l'oriente pas.
+        //
+        // ⭐ Pourquoi par ici et pas par une feature. Le graphe déclare `NonCombatAim` et
+        // `ShootAction`, mais ce sont des features — et F-PLY-138 a mesuré qu'un pantin piloté de
+        // l'extérieur ne consomme pas les écritures d'état. Le regard, LUI, atteint déjà l'avatar
+        // (F-PLY-110). Le même événement sait orienter le buste ; une arme tenue en main le suit.
+        //
+        // ⚠️ ON N'AJOUTE QUE `Chest`, ET SURTOUT PAS LA RECETTE DE RÉACTION DE CDPR. Celle-ci
+        // (`reactionComponent.script:4657`) met `Head` à `weight 0.1` / `suppress 1.0` : elle
+        // **supprime la tête** pour ne tourner que le buste — le coup d'œil d'un passant. C'est
+        // précisément l'erreur d'août qui a produit « la tête ne tourne pas ». Ici on veut les
+        // deux : la tête regarde, le buste s'oriente.
+        //
+        // ⚠️ `weight = 2.0` est le poids que CDPR donne au buste dans sa propre recette — repris
+        // tel quel plutôt qu'inventé. `suppress = 0.0` : on n'enlève rien.
+        //
+        // ⚠️ ARME EN MAIN SEULEMENT. Au repos, un buste qui pivote avec le regard donnerait une
+        // posture de combat permanente à tous les avatars du serveur.
+        //
+        // ⚠️ NON MESURÉ — écrit le 2026-08-26 pendant que le jeu était tenu par un autre agent.
+        // L'effet ne se lit sur aucun compteur : consigne d'observation « regarde le BUSTE de
+        // l'avatar d'en face pendant qu'il vise sur le côté ».
+        if this.Tessera_ArmeDeLEntite(entityId) != TDBID.None() {
+            // ⚠️ CORRIGÉ le 2026-08-26 (chantier appareils) — le fichier ne compilait pas, et
+            // faisait donc tomber TOUT `r6/scripts`. Deux défauts sur la même ligne :
+            //   · le nom `animLookAtPartRequest` est celui du dump RTTI ; le nom SCRIPTÉ est
+            //     `LookAtPartRequest` (`lookAtEvents.script:152`, `reactionComponent.script:4628`).
+            //     C'est le piège nommé en tête de la skill `tessera-client-mod-redscript` ;
+            //   · c'est une STRUCT, pas une classe — elle se déclare, elle ne se `new` pas. Le
+            //     témoin qui marche est `reactionComponent.script:4628`, qui pose exactement ces
+            //     quatre champs de la même façon.
+            let buste: LookAtPartRequest;
+            buste.partName = n"Chest";
+            buste.weight = 2.0;
+            buste.suppress = 0.0;
+            buste.mode = 0;
+            let parties: array<LookAtPartRequest>;
+            ArrayPush(parties, buste);
+            ev.SetAdditionalPartsArray(parties);
+        }
         ev.request.limits.softLimitDegrees = 360.0;
         ev.request.limits.hardLimitDegrees = 270.0;
         ev.request.limits.backLimitDegrees = 210.0;
@@ -863,6 +1022,29 @@ public native class NetworkGameSystem extends IGameSystem {
     // trompeur que la doctrine D1 interdit de compter comme un effet.
     public func ApplyServerConfig(flat: String, value: Float) -> Bool {
         if StrLen(flat) == 0 {
+            return false;
+        }
+        // ── L'ESPACE DE NOMS `Tessera.` : UNE RÈGLE DU SERVEUR, PAS UN FLAT TWEAKDB ──────────
+        //
+        // Ajouté le 2026-08-26 pour donner à l'opérateur un interrupteur SERVEUR sur des règles
+        // de jeu qui ne sont pas des valeurs TweakDB — la première étant l'hostilité des PNJ.
+        //
+        // ⚠️ POURQUOI RÉUTILISER CE CANAL plutôt qu'en ouvrir un. `ConfigSync` transporte déjà un
+        // couple (chemin, flottant) du serveur vers chaque client, à l'entrée en session et à
+        // chaque changement de configuration, et il est MESURÉ (F-PLF-018). Une règle n'a besoin
+        // de rien de plus. Ouvrir un second canal aurait coûté un message de protocole, une
+        // régénération de l'en-tête C++ du fork et une passe de la porte GNS — pour transporter
+        // exactement la même chose.
+        //
+        // ⚠️ Le préfixe est une CONVENTION entre `config-overrides.toml` et ce fichier, et rien
+        // ne la vérifie. Le filet est le journal : un `Tessera.X` que personne n'interprète tombe
+        // dans le `SetFlat` ci-dessous, échoue, et se voit dans « ConfigSync : « X » refuse par
+        // TweakDB ». À lire après tout ajout de règle.
+        if StrBeginsWith(flat, "Tessera.") {
+            let regles = TesseraReglesServeur.Get(GetGameInstance());
+            if IsDefined(regles) {
+                return regles.Poser(flat, value);
+            }
             return false;
         }
         if !TweakDBManager.SetFlat(TDBID.Create(flat), ToVariant(value)) {

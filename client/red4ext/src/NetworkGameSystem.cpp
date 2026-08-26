@@ -49,6 +49,7 @@ int g_robotPhase = -1;
 // Asseoir les avatars distants sur les sieges (F-VEH-031, mesure en jeu le 2026-08-14).
 #include "RED4ext/Scripting/Natives/Generated/game/MountEventData.hpp"
 #include "RED4ext/Scripting/Natives/Generated/game/WorkspotGameSystem.hpp"
+#include "RED4ext/Scripting/Natives/Generated/game/MountAIEvent.hpp"
 // Sonde F-PLY-101 : les types DECLARES par le script pour la customisation. Un handle de type de
 // base ne se lie pas et echoue en SILENCE (lecon de `SystemeWorkspot`, mesuree le 2026-08-14).
 #include "RED4ext/Scripting/Natives/Generated/game/ui/ICharacterCustomizationState.hpp"
@@ -405,7 +406,9 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
 
     PollIncomingMessages();
     TrackPlayerPosition(frame_info.deltaTime);
-    RendreAvatarsDistants(frame_info.deltaTime);
+    // `RendreAvatarsDistants` est parti en `PostBuckets` (voir `OnRegisterUpdates`) : l'appeler ici
+    // le ferait tourner AVANT que les plateformes ne bougent, et rendrait le retard d'une frame
+    // qu'on vient precisement de supprimer.
 
     // Rapport d'heure locale — l'autre moitie de l'horloge partagee. Le serveur DECIDE l'heure
     // (`WorldState`, descendant) ; ce rapport lui dit ce que le client affiche VRAIMENT, pour
@@ -442,6 +445,31 @@ void NetworkGameSystem::OnRegisterUpdates(RED4ext::UpdateRegistrar* aRegistrar)
     aRegistrar->RegisterUpdate(RED4ext::UpdateTickGroup::FrameBegin, this, "NetworkUpdate",
         [this](RED4ext::FrameInfo &frame_info, RED4ext::JobQueue &job_queue) {
             this->OnNetworkUpdate(frame_info, job_queue);
+    });
+
+    // ── ⭐ LE RENDU DES AVATARS PASSE APRES LE MOUVEMENT DES PLATEFORMES ────────────────────
+    //
+    // L'ordre du moteur (`SystemUpdate.hpp`) est :
+    //     FrameBegin → EntityUpdateState → Buckets (physique, ANIMATION — LA CABINE BOUGE ICI)
+    //                → PostBuckets → CameraUpdate → … → PreRenderUpdate
+    //
+    // Tout notre travail reseau tournait en `FrameBegin`, donc AVANT que la cabine ne bouge. On
+    // placait donc chaque passager d'apres la hauteur de plancher de la frame PRECEDENTE : un
+    // retard d'une image, constant, qui vaut `vitesse × dt` — 4 cm a 2,5 m/s et 60 fps, et
+    // proportionnellement plus quand la cabine va vite.
+    //
+    // ⚠️ ET CE RETARD EST EXACTEMENT CE QU'ON VOIT. Sur une capture prise en pleine descente, le
+    // DECOR est net comme une lame (il est immobile par rapport a la camera, qui descend avec la
+    // cabine) et l'AVATAR est mou. Il n'y a qu'une facon d'etre mou a cote d'un decor net : bouger
+    // par rapport a la camera. Le « flou » n'est donc pas un effet de rendu — c'est du MOUVEMENT
+    // RELATIF RESIDUEL, et le retard d'une frame en est la source permanente.
+    //
+    // On enregistre donc une SECONDE passe, en `PostBuckets` : la cabine y a deja bouge, on lit sa
+    // hauteur presente, et le passager est place au bon endroit dans la frame ou il est rendu.
+    // Le reseau, lui, reste en `FrameBegin` — il n'a aucune raison d'attendre la physique.
+    aRegistrar->RegisterUpdate(RED4ext::UpdateTickGroup::PostBuckets, this, "TesseraPassagers",
+        [this](RED4ext::FrameInfo &frame_info, RED4ext::JobQueue &) {
+            this->RendreAvatarsDistants(frame_info.deltaTime);
     });
 }
 
@@ -683,6 +711,8 @@ constexpr uint8_t kComportementATerre = 5;
 /// cette table qui permet de rejouer l'apparence a son attachement.
 std::deque<EtatAscenseurRecu> g_ascenseursRecus;
 int32_t g_ascenseursTotalRecus = 0;
+std::deque<EtatAppareilRecu> g_appareilsRecus;
+int32_t g_appareilsTotalRecus = 0;
 std::map<uint64_t, uint64_t> g_apparencesStatiques;
 /// Le ROSTER : de quoi RECREER un statique chez un client a qui il manque (spec 2026-08-09).
 /// Distinct de `g_apparencesStatiques`, qui ne sert qu'a corriger un PNJ deja present.
@@ -1480,8 +1510,14 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_InventaireAutoritaire:
                     HandleInventaireAutoritaire(env->msg_as_InventaireAutoritaire());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_DeviceStateMsg:
+                    HandleDeviceState(env->msg_as_DeviceStateMsg());
+                    break;
                 case cyberpunk_rp::protocol::ServerMsg_ElevatorStateMsg:
                     HandleElevatorState(env->msg_as_ElevatorStateMsg());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_InteractionOpen:
+                    HandleInteractionOpen(env->msg_as_InteractionOpen());
                     break;
                 default:
                     // Reste non câblé : CommandResult, PermissionSync,
@@ -1831,6 +1867,395 @@ static uint64_t g_vehiculeLocalMonte = 0;
 /// corrige au passage suivant ; la seule consequence est une frame de pilotage en trop.
 static std::set<uint64_t> g_avatarsAssis;
 
+/// Avatars distants PORTES par une cabine d'ascenseur. Meme nature que `g_avatarsAssis` : un cache
+/// de RENDU, pas une autorite. Alimente par `PlayerState.frame` (ADR 0039), le seul champ qui dise
+/// « ce joueur-la est dans la cabine X ».
+///
+/// ⚠️ Ce champ voyageait depuis le 2026-08-24 et n'etait lu NULLE PART cote client — meme trou que
+/// `sustained` (F-PLY-303).
+///
+/// ⚠️⚠️ ET L'HYPOTHESE QU'IL A D'ABORD SERVIE ETAIT FAUSSE. On a cru que le moteur PORTAIT le corps
+/// distant (« le personnage est bien attache »), et qu'il suffisait de lui laisser la verticale.
+/// Mesure du 2026-08-25, en cessant de corriger : l'avatar N'EST PAS porte. Il reste sur place
+/// pendant que la cabine part, se retrouve « de l'autre cote, dans le vide », puis disparait. Ce
+/// qui le raccrochait, c'etait la correction reseau elle-meme — mal, par a-coups, mais c'etait
+/// elle. « Attache » decrivait un corps rattrape vingt fois par seconde, pas un corps porte.
+///
+/// D'ou l'ANCRAGE : la position voulue devient « la cabine, MAINTENANT, plus l'ecart releve a
+/// l'embarquement ». Le retard du fil disparait par construction — la cabine est locale, on lit sa
+/// position presente — au lieu d'etre corrige apres coup.
+struct AncrageCabine
+{
+    /// `EntityID` de la cabine porteuse (`PlayerState.frame`).
+    uint64_t cabine = 0;
+    /// L'avatar est-il MONTE sur la cabine ? Tant qu'il l'est, on ne le pilote plus du tout —
+    /// c'est le moteur qui le porte, exactement comme un passager de vehicule (F-VEH-031).
+    bool monte = false;
+    /// Le montage a-t-il ete tente et REFUSE ? On ne le retente pas soixante fois par seconde ; on
+    /// retombe sur le placement, qui marche mais tremble.
+    bool montageRefuse = false;
+    /// Le nom d'emplacement retenu, pour le demontage.
+    RED4ext::CName emplacement;
+    /// ── L'ERREUR VISUELLE, ET SA DECROISSANCE ──────────────────────────────────────────────
+    /// On n'affiche jamais la cible brute : on affiche `cible + erreur`, et on fait DECROITRE
+    /// l'erreur. C'est le patron d'Unreal sur ses proxys simules et de Gaffer On Games
+    /// (« position error offset ») — il gomme le micro-bruit sans faire trainer les vraies
+    /// corrections, parce que le facteur depend de l'amplitude.
+    float errX = 0.0f;
+    float errY = 0.0f;
+    float errZ = 0.0f;
+    bool errValide = false;
+    /// Ecart VERTICAL entre l'avatar et le plancher de la cabine. Releve tant que la cabine est a
+    /// l'arret, fige pendant le trajet — c'est la grandeur « quasi constante » du patron relatif.
+    float dz = 0.0f;
+    bool ecartConnu = false;
+};
+
+/// Avatars distants portes par une cabine, et leur ancrage. Repond aussi a « cette cabine est-elle
+/// occupee ? » — la notion PARTAGEE d'occupation qui manque au moteur (`Tessera_CabineOccupee`).
+static std::map<uint64_t, AncrageCabine> g_porteurParAvatar;
+
+/// ── LA HAUTEUR VIVANTE DU PLANCHER, PUBLIEE PAR REDSCRIPT ──────────────────────────────────
+///
+/// Deux releves suffisent : la cabine suit une rampe (courbe `cosine`, quasi lineaire sur 50 ms),
+/// donc extrapoler entre deux points laisse une erreur de l'ordre du centimetre. On garde le
+/// PRECEDENT et le DERNIER, rien de plus.
+struct HauteurCabineSuivie
+{
+    /// Poignee sur le composant porteur. CONSERVEE mais PLUS LUE EN C++ : `GetLocalToWorld` par
+    /// `CallVirtual` rendait une transformee VIDE en se disant reussie (voir `HauteurCabineA`).
+    Red::Handle<RED4ext::IScriptable> composant;
+    /// La hauteur qui fait foi : publiee par redscript a 20 Hz, extrapolee lineairement ici.
+    double tAvant = 0.0;
+    double tDernier = 0.0;
+    float zAvant = 0.0f;
+    float zDernier = 0.0f;
+    bool deuxPoints = false;
+    /// Derniere hauteur rendue, pour savoir si la cabine bouge sans rien demander de plus.
+    float zPrecedent = 0.0f;
+    bool zPrecedentValide = false;
+    /// ⚠️ L'INSTANT DE CE RELEVE. Sans lui, le test « bouge-t-elle ? » est FAUX des qu'il y a plus
+    /// d'un passager — voir le pave dans `HauteurCabineA`.
+    double instantZPrecedent = -1.0;
+    /// Dernier etat de mouvement decide, rendu a tous les passagers de la meme frame.
+    bool enMouvement = false;
+};
+static std::map<uint64_t, HauteurCabineSuivie> g_hauteurCabine;
+
+/// Horloge LOCALE monotone, en secondes, avancee par `RendreAvatarsDistants`.
+///
+/// Volontairement distincte de `g_horlogeRendu` : celle-la vit sur la timeline SERVEUR et n'avance
+/// qu'au rythme des snapshots. La hauteur d'une cabine, elle, est une grandeur purement locale —
+/// la melanger a une horloge reseau reintroduirait le retard qu'on cherche precisement a supprimer.
+static double g_tempsLocalS = 0.0;
+
+void PoserHauteurCabine(uint64_t cabineHash, float z, double instant)
+{
+    if (cabineHash == 0)
+    {
+        return;
+    }
+    auto& h = g_hauteurCabine[cabineHash];
+
+    // TRACE D'ENTREE. Redscript lit 119.111 sur le composant (verifie au harnais) et le C++ voyait
+    // zero : la rupture est quelque part sur ce fil-la. On regarde ce qui ARRIVE, avant tout calcul.
+    static double s_dernierLog = -1000.0;
+    if (instant - s_dernierLog > 1.0)
+    {
+        s_dernierLog = instant;
+        SDK->logger->InfoF(PLUGIN, "[hauteur cabine %llu] RECU z=%.3f a t=%.3f", cabineHash,
+                           static_cast<double>(z), instant);
+    }
+
+    if (h.tDernier > 0.0 && instant <= h.tDernier)
+    {
+        return; // meme instant : rien de neuf, et ecraser confondrait les deux points.
+    }
+    h.tAvant = h.tDernier;
+    h.zAvant = h.zDernier;
+    h.tDernier = instant;
+    h.zDernier = z;
+    h.deuxPoints = h.tAvant > 0.0;
+}
+
+void PoserPlancherCabine(uint64_t cabineHash, const Red::Handle<RED4ext::IScriptable>& composant)
+{
+    if (cabineHash == 0)
+    {
+        return;
+    }
+    g_hauteurCabine[cabineHash].composant = composant;
+}
+
+bool HauteurCabineA(uint64_t cabineHash, double instant, float& sortie, bool& enMouvement)
+{
+    const auto it = g_hauteurCabine.find(cabineHash);
+    if (it == g_hauteurCabine.end())
+    {
+        return false;
+    }
+    auto& h = it->second;
+
+    // ⚠️⚠️⚠️ LA « VOIE DIRECTE » A ETE RETIREE : ELLE RENDAIT ZERO, EN SE DISANT REUSSIE.
+    //
+    // Elle lisait le composant `movingPlatform` en C++ :
+    //     RED4ext::WorldTransform t = {};
+    //     if (Red::CallVirtual(h.composant, "GetLocalToWorld", t)) { ... t.Position ... }
+    //
+    // MESURE DU 2026-08-26, trois nombres cote a cote pendant un trajet reel :
+    //     plancher=-0.000 (lu=1 bouge=0) dz=119.097 cible=119.097 reel=119.097 ecart=0.000
+    //
+    // `lu=1` — donc l'appel s'est dit REUSSI. Et `plancher = 0`. La transformee revenait a sa
+    // valeur d'initialisation, et personne ne le signalait. Consequence en cascade :
+    //   · `dz` absorbait la hauteur ABSOLUE (119,097 au lieu d'un ecart au plancher) ;
+    //   · `cible = 0 + 119.097` devenait une CONSTANTE ;
+    //   · l'avatar etait donc epingle a une altitude fixe, et ne suivait la cabine EN RIEN.
+    //
+    // C'est exactement ce que Lucas decrivait : « on passe sous le plancher PROGRESSIVEMENT », et
+    // le sens s'inverse entre montee et descente — parce que c'est la CABINE qui s'eloigne d'un
+    // corps immobile, pas le corps qui derive.
+    //
+    // ⚠️ ET C'EST LA TROISIEME FOIS DE LA JOURNEE QUE LE MEME PIEGE MORD : `Red::CallVirtual` rend
+    // `true` quand l'appel est DISPATCHE, pas quand il a produit un resultat. Lucas l'avait attrape
+    // sur le montage (« t'es sur que le mount est bien applique ? ») ; je ne l'ai pas cherche ici.
+    // Le tour de plus : ici la valeur de repli (zero) est PLAUSIBLE pour une coordonnee, donc rien
+    // ne detonne — alors qu'un `false` aurait saute aux yeux.
+    //
+    // `ecart = 0.000` dit la seconde moitie, et elle est bonne : le PLACEMENT est parfait. On
+    // posait le corps exactement ou on le demandait. On le demandait au mauvais endroit.
+    //
+    // On garde donc la seule voie qui produit de vrais nombres : la hauteur publiee par redscript,
+    // ou `GetLocalToWorld().GetTranslation().Z` est evalue par le moteur lui-meme.
+    // ── REPLI : la hauteur publiee a 20 Hz ─────────────────────────────────────────────────
+    if (!h.deuxPoints)
+    {
+        return false;
+    }
+    const double duree = h.tDernier - h.tAvant;
+    if (duree <= 0.0)
+    {
+        return false;
+    }
+    const double pente = (h.zDernier - h.zAvant) / duree;   // m/s
+    enMouvement = std::fabs(pente) > 0.05;
+
+    // ⚠️ EXTRAPOLATION BORNEE. Si redscript cesse de publier (cabine de-streamee, tick mort), on ne
+    // prolonge pas la rampe indefiniment — ce serait envoyer l'avatar sous la carte. Au-dela de
+    // trois periodes de publication, on rend la derniere hauteur connue telle quelle.
+    static constexpr double kProlongementMaxS = 0.15;
+    double depuis = instant - h.tDernier;
+    if (depuis < 0.0) { depuis = 0.0; }
+    if (depuis > kProlongementMaxS) { depuis = kProlongementMaxS; }
+    sortie = h.zDernier + static_cast<float>(pente * depuis);
+    return true;
+}
+
+bool NetworkGameSystem::Tessera_PoserHauteurCabine(RED4ext::ent::EntityID cabine, float z)
+{
+    if (!cabine.IsDefined())
+    {
+        return false;
+    }
+    PoserHauteurCabine(cabine.hash, z, g_tempsLocalS);
+    return true;
+}
+
+bool NetworkGameSystem::Tessera_PoserPlancherCabine(RED4ext::ent::EntityID cabine,
+                                                   const Red::Handle<RED4ext::IScriptable>& plancher)
+{
+    if (!cabine.IsDefined() || !plancher)
+    {
+        return false;
+    }
+    PoserPlancherCabine(cabine.hash, plancher);
+    return true;
+}
+
+// Declarations avancees : ces deux aides sont definies plus bas (chemin vehicule), et le montage
+// de cabine les reutilise telles quelles plutot que d'en dupliquer la logique.
+static RED4ext::IScriptable* FacadeMontage();
+static Red::Handle<RED4ext::game::MountEventData> ContexteMontage(RED4ext::ent::EntityID vehicule,
+                                                                  RED4ext::CName siege,
+                                                                  bool instantane);
+static RED4ext::IScriptable* SystemeWorkspot();
+static std::optional<Red::Handle<RED4ext::GameObject>> ObjetDe(RED4ext::ent::EntityID id);
+
+static void DescendreDeCabine(RED4ext::ent::EntityID avatar, uint64_t cabineHash,
+                              RED4ext::CName emplacement);
+
+/// ── MONTER UN AVATAR SUR UNE CABINE ────────────────────────────────────────────────────────
+///
+/// ⭐ L'IDEE EST DE LUCAS (2026-08-26), et elle est juste : « si tu fais un mouvement de
+/// deplacement plutot qu'une mise a jour x fois par seconde, il n'y a pas de flou ». Le moteur a
+/// exactement ce mecanisme, et on l'utilise DEJA — c'est celui des passagers de vehicule
+/// (F-VEH-031 : « il est synchro quand je roule », sans le moindre tremblement).
+///
+/// Un ordre UNIQUE attache le corps a son porteur ; ensuite c'est le moteur qui le deplace. Plus
+/// aucune ecriture de position, donc plus rien a flouter, et un portage exact a n'importe quelle
+/// vitesse — ce que le placement image par image ne pourra jamais donner.
+///
+/// `preservePositionAfterMounting = true` : on attache OU IL EST, on n'assoit personne.
+///
+/// ⚠️ NON MESURE AVANT CE JOUR : que la cabine ACCEPTE un montage. Elle porte bien un
+/// `gameOccupantSlotComponent` (releve de composants du 2026-08-25), donc le mecanisme est prevu
+/// cote donnees ; mais aucun nom d'emplacement n'est connu. On essaie donc, dans l'ordre,
+/// l'emplacement VIDE (attache sans siege) puis quelques noms plausibles, et on JOURNALISE celui
+/// qui passe. Un refus n'est pas une panne : on retombe sur le placement d'avant.
+static bool MonterSurCabine(uint64_t avatarReseau, RED4ext::ent::EntityID avatar,
+                            uint64_t cabineHash, RED4ext::CName& emplacementRetenu)
+{
+    auto* facility = FacadeMontage();
+    if (facility == nullptr)
+    {
+        return false;
+    }
+    const RED4ext::ent::EntityID cabine{ cabineHash };
+
+    // Aucun nom d'emplacement de cabine n'est connu. On essaie donc, et on JOURNALISE celui qui
+    // passe les DEUX couches — c'est la sonde et le correctif dans le meme geste. `main_slot` et
+    // `AppearanceSlot` viennent du relevé de composants réel de la cabine ; les noms de sièges
+    // viennent du chemin véhicule, au cas où `OccupantSlots` partagerait sa convention.
+    static const RED4ext::CName candidats[] = {
+        RED4ext::CName(),                    // aucun siege : simple attache
+        RED4ext::CName("main_slot"),
+        RED4ext::CName("occupant_slot_0"),
+        RED4ext::CName("seat_front_left"),
+        RED4ext::CName("passenger"),
+        RED4ext::CName("elevator_slot"),
+    };
+
+    for (const auto& nom : candidats)
+    {
+        auto requete = Red::MakeScriptedHandle<RED4ext::game::mounting::MountingRequest>();
+        if (!requete)
+        {
+            return false;
+        }
+        requete->lowLevelMountingInfo.childId = avatar;
+        requete->lowLevelMountingInfo.parentId = cabine;
+        requete->lowLevelMountingInfo.slotId.id = nom;
+        requete->preservePositionAfterMounting = true;
+        requete->mountData = ContexteMontage(cabine, nom, /*instantane=*/true);
+
+        if (!Red::CallVirtual(facility, "Mount", requete))
+        {
+            continue;
+        }
+
+        // ── COUCHE C — CELLE QUI REMET LE CORPS A L'ECRAN ──────────────────────────────────
+        //
+        // Le montage seul etablit l'occupation et REND LE CORPS INVISIBLE (mesure du 2026-08-26).
+        // Le chemin vehicule le disait deja : « COUCHE C. Sans elle, l'occupation est correcte
+        // partout SAUF a l'ecran. » Ce qui la fournit est `WorkspotSystem.MountToVehicle`, qui
+        // vise un composant nomme `OccupantSlots` — et la cabine EN PORTE UN, exactement sous ce
+        // nom (releve de composants, F-ASC-032). Le nom d'EMPLACEMENT dans ce composant, lui,
+        // reste inconnu : on essaie, et on journalise celui qui prend.
+        // ⚠️⚠️ TROIS ECHECS POSSIBLES, TROIS MESSAGES DIFFERENTS.
+        //
+        // La version precedente les confondait tous les trois en un seul « NON RENDU », et Lucas a
+        // eu raison de ne pas y croire : `Red::CallVirtual` rend `true` si l'appel a ete DISPATCHE,
+        // PAS si la methode a reussi — le chemin vehicule le dit dans son propre message (« Mount
+        // REFUSE — la methode n'a pas ete trouvee »). Un `false` peut donc vouloir dire « le moteur
+        // refuse » AUTANT que « je ne l'ai jamais appele ».
+        //
+        // Et il y avait pire : si la resolution de la cabine en `GameObject` echoue, la couche C
+        // n'est meme pas tentee — et l'ancien code journalisait quand meme « NON RENDU ».
+        // « Accepte ≠ execute » (D1), applique a mon propre instrument.
+        bool corpsPlace = false;
+        const char* pourquoiPas = "?";
+        auto* workspot = SystemeWorkspot();
+        if (workspot == nullptr)
+        {
+            pourquoiPas = "systeme workspot INJOIGNABLE";
+        }
+        else
+        {
+            const auto oCabine = ObjetDe(cabine);
+            const auto oCorps = ObjetDe(avatar);
+            if (!oCabine.has_value())
+            {
+                pourquoiPas = "la CABINE ne se resout pas en GameObject — couche C jamais appelee";
+            }
+            else if (!oCorps.has_value())
+            {
+                pourquoiPas = "le CORPS ne se resout pas en GameObject — couche C jamais appelee";
+            }
+            else
+            {
+                RED4ext::DynArray<RED4ext::ent::EntityID> aucunSync{};
+                RED4ext::DynArray<RED4ext::CName> aucuneVar{};
+                corpsPlace = Red::CallVirtual(workspot, "MountToVehicle", *oCabine, *oCorps,
+                                              0.0f, 0.0f, RED4ext::CName("OccupantSlots"), nom,
+                                              aucunSync, RED4ext::CName(), aucuneVar);
+                pourquoiPas = corpsPlace
+                    ? "appel DISPATCHE"
+                    : "MountToVehicle non dispatche — signature ou methode absente, PAS un refus";
+            }
+        }
+
+        if (corpsPlace)
+        {
+            emplacementRetenu = nom;
+            SDK->logger->InfoF(PLUGIN,
+                "[cabine %llu] avatar %llu : Mount ET couche C dispatches — emplacement '%s'. "
+                "⚠️ 'dispatche' n'est pas 'a marche' : le verdict est a l'ecran.",
+                cabineHash, avatarReseau, nom.ToString() ? nom.ToString() : "(vide)");
+            return true;
+        }
+
+        // ⚠️ LE REPLI EST OBLIGATOIRE, ET IL EST LA PARTIE QUI COMPTE. Monte sans couche C, le
+        // corps est INVISIBLE — bien pire que flou. On defait donc immediatement le montage plutot
+        // que de laisser un essai rate a l'ecran. Un test qui echoue doit revenir a l'etat d'avant.
+        DescendreDeCabine(avatar, cabineHash, nom);
+        SDK->logger->InfoF(PLUGIN,
+            "[cabine %llu] avatar %llu : emplacement '%s' — couche C KO : %s. Demonte, placement garde.",
+            cabineHash, avatarReseau, nom.ToString() ? nom.ToString() : "(vide)", pourquoiPas);
+    }
+
+    SDK->logger->InfoF(PLUGIN,
+        "[cabine %llu] avatar %llu : montage REFUSE sur tous les emplacements essayes — on garde le "
+        "placement image par image (il porte, mais il tremble)", cabineHash, avatarReseau);
+    return false;
+}
+
+/// Detache l'avatar de sa cabine. Appele quand le serveur cesse de le dire porte.
+static void DescendreDeCabine(RED4ext::ent::EntityID avatar, uint64_t cabineHash,
+                              RED4ext::CName emplacement)
+{
+    auto* facility = FacadeMontage();
+    if (facility == nullptr)
+    {
+        return;
+    }
+    const RED4ext::ent::EntityID cabine{ cabineHash };
+    auto requete = Red::MakeScriptedHandle<RED4ext::game::mounting::UnmountingRequest>();
+    if (!requete)
+    {
+        return;
+    }
+    requete->lowLevelMountingInfo.childId = avatar;
+    requete->lowLevelMountingInfo.parentId = cabine;
+    requete->lowLevelMountingInfo.slotId.id = emplacement;
+    requete->mountData = ContexteMontage(cabine, emplacement, true);
+    Red::CallVirtual(facility, "Unmount", requete);
+}
+
+bool CabinePorteQuelquun(uint64_t cabineHash)
+{
+    if (cabineHash == 0)
+    {
+        return false;
+    }
+    for (const auto& [avatar, ancrage] : g_porteurParAvatar)
+    {
+        if (ancrage.cabine == cabineHash)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Inverse exact de `IndexDeSiege` (PlayerActionTracker.cpp). Les deux tables DOIVENT rester
 /// jumelles : le serveur ne transporte qu'un index, et un decalage assied les gens ailleurs.
 static RED4ext::CName SiegeDeIndex(uint8_t index)
@@ -2009,24 +2434,109 @@ static void AsseoirAvatar(uint64_t avatarReseau, RED4ext::ent::EntityID vehicule
         return;
     }
 
+    // ── COUCHE C', LA RECETTE DU JEU POUR UN NON-JOUEUR (2026-08-26) ────────────────────────
+    //
+    // MESURE QUI L'A MOTIVEE. Avec la seule couche C, le journal du temoin repetait :
+    //
+    //     [occupation] avatar 1 -> vehicule 562949953421314 siege 0
+    //                  (corps NON PLACE, instantane) — MountToVehicle introuvable OU refuse
+    //
+    // et la capture prise depuis le siege arriere montrait **le siege conducteur VIDE**, alors que
+    // le serveur y assied bien le joueur 1 et que le temoin recoit l'occupation. Trois couches sur
+    // quatre marchaient ; c'est le corps qui ne suivait pas.
+    //
+    // FICHE DU CONSOMMATEUR (ADR 0034), lue dans les scripts du JEU, pas devinee :
+    //
+    //   · cible          `MountAIEvent` (nom `'Mount'`) poste sur le PANTIN
+    //   · lecteurs       `aiComponent.OnVehicleAssign` + l'arbre de comportement natif
+    //   · alimente       l'assise ET l'animation d'entree d'un occupant NON-JOUEUR
+    //   · domaine        `slotName` = un slot reel du vehicule ; `mountParentEntityId` = le vehicule
+    //   · hors domaine   le jeu teste `IsSlotOccupied` AVANT d'emettre — il n'emet pas sinon
+    //
+    // ⭐ CE QUI REND CETTE VOIE DIFFERENTE, ET POURQUOI L'AUTRE REFUSAIT. `MountToVehicle` est
+    // appelee a TROIS endroits dans tout le jeu, et les trois sont dans `vehicleTransition.script`
+    // — la machine a etats du JOUEUR. Aucun PNJ ne passe par la. Le jeu assied ses PNJ autrement :
+    // `MountAssigendVehicle` (`aiVehicle.script:877`) construit un `MountEventData` et pose un
+    // `MountAIEvent` sur le pantin, et c'est tout. Nous appelions donc la fonction du joueur sur un
+    // corps qui n'en est pas un — un refus parfaitement normal, qui ressemblait a une panne.
+    //
+    // ⚠️ `ignoreHLS = true` et `isInstant = false` sont copies du jeu tels quels. Le premier evite
+    // que le systeme de « high level state » du pantin ne refuse la transition ; le second laisse
+    // l'animation d'entree se jouer — sauf quand on RATTRAPE un etat deja vieux, ou l'on veut au
+    // contraire le placement immediat (meme regle que la couche B).
+    //
+    // ⚠️ CE N'EST PAS PROUVE TANT QU'UN OEIL NE L'A PAS VU. `QueueEvent` ne rend rien
+    // d'exploitable : l'evenement PART, il n'est pas « accepte ». Le verdict est la capture du
+    // siege conducteur, et rien d'autre.
+    bool evenementAiPoste = false;
+    {
+        const auto oCorpsAi = ObjetDe(avatar);
+        if (oCorpsAi.has_value())
+        {
+            auto donneesAi = Red::MakeScriptedHandle<RED4ext::game::MountEventData>();
+            auto evt = Red::MakeScriptedHandle<RED4ext::game::MountAIEvent>();
+            if (donneesAi && evt)
+            {
+                donneesAi->slotName = nomSiege;
+                donneesAi->mountParentEntityId = vehicule;
+                donneesAi->isInstant = instantane;
+                donneesAi->ignoreHLS = true;
+                evt->name = RED4ext::CName("Mount");
+                evt->data = donneesAi;
+                evenementAiPoste = Red::CallVirtual(*oCorpsAi, "QueueEvent", evt);
+            }
+        }
+    }
+
     // COUCHE C. Sans elle, l'occupation est correcte partout SAUF a l'ecran.
+    //
+    // ⚠️ CHAQUE CAUSE D'ECHEC EST NOMMEE, et ce n'est pas du zele. Premiere version : un seul
+    // booleen `corpsPlace`, donc un seul message « NON PLACE » pour TROIS causes distinctes —
+    // systeme injoignable, entites non resolues, appel refuse. Mesure du 2026-08-26 : le journal
+    // repetait « corps NON PLACE » une fois par seconde pendant que Lucas testait, et il etait
+    // impossible de savoir laquelle des trois regarder. Un diagnostic qui ne distingue pas ses
+    // causes ne fait pas gagner de temps, il en fait perdre.
     bool corpsPlace = false;
-    if (auto* workspot = SystemeWorkspot())
+    const char* causeEchec = "";
+    auto* workspot = SystemeWorkspot();
+    if (workspot == nullptr)
+    {
+        causeEchec = " — WorkspotGameSystem INJOIGNABLE";
+    }
+    else
     {
         const auto oCaisse = ObjetDe(vehicule);
         const auto oCorps = ObjetDe(avatar);
-        if (oCaisse.has_value() && oCorps.has_value())
+        if (!oCaisse.has_value())
+        {
+            causeEchec = " — la CAISSE ne se resout pas en objet";
+        }
+        else if (!oCorps.has_value())
+        {
+            causeEchec = " — le CORPS ne se resout pas en objet";
+        }
+        else
         {
             RED4ext::DynArray<RED4ext::ent::EntityID> aucunSync{};
             RED4ext::DynArray<RED4ext::CName> aucuneVar{};
             corpsPlace = Red::CallVirtual(workspot, "MountToVehicle", *oCaisse, *oCorps, 0.0f, 0.0f,
                                           RED4ext::CName("OccupantSlots"), nomSiege, aucunSync,
                                           RED4ext::CName(), aucuneVar);
+            if (!corpsPlace)
+            {
+                // ⚠️ `CallVirtual` rend `false` pour DEUX raisons qu'il ne distingue pas : la
+                // methode n'a pas ete trouvee, ou elle a ete appelee et a refuse. On le dit tel
+                // quel plutot que de choisir — se tromper de moitie ici enverrait chercher un nom
+                // de methode alors que c'est le contrat de l'appel qui est en cause, ou l'inverse.
+                causeEchec = " — MountToVehicle introuvable OU refuse";
+            }
         }
     }
-    SDK->logger->InfoF(PLUGIN, "[occupation] avatar %llu -> vehicule %llu siege %u (corps %s, %s)",
+    SDK->logger->InfoF(PLUGIN,
+        "[occupation] avatar %llu -> vehicule %llu siege %u (corps %s, %s, evenement IA %s)%s",
         avatarReseau, vehiculeReseau, static_cast<uint32_t>(siege),
-        corpsPlace ? "place" : "NON PLACE", instantane ? "instantane" : "anime");
+        corpsPlace ? "place" : "NON PLACE", instantane ? "instantane" : "anime",
+        evenementAiPoste ? "poste" : "NON poste", causeEchec);
 }
 
 /// ASSIS(a) -> ASSIS(b). Une operation DEDIEE, pas une descente suivie d'une montee : decomposer
@@ -2249,6 +2759,38 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // (F-PLY-303, mesure du 2026-08-24 — recensement exhaustif des accesseurs `ps->...()`).
             // Toute la moitie « les autres me voient assis » reposait sur un canal a zero lecteur.
             pose.sustained = ps->sustained();
+            // QUI LE PORTE (ADR 0039). `frame` = 0 a pied, sinon l'EntityID de la cabine. On ne
+            // s'en sert pas pour placer le corps — la position reste une position MONDE — mais
+            // pour savoir qu'un AUTRE systeme le place deja, et lui laisser la verticale.
+            if (ps->frame() != 0)
+            {
+                auto& ancrage = g_porteurParAvatar[ps->id()];
+                if (ancrage.cabine != ps->frame())
+                {
+                    ancrage = AncrageCabine{};
+                    ancrage.cabine = ps->frame();
+                }
+            }
+            else
+            {
+                // ⚠️ DEMONTER AVANT D'OUBLIER. Effacer l'entree d'abord perdrait l'id de cabine et
+                // l'emplacement, donc le corps resterait attache a une cabine dont plus personne ne
+                // sait qu'il descend — un passager fantome qui suivrait la cabine a jamais.
+                const auto porte = g_porteurParAvatar.find(ps->id());
+                if (porte != g_porteurParAvatar.end())
+                {
+                    if (porte->second.monte)
+                    {
+                        const auto corps = m_networkedEntitiesLookup.find(ps->id());
+                        if (corps != m_networkedEntitiesLookup.end())
+                        {
+                            DescendreDeCabine(corps->second, porte->second.cabine,
+                                              porte->second.emplacement);
+                        }
+                    }
+                    g_porteurParAvatar.erase(porte);
+                }
+            }
             g_tamponsJoueurs[ps->id()].Pousser(snapshot->tick(), pose);
         }
     }
@@ -2387,6 +2929,60 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 // boucle mesuree le 2026-08-14 (voiture enfoncee, volant inerte) — cf. F-VEH-033
                 // et le commentaire de `RapporterMontage`. On la marque presente pour qu'elle
                 // echappe au despawn, et on ne touche pas a sa pose.
+                // ── LA CASSE : on ne pousse que les CHANGEMENTS ──────────────────────
+                //
+                // ⚠️ AVANT le court-circuit du vehicule monte et AVANT la bande morte : une
+                // voiture GAREE ne bouge jamais, et c'est precisement celle qu'on emboutit sans
+                // la conduire. Placer ce bloc plus bas ne l'aurait jamais vue changer — la meme
+                // faute de placement que la bande morte qui masquait la creation (F-VEH-039).
+                {
+                    // ⚠️⚠️ ON N'ENFILE QUE CE QUI EST APPLICABLE — mesure du 2026-08-26.
+                    //
+                    // Premiere version : on enfilait des la premiere vue du vehicule dans le
+                    // snapshot. Or a cet instant l'entite n'est PAS encore nee cote client, donc
+                    // `Tessera_DegatsVehicule()` rendait un `EntityID` vide, et redscript defilait
+                    // dans le vide. La trace le disait mot pour mot :
+                    //
+                    //     [Tessera/Casse] file : 1 en attente
+                    //     [Tessera/Casse] defile : cible definie=false casse=85
+                    //
+                    // Et la casse etait alors PERDUE POUR TOUJOURS : on ne pousse que sur
+                    // CHANGEMENT, et `m_degatsConnus` avait deja enregistre 85. Le vehicule
+                    // naissait une seconde plus tard, intact, et plus rien ne le corrigeait.
+                    //
+                    // Le correctif tient a l'ordre : on ne memorise la valeur QUE si on a pu
+                    // l'enfiler. Tant que l'entite n'existe pas, `m_degatsConnus` reste en arriere
+                    // — donc le tick suivant reessaie tout seul, sans compteur ni minuterie.
+                    //
+                    // ⚠️ Et defiler d'abord cote redscript reste JUSTE : une file qui se bouche sur
+                    // une entree intraitable est pire. Les deux gardes se complètent — ici on
+                    // n'enfile que le traitable, la-bas on ne bloque jamais sur l'intraitable.
+                    const uint8_t casse = vs->degats();
+                    const bool entiteConnue =
+                        m_networkedEntitiesLookup.find(vs->id()) != m_networkedEntitiesLookup.end();
+                    auto connu = m_degatsConnus.find(vs->id());
+                    const bool aChange = (connu == m_degatsConnus.end()) ? (casse > 0)
+                                                                        : (connu->second != casse);
+                    if (aChange && entiteConnue)
+                    {
+                        m_degatsAAppliquer.emplace_back(vs->id(), casse);
+                        if (connu == m_degatsConnus.end())
+                        {
+                            m_degatsConnus.emplace(vs->id(), casse);
+                        }
+                        else
+                        {
+                            connu->second = casse;
+                        }
+                    }
+                    else if (!aChange && connu == m_degatsConnus.end())
+                    {
+                        // Vehicule intact jamais vu : on retient qu'il est a zero, sans rien
+                        // enfiler. Sans ca, chaque tick le traiterait comme une premiere vue.
+                        m_degatsConnus.emplace(vs->id(), casse);
+                    }
+                }
+
                 if (vs->id() == g_vehiculeLocalMonte)
                 {
                     present.insert(vs->id());
@@ -3265,6 +3861,179 @@ void NetworkGameSystem::SendElevatorCall(uint64_t elevatorId, int32_t floor)
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
+// ── APPAREILS DU MONDE : le rapport montant (spec 2026-08-26) ───────────────────────────────
+void NetworkGameSystem::SendDeviceCall(uint64_t device, uint8_t famille, uint8_t action,
+    uint8_t etatObserve)
+{
+    if (m_pInterface == nullptr || device == 0)
+    {
+        return;
+    }
+    // `Reliable`, meme asymetrie que l'appel d'ascenseur : un rapport perdu ne se rattrape pas du
+    // cote montant (le serveur n'a rien a re-demander, il ne sait meme pas que cet appareil
+    // existe), alors qu'un etat descendant est reemis au prochain changement.
+    flatbuffers::FlatBufferBuilder builder;
+    const auto call = cyberpunk_rp::protocol::CreateDeviceCall(builder, device, famille, action,
+        etatObserve);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_DeviceCall, call.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+// ── LE CANAL DE COMMANDE D'ADMINISTRATION ───────────────────────────────────────────────────
+void NetworkGameSystem::SendAdminCommand(const char* texte)
+{
+    if (m_pInterface == nullptr || texte == nullptr || *texte == '\0')
+    {
+        return;
+    }
+    // `Reliable` : une commande d'administration perdue ne se rejoue pas toute seule, et son
+    // auteur n'a aucun moyen de savoir qu'elle s'est perdue — il verrait juste « rien ne s'est
+    // passe », ce qui est le pire retour possible sur un geste d'operateur.
+    flatbuffers::FlatBufferBuilder builder;
+    const auto texteOff = builder.CreateString(texte);
+    const auto cmd = cyberpunk_rp::protocol::CreateAdminCommand(builder, texteOff);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_AdminCommand, cmd.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+// ── LE COFFRE : L'ETAT QUI DESCEND, LE RAPPORT QUI REMONTE ──────────────────────────────────
+//
+// `InteractionOpen` etait EMIS par le serveur et lu par PERSONNE — le `default:` du routeur le
+// journalisait comme non cable. C'est le premier consommateur.
+//
+// ⚠️ `ui_kind` selectionne l'ecran. 7 = coffre de vehicule. Le catalogue n'est pas fige dans le
+// schema (« contenu differe ») : ce numero est donc une convention, et il vit ici ET dans
+// `gateway.rs`. Les deux doivent bouger ensemble.
+void NetworkGameSystem::HandleInteractionOpen(const cyberpunk_rp::protocol::InteractionOpen* msg)
+{
+    constexpr uint8_t kUiKindCoffre = 7;
+    if (msg == nullptr)
+    {
+        return;
+    }
+    if (msg->ui_kind() != kUiKindCoffre)
+    {
+        // ⚠️ On le DIT. Premiere version : `return` muet. Le serveur repondait, le client ne
+        // decodait pas, et RIEN nulle part ne disait pourquoi — ni erreur, ni message « non
+        // cable » (le routeur, lui, avait bien appele ce gestionnaire). Un chemin de sortie
+        // silencieux dans un decodeur est une session de diagnostic en attente.
+        SDK->logger->InfoF(PLUGIN, "[coffre] InteractionOpen ignore : ui_kind=%u (attendu %u)",
+            static_cast<unsigned>(msg->ui_kind()), static_cast<unsigned>(kUiKindCoffre));
+        return;
+    }
+    // Le contenu voyage en tampon IMBRIQUE dans le payload opaque. Verifie avant lecture : un
+    // payload tronque ou d'un autre type ferait lire de la memoire arbitraire.
+    const auto* brut = msg->payload();
+    if (brut == nullptr || brut->size() == 0)
+    {
+        return;
+    }
+    flatbuffers::Verifier v(brut->data(), brut->size());
+    if (!v.VerifyBuffer<cyberpunk_rp::protocol::CoffreContenu>(nullptr))
+    {
+        SDK->logger->Warn(PLUGIN, "[coffre] payload illisible — ignore");
+        return;
+    }
+    const auto* contenu = flatbuffers::GetRoot<cyberpunk_rp::protocol::CoffreContenu>(brut->data());
+
+    m_coffreAutoritaire.clear();
+    if (contenu->lignes() != nullptr)
+    {
+        for (const auto* l : *contenu->lignes())
+        {
+            if (l == nullptr || l->item() == nullptr)
+            {
+                continue;
+            }
+            ItemAutoritaire ligne;
+            ligne.id = l->item()->str();
+            ligne.quantite = l->quantite();
+            m_coffreAutoritaire.push_back(std::move(ligne));
+        }
+    }
+    m_coffreVehicule = contenu->vehicule();
+    m_coffreCapacite = contenu->capacite();
+    m_coffreSession = msg->session_id();
+    // EN DERNIER, comme le drapeau du sac : tant que la sequence n'a pas bouge, redscript ne
+    // touche a rien. L'incrementer avant de remplir laisserait une fenetre ou le coffre est vu
+    // VIDE — donc ou le joueur se ferait vider son coffre.
+    ++m_coffreSeq;
+
+    SDK->logger->InfoF(PLUGIN, "[coffre] vehicule=%llu capacite=%u lignes=%zu seq=%d",
+        m_coffreVehicule, static_cast<unsigned>(m_coffreCapacite), m_coffreAutoritaire.size(),
+        m_coffreSeq);
+}
+
+// Le rapport de fermeture : l'ETAT COMPLET du coffre, pas un delta. Meme raison que pour les
+// sieges et pour le sac — un modele par evenements suppose qu'aucun message ne se perd et
+// qu'aucun n'arrive deux fois, et les deux arrivent.
+void NetworkGameSystem::SendCoffreRapport()
+{
+    if (m_pInterface == nullptr)
+    {
+        return;
+    }
+    flatbuffers::FlatBufferBuilder interne;
+    std::vector<flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>> lignes;
+    lignes.reserve(m_coffreRapport.size());
+    for (const auto& l : m_coffreRapport)
+    {
+        lignes.push_back(cyberpunk_rp::protocol::CreateCoffreLigne(
+            interne, interne.CreateString(l.id), l.quantite));
+    }
+    // `capacite` reste a 0 dans ce sens : c'est une regle SERVEUR, et un client qui l'annoncerait
+    // ne serait pas cru. La renseigner ici donnerait l'illusion qu'elle se negocie.
+    const auto contenu = cyberpunk_rp::protocol::CreateCoffreContenu(
+        interne, m_coffreVehicule, 0, interne.CreateVector(lignes));
+    interne.Finish(contenu);
+
+    flatbuffers::FlatBufferBuilder builder;
+    const auto payload = builder.CreateVector(interne.GetBufferPointer(), interne.GetSize());
+    const auto choix = cyberpunk_rp::protocol::CreateInteractionChoice(
+        builder, m_coffreSession, 0, 0, payload);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_InteractionChoice, choix.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+
+    SDK->logger->InfoF(PLUGIN, "[coffre] rapport envoye : %zu ligne(s) pour le vehicule %llu",
+        m_coffreRapport.size(), m_coffreVehicule);
+}
+
+// ── LES VERBES VEHICULE : LE CANAL MONTANT QUI MANQUAIT ──────────────────────────────────────
+//
+// Verrou (9), revendication (10), radio (11), casse (12), coffre (14). Un seul emetteur pour les
+// cinq : ils ne different que par deux entiers, et cinq fonctions jumelles auraient surtout
+// multiplie les endroits ou se tromper de kind.
+//
+// ⚠️ `param` change de SENS selon le verbe, et c'est le schema qui fait foi (protocol.fbs) :
+//    9  -> 0 ouvre, non-nul ferme        (proprietaire uniquement, refus SERVEUR)
+//    10 -> ignore                        (sans effet si le vehicule a deja un proprietaire)
+//    11 -> station de radio, 0 = eteinte (CONDUCTEUR uniquement)
+//    12 -> casse 0..100, MONOTONE        (CONDUCTEUR uniquement)
+//    14 -> ignore                        (le serveur repond par InteractionOpen + CoffreContenu)
+void NetworkGameSystem::SendVehiculeVerbe(uint64_t target, uint8_t verbe, uint32_t param)
+{
+    if (m_pInterface == nullptr || target == 0)
+    {
+        return;
+    }
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ei = cyberpunk_rp::protocol::CreateEntityInteraction(builder, target, verbe, param);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_EntityInteraction, ei.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
 void NetworkGameSystem::SendElevatorMount(uint64_t elevatorId, bool mount)
 {
     if (m_pInterface == nullptr || elevatorId == 0)
@@ -3362,6 +4131,35 @@ void NetworkGameSystem::HandleElevatorState(const cyberpunk_rp::protocol::Elevat
     }
     g_ascenseursRecus.push_back(etat);
     ++g_ascenseursTotalRecus;
+}
+
+void NetworkGameSystem::HandleDeviceState(const cyberpunk_rp::protocol::DeviceStateMsg* msg)
+{
+    if (msg == nullptr || msg->device() == 0)
+    {
+        return;
+    }
+    EtatAppareilRecu etat;
+    etat.device = msg->device();
+    etat.famille = static_cast<int32_t>(msg->famille());
+    etat.etat = static_cast<int32_t>(msg->etat());
+    etat.proprietaire = msg->proprietaire();
+
+    // BORNE DE FILE, meme raison que les ascenseurs : sans mod appareils installe, personne ne
+    // draine et la file grossirait sans borne. On jette les PLUS ANCIENS — un etat perime n'a
+    // aucune valeur.
+    //
+    // ⚠️ 512 ET PAS 256 : un appareil change bien plus souvent qu'une cabine (chaque franchissement
+    // de porte automatique en est un), et un joueur qui traverse un lobby peut en accumuler
+    // plusieurs dizaines avant le prochain drainage. La lecon du plafond a 64 des ascenseurs — 34
+    // cabines jetees en silence — coute moins cher a appliquer qu'a redecouvrir.
+    constexpr std::size_t kFileMax = 512;
+    while (g_appareilsRecus.size() >= kFileMax)
+    {
+        g_appareilsRecus.pop_front();
+    }
+    g_appareilsRecus.push_back(etat);
+    ++g_appareilsTotalRecus;
 }
 
 void NetworkGameSystem::SendActionJoueur(uint64_t target, uint32_t recette)
@@ -5245,6 +6043,7 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
 
 void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
 {
+    g_tempsLocalS += static_cast<double>(deltaTime);
     if (!g_horlogeRendu.Amorcee())
     {
         return; // aucun snapshot recu : rien a rendre, et surtout rien a deviner.
@@ -5450,6 +6249,113 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
         {
             continue;
         }
+
+        // ── UN PASSAGER D'ASCENSEUR SE MONTE, IL NE SE PLACE PAS ───────────────────────────
+        //
+        // Meme raisonnement que pour un passager de vehicule, juste au-dessus : quand le moteur
+        // porte le corps, le placer nous-memes le ferait lutter a chaque frame. La difference est
+        // qu'ici le montage n'etait pas tente — on placait, et ca se voyait (flou).
+        {
+            // ⚠️⚠️⚠️ VOIE FERMEE — MESURE DU 2026-08-26, EN DEUX TEMPS.
+            //
+            // TEMPS 1 — le montage SEUL : accepte, et l'avatar devient INVISIBLE.
+            // TEMPS 2 — avec la couche C (`WorkspotSystem.MountToVehicle`) : le `Mount` passe sur
+            //           les SIX emplacements essayes, et `MountToVehicle` refuse sur les six :
+            //
+            //     avatar 2 : monte sur 'None'            mais NON RENDU — demonte
+            //     avatar 2 : monte sur 'main_slot'       mais NON RENDU — demonte
+            //     avatar 2 : monte sur 'seat_front_left' mais NON RENDU — demonte
+            //     … (six fois) … montage REFUSE sur tous les emplacements essayes
+            //
+            // Ce que ca etablit : une cabine ACCEPTE un montage (le mecanisme repond, et le nom
+            // d'emplacement n'y est pour rien), mais la couche qui remet le corps a l'ecran REFUSE.
+            // Son nom le disait : `MountToVehicle`. Elle est vraisemblablement reservee aux
+            // vehicules, et il n'existe pas d'equivalent connu pour une plateforme.
+            //
+            // ✅ LE REPLI A FONCTIONNE : demontage immediat, retour au placement, aucun avatar
+            // invisible. C'est la partie du dispositif qui valait la peine d'etre ecrite.
+            //
+            // TEMPS 3 — INSTRUMENT CORRIGE (Lucas : « t'es sur que le mount est bien applique ? »).
+            //
+            // Il avait raison de douter, et le defaut etait dans MON instrument : `Red::CallVirtual`
+            // rend `true` si l'appel a ete DISPATCHE, pas s'il a reussi. Mes lignes « accepte » et
+            // « NON RENDU » ne prouvaient donc RIEN — et j'allais classer la voie « impasse
+            // mesuree » sur cette base. Une impasse fausse, c'est une porte qu'on ne rouvre plus.
+            //
+            // Avec trois messages distincts au lieu d'un, le verdict est enfin lisible :
+            //
+            //     couche C KO : MountToVehicle non dispatche — signature ou methode absente,
+            //                   PAS un refus
+            //
+            // Et ce qui NE s'affiche PAS compte autant : jamais « la CABINE ne se resout pas ».
+            // Les deux objets se resolvent bien en `GameObject` — ce n'est donc pas notre code qui
+            // echoue a preparer l'appel. C'est l'appel lui-meme qui ne part pas.
+            //
+            // CONCLUSION, ETABLIE CETTE FOIS : `MountToVehicle` exige un type VEHICULE. Un
+            // `LiftDevice` n'en est pas un, donc la verification de type refuse le dispatch. Le
+            // `WorkspotSystem` n'expose que cinq points d'entree — `MountToVehicle`,
+            // `SwitchSeatVehicle`, `UnmountFromVehicle` (typees vehicule) et `PlayInDevice` /
+            // `PlayInDeviceSimple` (cote device, mais elles jouent un workspot a une place DEFINIE,
+            // et la cabine ne porte qu'un workspot de prise personnelle).
+            //
+            // Il n'existe donc pas d'API toute faite pour « rendre un corps monte sur une
+            // plateforme ». COUPE. Rouvrir demandera une couche de rendu NOUVELLE, pas un autre nom
+            // d'emplacement : reessayer ces six-la ne produira que les six memes lignes.
+            //
+            // Le journal est formel, sur les deux clients :
+            //     [cabine …] avatar N MONTE — emplacement 'None' accepte, on cesse de le placer
+            // et Lucas, dans la seconde : « quand on rentre dans la cabine on ne voit plus les
+            // joueurs ». La cabine ACCEPTE donc un montage — le mecanisme existe et fonctionne —
+            // mais un corps monte n'est PAS RENDU.
+            //
+            // Ce n'etait pas imprevisible : le chemin vehicule le dit deja, dans son propre
+            // commentaire — « COUCHE C. Sans elle, l'occupation est correcte partout SAUF a
+            // l'ecran. » Pour un vehicule, c'est le WORKSPOT (l'animation d'assise dans le siege)
+            // qui remet le corps a l'ecran. Une cabine d'ascenseur n'a pas de workspot de siege :
+            // il manque donc la couche qui rend le corps visible, et on ne sait pas encore laquelle.
+            //
+            // Invisible est BIEN PIRE que flou : on revient au placement. Le code de montage reste,
+            // avec son releve — remettre `true` ci-dessous suffit a le reprendre le jour ou la
+            // couche de rendu sera trouvee. Ne pas le retenter en aveugle.
+            static constexpr bool kMontageCabineActif = false;   // voie fermee — voir ci-dessus
+
+            const auto ancre = g_porteurParAvatar.find(networkId);
+            if (ancre != g_porteurParAvatar.end())
+            {
+                if (kMontageCabineActif && !ancre->second.monte && !ancre->second.montageRefuse)
+                {
+                    ancre->second.monte = MonterSurCabine(networkId, entite->second,
+                                                          ancre->second.cabine,
+                                                          ancre->second.emplacement);
+                    ancre->second.montageRefuse = !ancre->second.monte;
+                }
+                if (ancre->second.monte)
+                {
+                    continue;   // le moteur le porte : on ne touche plus a sa position.
+                }
+            }
+        }
+        // ── UN PASSAGER SE REND AU PRESENT, PAS AU PASSE ──────────────────────────────────
+        //
+        // On rend volontairement en retard de `kDelaiInterpolationS` (100 ms) : c'est ce qui
+        // permet d'interpoler entre deux echantillons au lieu de deviner. Le prix est un retard
+        // CONSTANT, invisible sur quelqu'un qui marche.
+        //
+        // Dans une cabine, il cesse d'etre invisible : le decor autour de l'avatar (la cabine) est
+        // rendu MAINTENANT, lui a 100 ms. A 2,5 m/s ca le met un quart de metre au-dessus du
+        // plancher, et bien plus sur une grande gaine.
+        //
+        // Un passager est le cas ou extrapoler est SUR : sa trajectoire verticale est celle de la
+        // cabine, donc lineaire et deja decidee par le serveur. On demande donc la pose au present.
+        // ⚠️ ON N'EXTRAPOLE PLUS SUR `DelaiCourant()`. Ce delai est ADAPTATIF (il suit la gigue
+        // reseau, monte vite, descend lentement) : l'utiliser comme instant d'echantillonnage
+        // faisait varier l'instant lu d'une frame a l'autre, et un bruit TEMPOREL devient un bruit
+        // de POSITION multiplie par la vitesse. C'etait donc, sur une cabine rapide, une source de
+        // sautillement de plus — ajoutee en croyant en retirer une.
+        //
+        // La verticale d'un passager ne vient plus du fil du tout (voir l'ancrage plus bas), donc
+        // il n'y a plus rien a rattraper ici : on echantillonne a l'instant nominal, comme pour
+        // tout le monde.
         Tessera::Sync::PoseRendue pose;
         if (!tampon.Echantillonner(instant, pose))
         {
@@ -5482,7 +6388,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // le moteur navigue, trottoirs et feux compris (F-PNJ-095). Il ne vaut pas pour un joueur : sa
     // position FAIT AUTORITE, on ne veut pas que le moteur lui recalcule un chemin autour d'un
     // obstacle, on le veut la ou le serveur le dit.
-    const RED4ext::Vector4 positionVoulue = { pose.x, pose.y, pose.z, 1.0f };
+    RED4ext::Vector4 positionVoulue = { pose.x, pose.y, pose.z, 1.0f };
 
     const auto entite = Cyberverse::Utils::GetDynamicEntity(entityId);
     if (!entite.has_value())
@@ -5513,6 +6419,119 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         }
         return;
     }
+
+    // ── PORTE PAR UNE CABINE : LA VERTICALE APPARTIENT AU MOTEUR ───────────────────────────
+    //
+    // Le corps est POSE sur le plancher d'une plateforme mobile, et le moteur l'y tient (F-ASC-001,
+    // confirme en jeu le 2026-08-25 : « le personnage est bien attache »). Notre recalage, lui,
+    // vise un Z INTERPOLE, en retard de 50 a 150 ms — donc plus haut pendant une descente. Les
+    // deux se disputent le corps a chaque frame et l'avatar SAUTILLE, alors qu'il est parfaitement
+    // stable sur l'ecran de celui qui le pilote.
+    //
+    // On ne cesse pas de piloter (ce que fait le cas ASSIS) : dans une cabine, on marche. On rend
+    // seulement la VERTICALE au moteur, en visant le Z ou le corps se trouve deja. L'horizontale
+    // continue d'etre corrigee, donc un occupant qui se deplace dans la cabine reste rendu.
+    //
+    // ⚠️⚠️ IL Y AVAIT ICI UN GARDE-FOU « au-dela de 3 m d'ecart, on reprend la main ». IL PRODUISAIT
+    // EXACTEMENT LE DEGAT QU'IL PRETENDAIT EVITER, et Lucas l'a decrit au mot pres le 2026-08-25 :
+    // « ca sautille moins souvent, mais on voit les personnages VOLER — il remonte sur la hauteur
+    // de la cabine ».
+    //
+    // La raison. Dans une descente, le Z du reseau est celui d'il y a un aller-retour : donc PLUS
+    // HAUT. L'ecart que le garde mesurait n'etait pas une derive, c'etait le RETARD NORMAL — et il
+    // grandit avec la vitesse de la cabine, donc une grande gaine le franchit forcement. Passe le
+    // seuil, le garde « corrigeait » vers ce Z perime : il TIRAIT L'AVATAR VERS LE HAUT d'une
+    // hauteur d'etage, avant que la plateforme ne le rattrape.
+    //
+    // Un garde-fou qui se declenche quand tout va bien finit par etre la seule chose qu'on voie.
+    // C'etait deja ecrit pour le recalage des cabines (`Recaler`, `IsMoving`) — repaye ici le meme
+    // jour, sur un autre systeme, pour la meme raison.
+    //
+    // ⚠️⚠️ ET LA VERSION SUIVANTE — « porte = on ne touche plus au Z, le moteur s'en charge » — a
+    // ete PIRE : l'avatar reste sur place pendant que la cabine part, finit « de l'autre cote, dans
+    // le vide », puis disparait. Le moteur ne porte PAS ce corps-la. Ce qui le raccrochait, c'etait
+    // la correction elle-meme.
+    //
+    // ── L'ANCRAGE, ET POURQUOI IL SUPPRIME LE RETARD AU LIEU DE LE CORRIGER ────────────────
+    //
+    // La pose reseau est reconstituee a `TempsRendu()`, deliberement EN RETARD sur le present d'un
+    // tampon d'interpolation. La cabine, elle, est rendue MAINTENANT. C'est ce decalage entre deux
+    // horloges — pas une imprecision — qui met l'avatar au-dessus du plancher pendant une descente,
+    // d'autant plus haut que la cabine va vite.
+    //
+    // On ne corrige donc rien apres coup : on vise « la cabine, MAINTENANT, plus l'ecart releve a
+    // l'embarquement ». La cabine est une entite LOCALE dont on lit la position presente, et son
+    // trajet est identique sur tous les clients (c'est tout l'objet de l'ordre serveur). Le retard
+    // disparait par construction.
+    //
+    // L'ecart se releve — et se RAFRAICHIT — tant que la cabine est A L'ARRET : la pose reseau y est
+    // exacte, donc on suit quelqu'un qui se deplace dans la cabine. Des qu'elle bouge, l'ecart se
+    // fige : on porte, on ne suit plus. Personne ne traverse une cabine pendant un trajet, et c'est
+    // le prix d'un portage rigide.
+    //
+    // ⚠️ REPLI OBLIGATOIRE : cabine irresolue -> on garde la correction reseau. Un avatar mal place
+    // se voit et se rattrape au pas suivant ; un avatar qu'on cesse de corriger se PERD, et c'est
+    // exactement ce qui vient d'etre mesure.
+    // ⚠️⚠️⚠️ ET L'ANCRAGE SUR LA CABINE A ETE ESSAYE, PUIS RETIRE : L'ENTITE NE BOUGE PAS.
+    //
+    // MESURE (2026-08-25, `lift_state` echantillonne toutes les 700 ms pendant un trajet complet) :
+    //
+    //     floor=1 target=0 moving=true MovingDown  x=-1435.090 y=1311.961 z=27.269
+    //     ... douze relevés, douze secondes de descente, la MEME position a la 3e decimale ...
+    //
+    // `Entity_GetWorldPosition(LiftDevice)` rend la position du NOEUD DE GAINE, pas celle du
+    // plancher. Ce qui descend est un composant (`MovingPlatform` / le maillage), et la transforme
+    // de l'entite ne le suit pas. Un ancrage la-dessus fige donc l'avatar sur un point immobile —
+    // pire que tout ce qui precede.
+    //
+    // ── ✅ ET C'EST LE COMPOSANT `movingPlatform` QUI DESCEND — MESURE LE 2026-08-25 ───────
+    //
+    //     floor=1 moving=false | movingPlatform=125.472
+    //     floor=1 moving=true  | movingPlatform=120.466
+    //     floor=1 moving=true  | movingPlatform=106.146
+    //     floor=0 moving=false | movingPlatform= 90.954     (34,5 m de gaine)
+    //
+    // Redscript le lit sans peine et le PUBLIE a chaque tick de 50 ms
+    // (`Tessera_PoserHauteurCabine`). On tient donc enfin la hauteur du plancher LOCALEMENT, a
+    // l'instant present — sans reseau, donc sans retard.
+    //
+    // ── L'ANCRAGE : REPLIQUER RELATIVEMENT AU PORTEUR ──────────────────────────────────────
+    //
+    // C'est le patron standard du metier, et la raison pour laquelle il marche est structurelle :
+    // au lieu de transporter une position VERTICALE qui change vite (donc dont le moindre retard se
+    // voit), on transporte un ECART au plancher qui, lui, ne change quasiment pas — quelqu'un
+    // debout dans une cabine garde le meme ecart pendant tout le trajet. Le retard du fil porte
+    // alors sur une grandeur constante, et devient invisible.
+    //
+    //   Unreal : `ReplicatedBasedMovement` — position RELATIVE a la base, recomposee au rendu avec
+    //            la position locale de la base.
+    //   Unity  : parentage reseau + `NetworkTransform` en espace local.
+    //
+    // Ici : `positionVoulue.Z = hauteurPlancher(maintenant) + ecart`, l'ecart etant releve tant que
+    // la cabine est A L'ARRET (la pose reseau y est exacte, donc on suit quelqu'un qui marche
+    // dedans) puis fige pendant le trajet.
+    //
+    // ⚠️ REPLI OBLIGATOIRE : pas de hauteur publiee (cabine de-streamee, tick mort, cabine hors
+    // catalogue) -> on garde la correction reseau. Un avatar mal place se rattrape au pas suivant ;
+    // un avatar qu'on cesse de corriger se PERD — mesure le meme jour, au prix d'un avatar invisible.
+    {
+        const auto ancre = g_porteurParAvatar.find(networkId);
+        if (ancre != g_porteurParAvatar.end())
+        {
+            float plancher = 0.0f;
+            bool cabineEnMouvement = false;
+            if (HauteurCabineA(ancre->second.cabine, g_tempsLocalS, plancher, cabineEnMouvement))
+            {
+                if (!ancre->second.ecartConnu || !cabineEnMouvement)
+                {
+                    ancre->second.dz = positionVoulue.Z - plancher;
+                    ancre->second.ecartConnu = true;
+                }
+                positionVoulue.Z = plancher + ancre->second.dz;
+            }
+        }
+    }
+
 
     // ── FIL MUET : ON FIGE, ON NE LAISSE PAS COURIR ────────────────────────────────────────
     //
@@ -5872,18 +6891,127 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         static constexpr float kPeriodePlacementImmobileS = 2.0f;
         auto& suiviImmobile = g_suiviAvatars[networkId];
         suiviImmobile.depuisPlacementImmobileS += deltaTime;
+
+        // ── ⭐ LE PASSAGER EST L'EXCEPTION, ET C'EST LUI QUI SAUTILLAIT ────────────────────
+        //
+        // Tout ce qui precede suppose une chose : un avatar « immobile » ne bouge pas VRAIMENT,
+        // donc corriger rarement suffit. Un passager d'ascenseur casse cette hypothese — il ne
+        // marche pas (`locomotion = 0`, il atterrit donc ici), et pourtant sa position vraie
+        // descend a plusieurs metres par seconde.
+        //
+        // Ce qu'il se passe alors, et c'est EXACTEMENT le « sautillement » decrit par Lucas : le
+        // pantin n'est pas porte par la plateforme, il derive donc pendant ces deux secondes
+        // pleines, puis un unique placement le ramene d'un coup. Fondu, saut, fondu, saut. Ce
+        // n'etait jamais un probleme de synchronisation : le fil disait la verite tout du long,
+        // c'est le RYTHME de la correction qui etait cale sur la mauvaise hypothese.
+        //
+        // Pour lui : chaque frame, sans bande morte. La raison d'etre du garde — « nos propres
+        // placements empiles se rejouent vers des cibles perimees » (F-PLY-085) — vaut pour un
+        // corps qui ne devrait pas bouger, pas pour un corps qu'on doit suivre en continu.
+        const bool passager = g_porteurParAvatar.count(networkId) != 0;
+
+        // ── L'AMORTISSEMENT DE L'ERREUR — la couche de finition, et ses limites ────────────
+        //
+        // On garde l'ecart entre ce qu'on a AFFICHE et ce qu'on VOULAIT afficher, et on le fait
+        // decroitre a chaque frame. Le corps suit donc la cible sans jamais y sauter.
+        //
+        // Facteurs de Gaffer On Games : 0,95 par frame pour une petite erreur (gomme le bruit),
+        // 0,85 pour une grande (ne fait pas trainer une vraie correction), melanges selon
+        // l'amplitude. La puissance en `dt * 60` rend le lissage independant de la frequence
+        // d'image — sinon un joueur a 120 fps serait lisse deux fois plus fort qu'un joueur a 60.
+        //
+        // ⚠️ CE QUE CA NE FAIT PAS, ET IL FAUT LE DIRE : ca ne supprime pas la teleportation, donc
+        // ca ne traite PAS la cause du flou. C'est une finition, choisie en connaissance de cause
+        // apres que les trois voies de fond ont ete fermees (attache script, montage workspot,
+        // rendu). Si le flou ne bouge pas d'un pouce, c'est une information, pas un echec.
+        // ⚠️⚠️ L'AMORTISSEMENT A ETE RETIRE POUR LES PASSAGERS, ET C'EST UN RENVERSEMENT.
+        //
+        // Il a ete pose pour MASQUER le flou. En comprenant que le flou EST du mouvement relatif,
+        // il devient evident qu'il le FABRIQUAIT : amortir, c'est afficher le corps en retard sur
+        // sa cible, donc lui donner en permanence une vitesse par rapport a la camera. On ajoutait
+        // la maladie en croyant poser un pansement.
+        //
+        // Un passager n'a rien a lisser : sa cible est EXACTE (la hauteur du plancher, lue
+        // localement dans la frame ou l'on rend). Lisser une cible exacte ne peut que la degrader.
+        // Le lissage garde son sens pour un avatar dont la position vient du reseau — pas ici.
+
+        // ⚠️⚠️⚠️ ET SURTOUT : `PlacerSansCommande`, JAMAIS `SetEntityPosition`.
+        //
+        // Ce garde-la etait deja ecrit, quelques lignes plus haut, et je l'ai enfreint en ajoutant
+        // le cas passager : `SetEntityPosition` empile un `AITeleportCommand` dans la file du
+        // controleur d'IA AVANT de placer l'entite. L'appeler a chaque frame, c'est empiler
+        // soixante commandes par seconde dans la MEME file que la commande de marche — donc
+        // annuler soixante fois par seconde l'ordre qui anime l'avatar.
+        //
+        // Le symptome est decrit mot pour mot dans le corps de `PlacerSansCommande`, d'apres Lucas
+        // le 2026-08-13 : « le personnage reste statique sans animation avant de se deplacer »,
+        // « CA CREE DU FLOU », « les animations ont du mal a se lancer ». Le 2026-08-25, sur les
+        // passagers d'ascenseur, il a redit exactement la meme chose : « il se rafraichit tellement
+        // qu'il devient flou ». Meme cause, meme mots, douze jours d'ecart.
+        //
+        // La lecon generale : une fonction qui a DEUX effets dont un seul est voulu ne doit pas
+        // etre appelee en boucle. La variante sans effet de bord existait deja — il fallait la
+        // chercher, pas la redecouvrir par le symptome.
+        //
+        // Bande morte de 1 cm : pendant un trajet elle ne bloque jamais rien (la cabine parcourt
+        // 4 cm par frame a 2,5 m/s), et a l'arret elle ramene le cout d'un passager a une
+        // soustraction par frame.
+        static constexpr float kBandeMortePassagerM = 0.01f;
+        if (!g_suspendreCorrections && passager && deriveImmobile > kBandeMortePassagerM)
+        {
+            suiviImmobile.depuisPlacementImmobileS = 0.0f;
+            PlacerSansCommande(entityId, positionVoulue, pose.yaw);
+        }
+
+        // ── ⭐ L'INSTRUMENT QUI TRANCHE : LA CIBLE EST-ELLE JUSTE, ET EST-ELLE ATTEINTE ? ────
+        //
+        // Lucas, 2026-08-26 : « on passe sous le plancher PROGRESSIVEMENT », et le sens s'inverse
+        // entre montee et descente. Un retard constant donnerait un ecart FIXE ; un ecart qui
+        // GRANDIT veut dire que l'avatar suit la cabine moins vite qu'elle ne bouge.
+        //
+        // Deux causes possibles, et elles demandent des correctifs opposes :
+        //   · la CIBLE derive       -> `plancher + dz` est faux, c'est notre calcul ;
+        //   · la cible est juste mais N'EST PAS ATTEINTE -> le placement ne prend pas, et c'est le
+        //     moteur qui ramene le corps ailleurs entre deux frames.
+        //
+        // On ne peut pas les distinguer de l'exterieur : il faut les trois nombres cote a cote.
+        // `reel` est relu AVANT le placement de cette frame, donc il porte le resultat du
+        // placement PRECEDENT — c'est exactement ce qu'on veut savoir.
+        if (passager)
+        {
+            auto& suiviTrace = g_suiviAvatars[networkId];
+            suiviTrace.depuisLogS += deltaTime;
+            if (suiviTrace.depuisLogS >= 0.5f)
+            {
+                suiviTrace.depuisLogS = 0.0f;
+                float plancherTrace = 0.0f;
+                bool bougeTrace = false;
+                const bool lu = HauteurCabineA(g_porteurParAvatar[networkId].cabine, g_tempsLocalS,
+                                               plancherTrace, bougeTrace);
+                SDK->logger->InfoF(PLUGIN,
+                    "[passager %llu] plancher=%.3f (lu=%d bouge=%d) dz=%.3f cible=%.3f reel=%.3f "
+                    "ecart=%.3f",
+                    networkId, plancherTrace, lu ? 1 : 0, bougeTrace ? 1 : 0,
+                    g_porteurParAvatar[networkId].dz, positionVoulue.Z, placeActuelle.Z,
+                    placeActuelle.Z - positionVoulue.Z);
+            }
+        }
+
         // ⚠️ La garde `g_suspendreCorrections` porte ici AUSSI, et elle manquait.
         //
         // Sans elle, `corrections off` eteignait les trois correcteurs de la branche mobile et
         // laissait celui-ci tourner : un test qui croit avoir tout coupe mesure encore un
         // correcteur actif. C'est exactement la confusion qui a produit un premier verdict faux le
         // 2026-08-17 (F-PLY-085) — un instrument qui n'eteint pas tout ce qu'il pretend eteindre.
-        if (!g_suspendreCorrections
+        if (!g_suspendreCorrections && !passager
             && (deriveImmobile > kBandeMorteImmobileM || deriveYaw > kBandeMorteYawDeg)
             && suiviImmobile.depuisPlacementImmobileS >= kPeriodePlacementImmobileS)
         {
             suiviImmobile.depuisPlacementImmobileS = 0.0f;
-            SetEntityPosition(entityId, positionVoulue, pose.yaw);
+            // La correction n°2 du pave ci-dessus etait PRESCRITE et jamais appliquee : le
+            // commentaire disait `PlacerSansCommande`, le code appelait `SetEntityPosition`. Un
+            // correctif documente mais absent est pire qu'un correctif manquant — on le croit fait.
+            PlacerSansCommande(entityId, positionVoulue, pose.yaw);
         }
 
         // ── T10 bis : L'INSTRUMENT ÉTAIT AVEUGLE SUR UN AVATAR IMMOBILE ────────────────────
