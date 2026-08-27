@@ -79,6 +79,12 @@ struct InteractionChoiceBuilder;
 struct InteractionResult;
 struct InteractionResultBuilder;
 
+struct CoffreLigne;
+struct CoffreLigneBuilder;
+
+struct CoffreContenu;
+struct CoffreContenuBuilder;
+
 struct PlayerEvent;
 struct PlayerEventBuilder;
 
@@ -187,6 +193,24 @@ struct RespawnRequestBuilder;
 struct HealthReport;
 struct HealthReportBuilder;
 
+struct DeviceCall;
+struct DeviceCallBuilder;
+
+struct DeviceStateMsg;
+struct DeviceStateMsgBuilder;
+
+struct CommandArg;
+struct CommandArgBuilder;
+
+struct CommandEntry;
+struct CommandEntryBuilder;
+
+struct CommandCatalog;
+struct CommandCatalogBuilder;
+
+struct ConsoleLine;
+struct ConsoleLineBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -215,11 +239,12 @@ enum ClientMsg : uint8_t {
   ClientMsg_StaticNpcReport = 18,
   ClientMsg_RespawnRequest = 19,
   ClientMsg_HealthReport = 20,
+  ClientMsg_DeviceCall = 21,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_HealthReport
+  ClientMsg_MAX = ClientMsg_DeviceCall
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[21] {
+inline const ClientMsg (&EnumValuesClientMsg())[22] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -241,13 +266,14 @@ inline const ClientMsg (&EnumValuesClientMsg())[21] {
     ClientMsg_PromotionRequest,
     ClientMsg_StaticNpcReport,
     ClientMsg_RespawnRequest,
-    ClientMsg_HealthReport
+    ClientMsg_HealthReport,
+    ClientMsg_DeviceCall
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[22] = {
+  static const char * const names[23] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -269,13 +295,14 @@ inline const char * const *EnumNamesClientMsg() {
     "StaticNpcReport",
     "RespawnRequest",
     "HealthReport",
+    "DeviceCall",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_HealthReport)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_DeviceCall)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -364,6 +391,10 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::HealthReport> {
   static const ClientMsg enum_value = ClientMsg_HealthReport;
 };
 
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::DeviceCall> {
+  static const ClientMsg enum_value = ClientMsg_DeviceCall;
+};
+
 template <bool B = false>
 bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ClientMsg type);
 template <bool B = false>
@@ -393,11 +424,14 @@ enum ServerMsg : uint8_t {
   ServerMsg_ActionCatalog = 20,
   ServerMsg_IdentitesConnues = 21,
   ServerMsg_InventaireAutoritaire = 22,
+  ServerMsg_DeviceStateMsg = 23,
+  ServerMsg_CommandCatalog = 24,
+  ServerMsg_ConsoleLine = 25,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_InventaireAutoritaire
+  ServerMsg_MAX = ServerMsg_ConsoleLine
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[23] {
+inline const ServerMsg (&EnumValuesServerMsg())[26] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -421,13 +455,16 @@ inline const ServerMsg (&EnumValuesServerMsg())[23] {
     ServerMsg_CellAppearances,
     ServerMsg_ActionCatalog,
     ServerMsg_IdentitesConnues,
-    ServerMsg_InventaireAutoritaire
+    ServerMsg_InventaireAutoritaire,
+    ServerMsg_DeviceStateMsg,
+    ServerMsg_CommandCatalog,
+    ServerMsg_ConsoleLine
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[24] = {
+  static const char * const names[27] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -451,13 +488,16 @@ inline const char * const *EnumNamesServerMsg() {
     "ActionCatalog",
     "IdentitesConnues",
     "InventaireAutoritaire",
+    "DeviceStateMsg",
+    "CommandCatalog",
+    "ConsoleLine",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_InventaireAutoritaire)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_ConsoleLine)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -552,6 +592,18 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::IdentitesConnues> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::InventaireAutoritaire> {
   static const ServerMsg enum_value = ServerMsg_InventaireAutoritaire;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::DeviceStateMsg> {
+  static const ServerMsg enum_value = ServerMsg_DeviceStateMsg;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CommandCatalog> {
+  static const ServerMsg enum_value = ServerMsg_CommandCatalog;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ConsoleLine> {
+  static const ServerMsg enum_value = ServerMsg_ConsoleLine;
 };
 
 template <bool B = false>
@@ -1767,7 +1819,8 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_BASE_RECORD = 4,
     VT_APPEARANCE = 6,
     VT_GARMENTS = 8,
-    VT_ESTHETIQUE = 10
+    VT_ESTHETIQUE = 10,
+    VT_CORPS_MASCULIN = 12
   };
   uint64_t base_record() const {
     return GetField<uint64_t>(VT_BASE_RECORD, 0);
@@ -1781,6 +1834,9 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<uint8_t> *esthetique() const {
     return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_ESTHETIQUE);
   }
+  bool corps_masculin() const {
+    return GetField<uint8_t>(VT_CORPS_MASCULIN, 1) != 0;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1791,6 +1847,7 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyVectorOfTables(garments()) &&
            VerifyOffset(verifier, VT_ESTHETIQUE) &&
            verifier.VerifyVector(esthetique()) &&
+           VerifyField<uint8_t>(verifier, VT_CORPS_MASCULIN, 1) &&
            verifier.EndTable();
   }
 };
@@ -1811,6 +1868,9 @@ struct AppearanceSpecBuilder {
   void add_esthetique(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique) {
     fbb_.AddOffset(AppearanceSpec::VT_ESTHETIQUE, esthetique);
   }
+  void add_corps_masculin(bool corps_masculin) {
+    fbb_.AddElement<uint8_t>(AppearanceSpec::VT_CORPS_MASCULIN, static_cast<uint8_t>(corps_masculin), 1);
+  }
   explicit AppearanceSpecBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1827,12 +1887,14 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpec(
     uint64_t base_record = 0,
     uint64_t appearance = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>> garments = 0,
-    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0,
+    bool corps_masculin = true) {
   AppearanceSpecBuilder builder_(_fbb);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
   builder_.add_esthetique(esthetique);
   builder_.add_garments(garments);
+  builder_.add_corps_masculin(corps_masculin);
   return builder_.Finish();
 }
 
@@ -1841,7 +1903,8 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpecDirect(
     uint64_t base_record = 0,
     uint64_t appearance = 0,
     const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *garments = nullptr,
-    const std::vector<uint8_t> *esthetique = nullptr) {
+    const std::vector<uint8_t> *esthetique = nullptr,
+    bool corps_masculin = true) {
   auto garments__ = garments ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>(*garments) : 0;
   auto esthetique__ = esthetique ? _fbb.CreateVector<uint8_t>(*esthetique) : 0;
   return cyberpunk_rp::protocol::CreateAppearanceSpec(
@@ -1849,7 +1912,8 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpecDirect(
       base_record,
       appearance,
       garments__,
-      esthetique__);
+      esthetique__,
+      corps_masculin);
 }
 
 struct AppearanceSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2358,7 +2422,8 @@ struct InteractionChoice FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table 
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_SESSION_ID = 4,
     VT_CHOICE = 6,
-    VT_PARAM = 8
+    VT_PARAM = 8,
+    VT_PAYLOAD = 10
   };
   uint64_t session_id() const {
     return GetField<uint64_t>(VT_SESSION_ID, 0);
@@ -2369,12 +2434,17 @@ struct InteractionChoice FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table 
   uint32_t param() const {
     return GetField<uint32_t>(VT_PARAM, 0);
   }
+  const ::flatbuffers::Vector<uint8_t> *payload() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_PAYLOAD);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint64_t>(verifier, VT_SESSION_ID, 8) &&
            VerifyField<uint32_t>(verifier, VT_CHOICE, 4) &&
            VerifyField<uint32_t>(verifier, VT_PARAM, 4) &&
+           VerifyOffset(verifier, VT_PAYLOAD) &&
+           verifier.VerifyVector(payload()) &&
            verifier.EndTable();
   }
 };
@@ -2392,6 +2462,9 @@ struct InteractionChoiceBuilder {
   void add_param(uint32_t param) {
     fbb_.AddElement<uint32_t>(InteractionChoice::VT_PARAM, param, 0);
   }
+  void add_payload(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload) {
+    fbb_.AddOffset(InteractionChoice::VT_PAYLOAD, payload);
+  }
   explicit InteractionChoiceBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2407,12 +2480,29 @@ inline ::flatbuffers::Offset<InteractionChoice> CreateInteractionChoice(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     uint64_t session_id = 0,
     uint32_t choice = 0,
-    uint32_t param = 0) {
+    uint32_t param = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> payload = 0) {
   InteractionChoiceBuilder builder_(_fbb);
   builder_.add_session_id(session_id);
+  builder_.add_payload(payload);
   builder_.add_param(param);
   builder_.add_choice(choice);
   return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<InteractionChoice> CreateInteractionChoiceDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t session_id = 0,
+    uint32_t choice = 0,
+    uint32_t param = 0,
+    const std::vector<uint8_t> *payload = nullptr) {
+  auto payload__ = payload ? _fbb.CreateVector<uint8_t>(*payload) : 0;
+  return cyberpunk_rp::protocol::CreateInteractionChoice(
+      _fbb,
+      session_id,
+      choice,
+      param,
+      payload__);
 }
 
 struct InteractionResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2489,6 +2579,147 @@ inline ::flatbuffers::Offset<InteractionResult> CreateInteractionResultDirect(
       session_id,
       ok,
       payload__);
+}
+
+struct CoffreLigne FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CoffreLigneBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ITEM = 4,
+    VT_QUANTITE = 6
+  };
+  const ::flatbuffers::String *item() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_ITEM);
+  }
+  uint32_t quantite() const {
+    return GetField<uint32_t>(VT_QUANTITE, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_ITEM) &&
+           verifier.VerifyString(item()) &&
+           VerifyField<uint32_t>(verifier, VT_QUANTITE, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct CoffreLigneBuilder {
+  typedef CoffreLigne Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_item(::flatbuffers::Offset<::flatbuffers::String> item) {
+    fbb_.AddOffset(CoffreLigne::VT_ITEM, item);
+  }
+  void add_quantite(uint32_t quantite) {
+    fbb_.AddElement<uint32_t>(CoffreLigne::VT_QUANTITE, quantite, 0);
+  }
+  explicit CoffreLigneBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CoffreLigne> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CoffreLigne>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CoffreLigne> CreateCoffreLigne(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> item = 0,
+    uint32_t quantite = 0) {
+  CoffreLigneBuilder builder_(_fbb);
+  builder_.add_quantite(quantite);
+  builder_.add_item(item);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CoffreLigne> CreateCoffreLigneDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *item = nullptr,
+    uint32_t quantite = 0) {
+  auto item__ = item ? _fbb.CreateString(item) : 0;
+  return cyberpunk_rp::protocol::CreateCoffreLigne(
+      _fbb,
+      item__,
+      quantite);
+}
+
+struct CoffreContenu FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CoffreContenuBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_VEHICULE = 4,
+    VT_CAPACITE = 6,
+    VT_LIGNES = 8
+  };
+  uint64_t vehicule() const {
+    return GetField<uint64_t>(VT_VEHICULE, 0);
+  }
+  uint16_t capacite() const {
+    return GetField<uint16_t>(VT_CAPACITE, 0);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>> *lignes() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>> *>(VT_LIGNES);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_VEHICULE, 8) &&
+           VerifyField<uint16_t>(verifier, VT_CAPACITE, 2) &&
+           VerifyOffset(verifier, VT_LIGNES) &&
+           verifier.VerifyVector(lignes()) &&
+           verifier.VerifyVectorOfTables(lignes()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CoffreContenuBuilder {
+  typedef CoffreContenu Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_vehicule(uint64_t vehicule) {
+    fbb_.AddElement<uint64_t>(CoffreContenu::VT_VEHICULE, vehicule, 0);
+  }
+  void add_capacite(uint16_t capacite) {
+    fbb_.AddElement<uint16_t>(CoffreContenu::VT_CAPACITE, capacite, 0);
+  }
+  void add_lignes(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>>> lignes) {
+    fbb_.AddOffset(CoffreContenu::VT_LIGNES, lignes);
+  }
+  explicit CoffreContenuBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CoffreContenu> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CoffreContenu>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CoffreContenu> CreateCoffreContenu(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t vehicule = 0,
+    uint16_t capacite = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>>> lignes = 0) {
+  CoffreContenuBuilder builder_(_fbb);
+  builder_.add_vehicule(vehicule);
+  builder_.add_lignes(lignes);
+  builder_.add_capacite(capacite);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CoffreContenu> CreateCoffreContenuDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t vehicule = 0,
+    uint16_t capacite = 0,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>> *lignes = nullptr) {
+  auto lignes__ = lignes ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>>(*lignes) : 0;
+  return cyberpunk_rp::protocol::CreateCoffreContenu(
+      _fbb,
+      vehicule,
+      capacite,
+      lignes__);
 }
 
 struct PlayerEvent FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -3758,7 +3989,8 @@ struct ElevatorStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_REQUESTED_FLOORS = 12,
     VT_DEPART_TICK = 14,
     VT_START_DELAY_MS = 16,
-    VT_TRAVEL_TIME_MS = 18
+    VT_TRAVEL_TIME_MS = 18,
+    VT_ELAPSED_MS = 20
   };
   uint64_t elevator_id() const {
     return GetField<uint64_t>(VT_ELEVATOR_ID, 0);
@@ -3784,6 +4016,9 @@ struct ElevatorStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t travel_time_ms() const {
     return GetField<uint32_t>(VT_TRAVEL_TIME_MS, 0);
   }
+  uint32_t elapsed_ms() const {
+    return GetField<uint32_t>(VT_ELAPSED_MS, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -3796,6 +4031,7 @@ struct ElevatorStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_DEPART_TICK, 8) &&
            VerifyField<uint32_t>(verifier, VT_START_DELAY_MS, 4) &&
            VerifyField<uint32_t>(verifier, VT_TRAVEL_TIME_MS, 4) &&
+           VerifyField<uint32_t>(verifier, VT_ELAPSED_MS, 4) &&
            verifier.EndTable();
   }
 };
@@ -3828,6 +4064,9 @@ struct ElevatorStateMsgBuilder {
   void add_travel_time_ms(uint32_t travel_time_ms) {
     fbb_.AddElement<uint32_t>(ElevatorStateMsg::VT_TRAVEL_TIME_MS, travel_time_ms, 0);
   }
+  void add_elapsed_ms(uint32_t elapsed_ms) {
+    fbb_.AddElement<uint32_t>(ElevatorStateMsg::VT_ELAPSED_MS, elapsed_ms, 0);
+  }
   explicit ElevatorStateMsgBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -3848,10 +4087,12 @@ inline ::flatbuffers::Offset<ElevatorStateMsg> CreateElevatorStateMsg(
     ::flatbuffers::Offset<::flatbuffers::Vector<int32_t>> requested_floors = 0,
     uint64_t depart_tick = 0,
     uint32_t start_delay_ms = 0,
-    uint32_t travel_time_ms = 0) {
+    uint32_t travel_time_ms = 0,
+    uint32_t elapsed_ms = 0) {
   ElevatorStateMsgBuilder builder_(_fbb);
   builder_.add_depart_tick(depart_tick);
   builder_.add_elevator_id(elevator_id);
+  builder_.add_elapsed_ms(elapsed_ms);
   builder_.add_travel_time_ms(travel_time_ms);
   builder_.add_start_delay_ms(start_delay_ms);
   builder_.add_requested_floors(requested_floors);
@@ -3870,7 +4111,8 @@ inline ::flatbuffers::Offset<ElevatorStateMsg> CreateElevatorStateMsgDirect(
     const std::vector<int32_t> *requested_floors = nullptr,
     uint64_t depart_tick = 0,
     uint32_t start_delay_ms = 0,
-    uint32_t travel_time_ms = 0) {
+    uint32_t travel_time_ms = 0,
+    uint32_t elapsed_ms = 0) {
   auto requested_floors__ = requested_floors ? _fbb.CreateVector<int32_t>(*requested_floors) : 0;
   return cyberpunk_rp::protocol::CreateElevatorStateMsg(
       _fbb,
@@ -3881,7 +4123,8 @@ inline ::flatbuffers::Offset<ElevatorStateMsg> CreateElevatorStateMsgDirect(
       requested_floors__,
       depart_tick,
       start_delay_ms,
-      travel_time_ms);
+      travel_time_ms,
+      elapsed_ms);
 }
 
 struct ConfigEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -4948,6 +5191,477 @@ inline ::flatbuffers::Offset<HealthReport> CreateHealthReport(
   return builder_.Finish();
 }
 
+struct DeviceCall FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef DeviceCallBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_DEVICE = 4,
+    VT_FAMILLE = 6,
+    VT_ACTION = 8,
+    VT_ETAT_OBSERVE = 10
+  };
+  uint64_t device() const {
+    return GetField<uint64_t>(VT_DEVICE, 0);
+  }
+  uint8_t famille() const {
+    return GetField<uint8_t>(VT_FAMILLE, 0);
+  }
+  uint8_t action() const {
+    return GetField<uint8_t>(VT_ACTION, 0);
+  }
+  uint8_t etat_observe() const {
+    return GetField<uint8_t>(VT_ETAT_OBSERVE, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_DEVICE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_FAMILLE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_ACTION, 1) &&
+           VerifyField<uint8_t>(verifier, VT_ETAT_OBSERVE, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct DeviceCallBuilder {
+  typedef DeviceCall Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_device(uint64_t device) {
+    fbb_.AddElement<uint64_t>(DeviceCall::VT_DEVICE, device, 0);
+  }
+  void add_famille(uint8_t famille) {
+    fbb_.AddElement<uint8_t>(DeviceCall::VT_FAMILLE, famille, 0);
+  }
+  void add_action(uint8_t action) {
+    fbb_.AddElement<uint8_t>(DeviceCall::VT_ACTION, action, 0);
+  }
+  void add_etat_observe(uint8_t etat_observe) {
+    fbb_.AddElement<uint8_t>(DeviceCall::VT_ETAT_OBSERVE, etat_observe, 0);
+  }
+  explicit DeviceCallBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<DeviceCall> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<DeviceCall>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<DeviceCall> CreateDeviceCall(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t device = 0,
+    uint8_t famille = 0,
+    uint8_t action = 0,
+    uint8_t etat_observe = 0) {
+  DeviceCallBuilder builder_(_fbb);
+  builder_.add_device(device);
+  builder_.add_etat_observe(etat_observe);
+  builder_.add_action(action);
+  builder_.add_famille(famille);
+  return builder_.Finish();
+}
+
+struct DeviceStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef DeviceStateMsgBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_DEVICE = 4,
+    VT_FAMILLE = 6,
+    VT_ETAT = 8,
+    VT_PROPRIETAIRE = 10
+  };
+  uint64_t device() const {
+    return GetField<uint64_t>(VT_DEVICE, 0);
+  }
+  uint8_t famille() const {
+    return GetField<uint8_t>(VT_FAMILLE, 0);
+  }
+  uint8_t etat() const {
+    return GetField<uint8_t>(VT_ETAT, 0);
+  }
+  uint64_t proprietaire() const {
+    return GetField<uint64_t>(VT_PROPRIETAIRE, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_DEVICE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_FAMILLE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_ETAT, 1) &&
+           VerifyField<uint64_t>(verifier, VT_PROPRIETAIRE, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct DeviceStateMsgBuilder {
+  typedef DeviceStateMsg Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_device(uint64_t device) {
+    fbb_.AddElement<uint64_t>(DeviceStateMsg::VT_DEVICE, device, 0);
+  }
+  void add_famille(uint8_t famille) {
+    fbb_.AddElement<uint8_t>(DeviceStateMsg::VT_FAMILLE, famille, 0);
+  }
+  void add_etat(uint8_t etat) {
+    fbb_.AddElement<uint8_t>(DeviceStateMsg::VT_ETAT, etat, 0);
+  }
+  void add_proprietaire(uint64_t proprietaire) {
+    fbb_.AddElement<uint64_t>(DeviceStateMsg::VT_PROPRIETAIRE, proprietaire, 0);
+  }
+  explicit DeviceStateMsgBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<DeviceStateMsg> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<DeviceStateMsg>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<DeviceStateMsg> CreateDeviceStateMsg(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t device = 0,
+    uint8_t famille = 0,
+    uint8_t etat = 0,
+    uint64_t proprietaire = 0) {
+  DeviceStateMsgBuilder builder_(_fbb);
+  builder_.add_proprietaire(proprietaire);
+  builder_.add_device(device);
+  builder_.add_etat(etat);
+  builder_.add_famille(famille);
+  return builder_.Finish();
+}
+
+struct CommandArg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CommandArgBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NOM = 4,
+    VT_TYPE_ARG = 6,
+    VT_REQUIS = 8,
+    VT_VALEURS = 10
+  };
+  const ::flatbuffers::String *nom() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_NOM);
+  }
+  uint8_t type_arg() const {
+    return GetField<uint8_t>(VT_TYPE_ARG, 0);
+  }
+  bool requis() const {
+    return GetField<uint8_t>(VT_REQUIS, 0) != 0;
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *valeurs() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_VALEURS);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_NOM) &&
+           verifier.VerifyString(nom()) &&
+           VerifyField<uint8_t>(verifier, VT_TYPE_ARG, 1) &&
+           VerifyField<uint8_t>(verifier, VT_REQUIS, 1) &&
+           VerifyOffset(verifier, VT_VALEURS) &&
+           verifier.VerifyVector(valeurs()) &&
+           verifier.VerifyVectorOfStrings(valeurs()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CommandArgBuilder {
+  typedef CommandArg Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_nom(::flatbuffers::Offset<::flatbuffers::String> nom) {
+    fbb_.AddOffset(CommandArg::VT_NOM, nom);
+  }
+  void add_type_arg(uint8_t type_arg) {
+    fbb_.AddElement<uint8_t>(CommandArg::VT_TYPE_ARG, type_arg, 0);
+  }
+  void add_requis(bool requis) {
+    fbb_.AddElement<uint8_t>(CommandArg::VT_REQUIS, static_cast<uint8_t>(requis), 0);
+  }
+  void add_valeurs(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> valeurs) {
+    fbb_.AddOffset(CommandArg::VT_VALEURS, valeurs);
+  }
+  explicit CommandArgBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CommandArg> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CommandArg>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CommandArg> CreateCommandArg(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> nom = 0,
+    uint8_t type_arg = 0,
+    bool requis = false,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> valeurs = 0) {
+  CommandArgBuilder builder_(_fbb);
+  builder_.add_valeurs(valeurs);
+  builder_.add_nom(nom);
+  builder_.add_requis(requis);
+  builder_.add_type_arg(type_arg);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CommandArg> CreateCommandArgDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *nom = nullptr,
+    uint8_t type_arg = 0,
+    bool requis = false,
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *valeurs = nullptr) {
+  auto nom__ = nom ? _fbb.CreateString(nom) : 0;
+  auto valeurs__ = valeurs ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*valeurs) : 0;
+  return cyberpunk_rp::protocol::CreateCommandArg(
+      _fbb,
+      nom__,
+      type_arg,
+      requis,
+      valeurs__);
+}
+
+struct CommandEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CommandEntryBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NOM = 4,
+    VT_ARGS = 6,
+    VT_AIDE = 8,
+    VT_EXEMPLE = 10,
+    VT_SENSIBLE = 12,
+    VT_EXIGE_ELEVATION = 14
+  };
+  const ::flatbuffers::String *nom() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_NOM);
+  }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandArg>> *args() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandArg>> *>(VT_ARGS);
+  }
+  const ::flatbuffers::String *aide() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_AIDE);
+  }
+  const ::flatbuffers::String *exemple() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_EXEMPLE);
+  }
+  bool sensible() const {
+    return GetField<uint8_t>(VT_SENSIBLE, 0) != 0;
+  }
+  bool exige_elevation() const {
+    return GetField<uint8_t>(VT_EXIGE_ELEVATION, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_NOM) &&
+           verifier.VerifyString(nom()) &&
+           VerifyOffset(verifier, VT_ARGS) &&
+           verifier.VerifyVector(args()) &&
+           verifier.VerifyVectorOfTables(args()) &&
+           VerifyOffset(verifier, VT_AIDE) &&
+           verifier.VerifyString(aide()) &&
+           VerifyOffset(verifier, VT_EXEMPLE) &&
+           verifier.VerifyString(exemple()) &&
+           VerifyField<uint8_t>(verifier, VT_SENSIBLE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_EXIGE_ELEVATION, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct CommandEntryBuilder {
+  typedef CommandEntry Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_nom(::flatbuffers::Offset<::flatbuffers::String> nom) {
+    fbb_.AddOffset(CommandEntry::VT_NOM, nom);
+  }
+  void add_args(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandArg>>> args) {
+    fbb_.AddOffset(CommandEntry::VT_ARGS, args);
+  }
+  void add_aide(::flatbuffers::Offset<::flatbuffers::String> aide) {
+    fbb_.AddOffset(CommandEntry::VT_AIDE, aide);
+  }
+  void add_exemple(::flatbuffers::Offset<::flatbuffers::String> exemple) {
+    fbb_.AddOffset(CommandEntry::VT_EXEMPLE, exemple);
+  }
+  void add_sensible(bool sensible) {
+    fbb_.AddElement<uint8_t>(CommandEntry::VT_SENSIBLE, static_cast<uint8_t>(sensible), 0);
+  }
+  void add_exige_elevation(bool exige_elevation) {
+    fbb_.AddElement<uint8_t>(CommandEntry::VT_EXIGE_ELEVATION, static_cast<uint8_t>(exige_elevation), 0);
+  }
+  explicit CommandEntryBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CommandEntry> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CommandEntry>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CommandEntry> CreateCommandEntry(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> nom = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandArg>>> args = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> aide = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> exemple = 0,
+    bool sensible = false,
+    bool exige_elevation = false) {
+  CommandEntryBuilder builder_(_fbb);
+  builder_.add_exemple(exemple);
+  builder_.add_aide(aide);
+  builder_.add_args(args);
+  builder_.add_nom(nom);
+  builder_.add_exige_elevation(exige_elevation);
+  builder_.add_sensible(sensible);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CommandEntry> CreateCommandEntryDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *nom = nullptr,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandArg>> *args = nullptr,
+    const char *aide = nullptr,
+    const char *exemple = nullptr,
+    bool sensible = false,
+    bool exige_elevation = false) {
+  auto nom__ = nom ? _fbb.CreateString(nom) : 0;
+  auto args__ = args ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandArg>>(*args) : 0;
+  auto aide__ = aide ? _fbb.CreateString(aide) : 0;
+  auto exemple__ = exemple ? _fbb.CreateString(exemple) : 0;
+  return cyberpunk_rp::protocol::CreateCommandEntry(
+      _fbb,
+      nom__,
+      args__,
+      aide__,
+      exemple__,
+      sensible,
+      exige_elevation);
+}
+
+struct CommandCatalog FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef CommandCatalogBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_COMMANDES = 4
+  };
+  const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandEntry>> *commandes() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandEntry>> *>(VT_COMMANDES);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_COMMANDES) &&
+           verifier.VerifyVector(commandes()) &&
+           verifier.VerifyVectorOfTables(commandes()) &&
+           verifier.EndTable();
+  }
+};
+
+struct CommandCatalogBuilder {
+  typedef CommandCatalog Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_commandes(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandEntry>>> commandes) {
+    fbb_.AddOffset(CommandCatalog::VT_COMMANDES, commandes);
+  }
+  explicit CommandCatalogBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<CommandCatalog> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<CommandCatalog>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<CommandCatalog> CreateCommandCatalog(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandEntry>>> commandes = 0) {
+  CommandCatalogBuilder builder_(_fbb);
+  builder_.add_commandes(commandes);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<CommandCatalog> CreateCommandCatalogDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandEntry>> *commandes = nullptr) {
+  auto commandes__ = commandes ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandEntry>>(*commandes) : 0;
+  return cyberpunk_rp::protocol::CreateCommandCatalog(
+      _fbb,
+      commandes__);
+}
+
+struct ConsoleLine FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef ConsoleLineBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_LEVEL = 4,
+    VT_TEXT = 6
+  };
+  uint8_t level() const {
+    return GetField<uint8_t>(VT_LEVEL, 0);
+  }
+  const ::flatbuffers::String *text() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_TEXT);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_LEVEL, 1) &&
+           VerifyOffset(verifier, VT_TEXT) &&
+           verifier.VerifyString(text()) &&
+           verifier.EndTable();
+  }
+};
+
+struct ConsoleLineBuilder {
+  typedef ConsoleLine Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_level(uint8_t level) {
+    fbb_.AddElement<uint8_t>(ConsoleLine::VT_LEVEL, level, 0);
+  }
+  void add_text(::flatbuffers::Offset<::flatbuffers::String> text) {
+    fbb_.AddOffset(ConsoleLine::VT_TEXT, text);
+  }
+  explicit ConsoleLineBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<ConsoleLine> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<ConsoleLine>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<ConsoleLine> CreateConsoleLine(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t level = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> text = 0) {
+  ConsoleLineBuilder builder_(_fbb);
+  builder_.add_text(text);
+  builder_.add_level(level);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<ConsoleLine> CreateConsoleLineDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint8_t level = 0,
+    const char *text = nullptr) {
+  auto text__ = text ? _fbb.CreateString(text) : 0;
+  return cyberpunk_rp::protocol::CreateConsoleLine(
+      _fbb,
+      level,
+      text__);
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -5020,6 +5734,9 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const cyberpunk_rp::protocol::HealthReport *msg_as_HealthReport() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_HealthReport ? static_cast<const cyberpunk_rp::protocol::HealthReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::DeviceCall *msg_as_DeviceCall() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_DeviceCall ? static_cast<const cyberpunk_rp::protocol::DeviceCall *>(msg()) : nullptr;
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -5109,6 +5826,10 @@ template<> inline const cyberpunk_rp::protocol::RespawnRequest *ClientEnvelope::
 
 template<> inline const cyberpunk_rp::protocol::HealthReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::HealthReport>() const {
   return msg_as_HealthReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::DeviceCall *ClientEnvelope::msg_as<cyberpunk_rp::protocol::DeviceCall>() const {
+  return msg_as_DeviceCall();
 }
 
 struct ClientEnvelopeBuilder {
@@ -5221,6 +5942,15 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::InventaireAutoritaire *msg_as_InventaireAutoritaire() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_InventaireAutoritaire ? static_cast<const cyberpunk_rp::protocol::InventaireAutoritaire *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::DeviceStateMsg *msg_as_DeviceStateMsg() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_DeviceStateMsg ? static_cast<const cyberpunk_rp::protocol::DeviceStateMsg *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::CommandCatalog *msg_as_CommandCatalog() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_CommandCatalog ? static_cast<const cyberpunk_rp::protocol::CommandCatalog *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::ConsoleLine *msg_as_ConsoleLine() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_ConsoleLine ? static_cast<const cyberpunk_rp::protocol::ConsoleLine *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -5317,6 +6047,18 @@ template<> inline const cyberpunk_rp::protocol::IdentitesConnues *ServerEnvelope
 
 template<> inline const cyberpunk_rp::protocol::InventaireAutoritaire *ServerEnvelope::msg_as<cyberpunk_rp::protocol::InventaireAutoritaire>() const {
   return msg_as_InventaireAutoritaire();
+}
+
+template<> inline const cyberpunk_rp::protocol::DeviceStateMsg *ServerEnvelope::msg_as<cyberpunk_rp::protocol::DeviceStateMsg>() const {
+  return msg_as_DeviceStateMsg();
+}
+
+template<> inline const cyberpunk_rp::protocol::CommandCatalog *ServerEnvelope::msg_as<cyberpunk_rp::protocol::CommandCatalog>() const {
+  return msg_as_CommandCatalog();
+}
+
+template<> inline const cyberpunk_rp::protocol::ConsoleLine *ServerEnvelope::msg_as<cyberpunk_rp::protocol::ConsoleLine>() const {
+  return msg_as_ConsoleLine();
 }
 
 struct ServerEnvelopeBuilder {
@@ -5436,6 +6178,10 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::HealthReport *>(obj);
       return verifier.VerifyTable(ptr);
     }
+    case ClientMsg_DeviceCall: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::DeviceCall *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
     default: return true;
   }
 }
@@ -5545,6 +6291,18 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_InventaireAutoritaire: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::InventaireAutoritaire *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_DeviceStateMsg: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::DeviceStateMsg *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_CommandCatalog: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::CommandCatalog *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_ConsoleLine: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ConsoleLine *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

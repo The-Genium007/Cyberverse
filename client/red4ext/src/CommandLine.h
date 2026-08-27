@@ -1,4 +1,6 @@
 #pragma once
+#include <utility>
+#include <vector>
 #include <optional>
 #include <cstring>
 #include <string>
@@ -118,6 +120,70 @@ inline bool SpawnEnrichiDemande(char* commandLine)
 //
 // ⚠️ SONDE, PAS REGLAGE. Elle degrade deliberement l'avatar ; elle n'a rien a faire dans un
 // lancement joueur, ni meme dans un test qui ne porte pas sur cette question.
+// `--tessera-drapeaux=E8:1,EA:0` — SONDE. Ecrase des octets de la requete de spawn enrichi.
+//
+// ⭐ Les octets de drapeaux `+0xe8`, `+0xea`, `+0xeb`, `+0xee` ont un effet inconnu (F-PLY-297).
+// Les faire varier un par un est la seule facon de le decouvrir, et recompiler entre chaque essai
+// coute une minute et une occasion de deployer le mauvais binaire.
+//
+// Format : une liste de `OFFSET:VALEUR` en hexadecimal pour l'offset, decimal pour la valeur.
+// Les offsets hors de la requete (0xF0 octets) sont IGNORES en silence cote appelant — c'est lui
+// qui garde, pas ce parseur.
+//
+// ⚠️ SONDE, PAS REGLAGE : ecrire un octet dont on ignore le sens dans une structure passee a une
+// fonction native est exactement le genre de geste qui a fait tomber le jeu le 2026-08-21
+// (F-PLY-225). Eteinte par defaut, jamais dans un lancement joueur.
+inline std::vector<std::pair<std::size_t, std::uint8_t>> DrapeauxRequete(char* commandLine)
+{
+    std::vector<std::pair<std::size_t, std::uint8_t>> out;
+    if (commandLine == nullptr) { return out; }
+    const std::string ligne(commandLine);
+    const std::string cle = "--tessera-drapeaux=";
+    auto i = ligne.find(cle);
+    if (i == std::string::npos) { return out; }
+    i += cle.size();
+    auto fin = ligne.find_first_of(" \t", i);
+    const std::string liste = ligne.substr(i, fin == std::string::npos ? std::string::npos : fin - i);
+    std::size_t debut = 0;
+    while (debut < liste.size())
+    {
+        auto virgule = liste.find(',', debut);
+        const std::string item = liste.substr(debut, virgule == std::string::npos ? std::string::npos
+                                                                                  : virgule - debut);
+        const auto deuxpoints = item.find(':');
+        if (deuxpoints != std::string::npos)
+        {
+            try
+            {
+                const auto offset = static_cast<std::size_t>(std::stoul(item.substr(0, deuxpoints), nullptr, 16));
+                const auto valeur = static_cast<std::uint8_t>(std::stoul(item.substr(deuxpoints + 1)));
+                out.emplace_back(offset, valeur);
+            }
+            catch (...)
+            {
+                // Un item malforme est ignore : une sonde ne doit pas faire tomber le jeu sur une
+                // faute de frappe dans un raccourci de lancement.
+            }
+        }
+        if (virgule == std::string::npos) { break; }
+        debut = virgule + 1;
+    }
+    return out;
+}
+
+// `--tessera-sans-recolte` — SONDE. Neutralise la recolte sur le V LOCAL le temps de l'appel de
+// spawn enrichi, en mettant a zero le COMPTE de chaque groupe (`desc + 0x14`), puis en le
+// restaurant.
+//
+// ⭐ C'est la seule voie qui reste contre la contamination (F-PLY-296) : le spawner ne recoit aucun
+// pointeur d'etat (F-PLY-317), donc rien dans la requete ne peut lui dire « prends cet etat-la ».
+//
+// ⚠️ ECRITURE DANS UNE STRUCTURE NATIVE. Eteinte par defaut, jamais dans un lancement joueur.
+inline bool SansRecolteDemandee(char* commandLine)
+{
+    return commandLine != nullptr && std::string(commandLine).find("--tessera-sans-recolte") != std::string::npos;
+}
+
 inline bool ChargeMinimaleDemandee(char* commandLine)
 {
     if (commandLine == nullptr) { return false; }

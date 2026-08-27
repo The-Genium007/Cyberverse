@@ -1884,6 +1884,24 @@ static std::set<uint64_t> g_avatarsAssis;
 /// D'ou l'ANCRAGE : la position voulue devient « la cabine, MAINTENANT, plus l'ecart releve a
 /// l'embarquement ». Le retard du fil disparait par construction — la cabine est locale, on lit sa
 /// position presente — au lieu d'etre corrige apres coup.
+namespace Tessera
+{
+/// ⛔ L'ANCRAGE VERTICAL D'UN PASSAGER DE PLATEFORME — DESACTIVE (Lucas, 2026-08-27).
+///
+/// Une seule constante garde les DEUX moities du mecanisme : le calcul de la hauteur
+/// (`positionVoulue.Z = plancher + dz`) et le CAS PARTICULIER de placement d'un passager. Les
+/// separer serait un piege : desactiver l'un sans l'autre laisse un demi-mecanisme actif, et un
+/// demi-mecanisme est plus difficile a diagnostiquer qu'un mecanisme entier.
+///
+/// Pourquoi c'est a `false` : voir le pave a l'endroit du calcul. En un mot — la branche passager
+/// appelait `PlacerSansCommande`, dont ce meme fichier avait DEJA prouve qu'elle n'applique rien
+/// (F-PLY-070, 3048 echantillons). L'avatar n'etait donc jamais place pendant le trajet.
+///
+/// A `false`, un passager est un avatar distant comme un autre : sa position vient du fil, la
+/// physique du jeu fait le reste. Moins juste dans une cabine en mouvement, et ASSUME.
+inline constexpr bool kAncrageVerticalActif = false;
+}   // namespace Tessera
+
 struct AncrageCabine
 {
     /// `EntityID` de la cabine porteuse (`PlayerState.frame`).
@@ -3837,6 +3855,16 @@ void NetworkGameSystem::HandleInventaireAutoritaire(
     // remplir laisserait une fenetre ou le sac autoritaire est vu VIDE — donc ou le joueur se
     // ferait vider.
     m_sacRecu = true;
+    // ⭐ LE NUMERO DE SEQUENCE DU SAC, et il ferme une course reelle (2026-08-26).
+    //
+    // A la fermeture d'un coffre, le client envoie son rapport et REPREND aussitot le
+    // realignement de l'inventaire. Mais le sac autoritaire qu'il a en cache est encore
+    // l'ANCIEN — celui d'avant le depot. La veille compare donc l'inventaire local (l'objet
+    // est parti) a un cache perime (l'objet y est) et **rend l'objet au joueur**, pendant
+    // qu'il est deja dans le coffre. Duplication, le temps que la reponse du serveur arrive.
+    //
+    // Un booleen « recu » ne peut pas distinguer deux sacs successifs. Un compteur si.
+    ++m_sacSeq;
 
     SDK->logger->InfoF(PLUGIN, "InventaireAutoritaire : %zu item(s), %zu a preserver",
         m_sacAutoritaire.size(), m_aPreserver.size());
@@ -3910,11 +3938,82 @@ void NetworkGameSystem::SendAdminCommand(const char* texte)
 // ⚠️ `ui_kind` selectionne l'ecran. 7 = coffre de vehicule. Le catalogue n'est pas fige dans le
 // schema (« contenu differe ») : ce numero est donc une convention, et il vit ici ET dans
 // `gateway.rs`. Les deux doivent bouger ensemble.
+/// Rapporte OU le jeu a pose la voiture. Douze octets — trois flottants, sans schema.
+///
+/// ⚠️ `choice = 15` est ce qui distingue ce rapport de tous les autres verbes d'interaction. Sans
+/// lui, le serveur devrait DEVINER en essayant de decoder le payload, ce que fait deja le rapport
+/// de coffre et qui est fragile : deux charges utiles de meme taille seraient confondues.
+bool NetworkGameSystem::SendRapportInvocation(float x, float y, float z)
+{
+    constexpr uint32_t kChoixRapportInvocation = 15;
+    if (m_invocationVehicule == 0)
+    {
+        return false;
+    }
+    flatbuffers::FlatBufferBuilder builder(256);
+    std::array<uint8_t, 12> octets{};
+    std::memcpy(octets.data(), &x, 4);
+    std::memcpy(octets.data() + 4, &y, 4);
+    std::memcpy(octets.data() + 8, &z, 4);
+    const auto payload = builder.CreateVector(octets.data(), octets.size());
+    const auto choix = cyberpunk_rp::protocol::CreateInteractionChoice(
+        builder, m_invocationVehicule, kChoixRapportInvocation, 0, payload);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_InteractionChoice, choix.Union());
+    builder.Finish(env);
+    // ⚠️ FIABLE, pas « au mieux » : un rapport perdu laisserait la voiture a sa vieille coordonnee
+    // en base, et le joueur croirait l'avoir sortie. Meme voie que le rapport de coffre.
+    if (m_pInterface == nullptr)
+    {
+        return false;
+    }
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    SDK->logger->InfoF(PLUGIN, "[invocation] rapport envoye : vehicule=%llu pos=(%.2f %.2f %.2f)",
+        m_invocationVehicule, x, y, z);
+    // ⚠️ La session se FERME ici. Sans ca, un second rappel de la boucle de veille renverrait la
+    // meme position, et le serveur reposerait la voiture une deuxieme fois — inoffensif
+    // aujourd'hui, faux le jour ou le rapport portera autre chose.
+    m_invocationVehicule = 0;
+    m_invocationRecord.clear();
+    return true;
+}
+
 void NetworkGameSystem::HandleInteractionOpen(const cyberpunk_rp::protocol::InteractionOpen* msg)
 {
     constexpr uint8_t kUiKindCoffre = 7;
+    constexpr uint8_t kUiKindInvocation = 8;
     if (msg == nullptr)
     {
+        return;
+    }
+    // ── L'ORDRE D'INVOCATION — « fais naitre ta voiture, et dis-moi OU » ────────────────────
+    //
+    // ⭐ Le serveur n'envoie PAS une position, il envoie un RECORD. C'est le renversement de
+    // F-VEH-054 : le serveur decide *que* la voiture sort et *a qui* elle est ; le JEU decide *ou*,
+    // parce qu'il est le seul a savoir ce qu'est une route degagee. Nos coordonnees ecrites a la
+    // main ne le savaient pas, et c'est la qu'etaient les tonneaux — donc la casse DEFINITIVE
+    // (F-VEH-053).
+    //
+    // ⚠️ Le payload est ici une CHAINE BRUTE, pas un tampon FlatBuffers imbrique : un nom de record
+    // n'a pas besoin d'un schema, et lui en donner un aurait impose une regeneration d'en-tete C++
+    // et une porte de merge pour transporter du texte.
+    if (msg->ui_kind() == kUiKindInvocation)
+    {
+        const auto* brut = msg->payload();
+        if (brut == nullptr || brut->size() == 0)
+        {
+            SDK->logger->Warn(PLUGIN, "[invocation] ordre recu SANS record — ignore");
+            return;
+        }
+        m_invocationRecord.assign(reinterpret_cast<const char*>(brut->data()), brut->size());
+        m_invocationVehicule = msg->session_id();
+        // EN DERNIER, comme partout : tant que la sequence n'a pas bouge, redscript ne fait rien.
+        // L'incrementer avant de remplir laisserait une fenetre ou l'ordre est vu avec un record
+        // VIDE — et une invocation sans record est une invocation qui echoue en silence.
+        ++m_invocationSeq;
+        SDK->logger->InfoF(PLUGIN, "[invocation] ordre recu : vehicule=%llu record=%s seq=%d",
+            m_invocationVehicule, m_invocationRecord.c_str(), m_invocationSeq);
         return;
     }
     if (msg->ui_kind() != kUiKindCoffre)
@@ -6514,6 +6613,45 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ⚠️ REPLI OBLIGATOIRE : pas de hauteur publiee (cabine de-streamee, tick mort, cabine hors
     // catalogue) -> on garde la correction reseau. Un avatar mal place se rattrape au pas suivant ;
     // un avatar qu'on cesse de corriger se PERD — mesure le meme jour, au prix d'un avatar invisible.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // ⛔ ANCRAGE VERTICAL : DESACTIVE — decision de Lucas, 2026-08-27, en session.
+    //
+    // « La gestion des ecarts est trop problematique et trop bordelique. Je veux simplement que la
+    //   personne soit, avec la gravite, synchronisee avec les autres joueurs. Quelque chose de
+    //   beaucoup plus simple, meme si ce n'est pas parfait pour l'instant. »
+    //
+    // On revient donc a la VERTICALE RESEAU : Z arrive du fil comme X et Y, et la physique du jeu
+    // fait le reste. C'est moins juste dans une cabine en mouvement, et c'est ASSUME — le flou est
+    // accepte lui aussi, pour l'instant.
+    //
+    // ── POURQUOI L'ANCRAGE N'A PAS TENU, ET CE QUI RESTE VRAI ─────────────────────────────────
+    //
+    // Il ne s'est pas revele faux : il s'est revele INAPPLICABLE avec la hauteur dont on dispose.
+    // Mesure du 2026-08-27, gaine de 91,8 m du Megabuilding H10, journal de ce meme bloc :
+    //
+    //     14:17:38  plancher=119.111  (lu=1 bouge=0)
+    //               <-- 32 secondes SANS AUCUNE LIGNE -->
+    //     14:18:10  plancher=27.269   (lu=1 bouge=0)
+    //
+    // La hauteur publiee SAUTE d'un etage a l'autre : aucune valeur intermediaire, `bouge=0` tout
+    // du long. L'avatar reste donc a une altitude fixe pendant que la cabine descend autour de lui
+    // — « il monte au plafond puis il redescend », mot pour mot ce que Lucas a rapporte.
+    //
+    // ⚠️ ET LA LECON DE METHODE, qui vaut plus que le code : la session a servi a ajuster une
+    // COURBE d'interpolation (trois iterations, mesurees, documentees) sur un mecanisme qui ne
+    // tournait pas. Le diagnostic `ecart=` compare le modele a la verite — il ne dit RIEN de ce qui
+    // est reellement applique a l'avatar. **Avant de regler un mecanisme, prouver qu'il s'execute.**
+    //
+    // Ce qui reste ACQUIS et reutilisable le jour ou on y revient :
+    //   · la geometrie d'etage se lit en redscript (F-ASC-044, mesure) ;
+    //   · la duree reelle d'un trajet est `distance / vitesse`, pas le forfait (F-ASC-042) ;
+    //   · la vitesse recoltee est ambigue sans l'occupation (F-ASC-045) ;
+    //   · le chemin de publication fonctionne A L'ARRET : `dz=0.013 ecart=0.000`, mesure.
+    // Le trou est entre les deux etages, et il est nomme.
+    //
+    // Remettre `Tessera::kAncrageVerticalActif` a `true` pour reactiver — tout le mecanisme est
+    // intact en dessous, et le CAS PASSAGER plus bas est garde par la meme constante.
+    if constexpr (Tessera::kAncrageVerticalActif)
     {
         const auto ancre = g_porteurParAvatar.find(networkId);
         if (ancre != g_porteurParAvatar.end())
@@ -6735,6 +6873,148 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                                    : (franchi ? "sol" : "sol_refuse"));
         }
     }
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // ⭐ L'INSTRUMENT DE LA VERTICALE — POSE AVANT LA SEPARATION DES BRANCHES, ET C'EST LE POINT.
+    //
+    // Le 2026-08-27, quatre correctifs successifs sur le placement d'un passager d'ascenseur n'ont
+    // produit AUCUNE difference a l'ecran. Quand rien ne change, la question n'est pas « le
+    // correctif est-il bon ? » mais « s'execute-t-il ? » — et je ne me l'etais pas posee.
+    //
+    // `PiloterAvatar` a DEUX branches, separees par `pose.locomotion == 0`, et elles se corrigent
+    // de facons opposees :
+    //   · IMMOBILE : cadence lente, bande morte de 5 cm, historiquement `PlacerSansCommande` ;
+    //   · MOBILE   : declenchee par l'ecart HORIZONTAL (`deriveHorizontale > 0.25`) — donc JAMAIS
+    //                pour un passager d'ascenseur, dont l'ecart est purement vertical.
+    //
+    // Selon la branche empruntee, le correctif a poser n'est pas le meme. On mesure donc laquelle
+    // est prise, avec les nombres qui la determinent, AVANT de toucher a l'une ou a l'autre.
+    //
+    // Ne se declenche QUE quand la cible defile verticalement : aucun bruit en regime normal.
+    {
+        auto& suiviVert = g_suiviAvatars[networkId];
+        const float dzCible =
+            suiviVert.cibleImmobileConnue ? positionVoulue.Z - suiviVert.cibleImmobilePrecedente.Z
+                                          : 0.0f;
+        const bool cibleVerticale =
+            suiviVert.cibleImmobileConnue && std::fabs(dzCible) > 0.005f;
+
+        // ── ⭐⭐ EXTRAPOLATION DU RETARD — ICI, ET PAS DANS UNE BRANCHE ─────────────────────
+        //
+        // ⚠️ CE BLOC VIVAIT DANS LA BRANCHE « IMMOBILE », ET C'ETAIT LE DEFAUT. Mesure du
+        // 2026-08-27 : un passager d'ascenseur rapporte `locomotion = 6` (EN L'AIR — la plateforme
+        // bouge sous lui), donc il ne passe JAMAIS par cette branche. Quatre correctifs successifs
+        // y ont ete poses, et aucun n'a tourne une seule fois. « Rien ne change » ne voulait pas
+        // dire « le correctif est mauvais », mais « il ne s'execute pas » — et je ne me suis pas
+        // pose la question.
+        //
+        // Ce qu'on corrige : la pose reseau est reconstituee a `TempsRendu()`, en retard d'un
+        // tampon d'interpolation ; le monde autour, lui, est rendu MAINTENANT. A 3 m/s, 100 ms de
+        // tampon font 30 cm — et le releve montre l'ecart croitre AVEC la vitesse, jusqu'a 44 cm au
+        // pic, toujours du meme signe. Signature d'un retard, pas d'un bruit.
+        //
+        // On avance donc la cible de la duree du tampon, a la vitesse mesuree de la cible. Pour un
+        // corps porte a vitesse quasi constante c'est presque exact, et ca s'ANNULE de soi-meme a
+        // l'arret. Aucune connaissance de la cabine n'est requise : ni geometrie, ni courbe, ni
+        // duree. Vaut pour toute plateforme, benne, et un jour un train.
+        // ⚠️⚠️ ON MEMORISE LA CIBLE **BRUTE**, AVANT EXTRAPOLATION — ET C'EST VITAL.
+        //
+        // La premiere version memorisait la cible APRES extrapolation. L'ecart de la frame suivante
+        // contenait donc l'extrapolation precedente, qui etait re-extrapolee, et ainsi de suite :
+        // une BOUCLE DE RETROACTION POSITIVE. Mesuree le 2026-08-27, en quelques images :
+        //
+        //     cible.z = -13 291 337
+        //     cible.z = -5,6e18
+        //     cible.z = 5,09e29
+        //     cible.z = ±inf        -> reel.z = -16384 (le moteur refuse la position)
+        //
+        // L'avatar devenait impossible a placer, donc invisible. C'est l'instrument `[vert]` qui l'a
+        // attrape en une lecture — un correctif divergent est indiscernable d'un correctif inerte
+        // quand on ne regarde que l'ecran.
+        const RED4ext::Vector4 cibleBrute = positionVoulue;
+
+        if (cibleVerticale && deltaTime > 0.0001f)
+        {
+            // ── ⭐ LISSAGE DE LA VITESSE, et il repare deux pics MESURES ────────────────────
+            //
+            // L'extrapolation multiplie la vitesse par le delai du tampon : une vitesse estimee sur
+            // UNE image est donc aussi bruitee que la duree de cette image. Releve du 2026-08-27,
+            // deux instances sur la meme machine : l'ecart tenait a ±5 cm, avec DEUX pics isoles a
+            // 0,69 m — tous deux sur une image ou l'ecart de cible par frame passait de 0,09 a
+            // 0,26 m. L'image etait longue, pas la cabine plus rapide.
+            //
+            // Une plateforme va a vitesse quasi constante : lisser ne coute donc rien en justesse,
+            // et supprime la totalite du bruit d'echantillonnage. Moyenne exponentielle a 0,25 —
+            // environ quatre images de memoire, soit assez pour absorber une image longue et pas
+            // assez pour trainer au demarrage.
+            const float vzInstantanee = dzCible / deltaTime;
+            static constexpr float kLissageVitesse = 0.25f;
+            if (suiviVert.vitesseZConnue)
+            {
+                suiviVert.vitesseZLissee += kLissageVitesse * (vzInstantanee - suiviVert.vitesseZLissee);
+            }
+            else
+            {
+                suiviVert.vitesseZLissee = vzInstantanee;
+                suiviVert.vitesseZConnue = true;
+            }
+            const float vzCible = suiviVert.vitesseZLissee;
+            const float delai = static_cast<float>(g_horlogeRendu.DelaiCourant());
+            // Borne : au-dela de 300 ms de tampon on n'extrapole pas plus loin. Un fil degrade ne
+            // doit pas projeter un avatar a plusieurs metres de sa cible.
+            const float delaiBorne = delai > 0.3f ? 0.3f : (delai < 0.0f ? 0.0f : delai);
+
+            // ── ⭐ ET UNE IMAGE DE PLUS, parce qu'il y en a une entre le calcul et l'ecran ─────
+            //
+            // La pose est reconstituee ICI, appliquee ICI, et RENDUE a l'image suivante. Ce retard
+            // d'une image est constant et vaut `vitesse x dt` — ce fichier le decrivait deja, a
+            // propos du passager d'ascenseur, quelques centaines de lignes plus haut.
+            //
+            // Mesure du 2026-08-27 qui le confirme : apres extrapolation du tampon, l'erreur de
+            // fond tombe a +0,07..+0,14 m, TOUJOURS POSITIVE — et l'ecart de cible par image vaut
+            // justement 0,11 a 0,14 m. Le residu est donc, exactement, une image.
+            //
+            // ⚠️ Un residu SYSTEMATIQUE (toujours du meme signe) se corrige ; un residu qui change
+            // de signe est du bruit et ne se corrige pas. C'est le signe constant qui autorise ce
+            // terme, pas sa taille.
+            float avance = vzCible * (delaiBorne + deltaTime);
+            // ⚠️ FILET DE SECURITE, et il est la parce qu'un bug l'a franchi. Une cabine de Night
+            // City ne parcourt jamais 2 m en un tampon d'interpolation (ce serait 20 m/s). Au-dela,
+            // ce n'est plus une extrapolation, c'est un emballement — on refuse, et le pire cas
+            // devient « pas de correction » au lieu de « avatar a l'infini ».
+            static constexpr float kAvanceMaxM = 2.0f;
+            if (!(avance > -kAvanceMaxM && avance < kAvanceMaxM))
+            {
+                avance = 0.0f;   // couvre aussi NaN : toute comparaison avec NaN est fausse
+            }
+            positionVoulue.Z += avance;
+        }
+
+        // ⚠️ LE SUIVI SE MET A JOUR ICI, POUR TOUT LE MONDE. Il vivait dans la branche immobile :
+        // la cible precedente restait donc figee a jamais pour un passager (qui n'y passe pas), et
+        // l'ecart par frame valait n'importe quoi — `-25.4382` constant dans le premier releve.
+        suiviVert.cibleImmobilePrecedente = cibleBrute;
+        suiviVert.cibleImmobileConnue = true;
+
+        if (cibleVerticale)
+        {
+            suiviVert.depuisLogS += deltaTime;
+            if (suiviVert.depuisLogS >= 0.5f)
+            {
+                suiviVert.depuisLogS = 0.0f;
+                const auto reel = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+                const float dh = std::sqrt((positionVoulue.X - reel.X) * (positionVoulue.X - reel.X)
+                                           + (positionVoulue.Y - reel.Y) * (positionVoulue.Y - reel.Y));
+                SDK->logger->InfoF(PLUGIN,
+                    "[vert %llu] loco=%u BRANCHE=%s | cible.z=%.3f reel.z=%.3f ECART.z=%+.3f | "
+                    "dh=%.3f | dz_cible_par_frame=%+.4f porteur=%d",
+                    networkId, static_cast<unsigned>(pose.locomotion),
+                    pose.locomotion == 0 ? "IMMOBILE" : "MOBILE",
+                    positionVoulue.Z, reel.Z, reel.Z - positionVoulue.Z, dh, dzCible,
+                    g_porteurParAvatar.count(networkId) != 0 ? 1 : 0);
+            }
+        }
+    }
+
     // ── IMMOBILE : rien a animer ───────────────────────────────────────────────────────────
     //
     // Une commande de marche vers un point ou l'on est deja produit un pietinement. On place, et
@@ -6908,7 +7188,12 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // Pour lui : chaque frame, sans bande morte. La raison d'etre du garde — « nos propres
         // placements empiles se rejouent vers des cibles perimees » (F-PLY-085) — vaut pour un
         // corps qui ne devrait pas bouger, pas pour un corps qu'on doit suivre en continu.
-        const bool passager = g_porteurParAvatar.count(networkId) != 0;
+        // ⛔ Garde par la MEME constante que le calcul de hauteur (voir `Tessera::kAncrageVerticalActif`).
+        // A `false`, `passager` est toujours faux : un passager de cabine redevient un avatar
+        // distant ordinaire, corrige par le chemin qui a fait ses preuves (F-PLY-085 : mediane a
+        // 0,00 m, corrections actives). C'est la simplicite demandee par Lucas le 2026-08-27.
+        const bool passager =
+            Tessera::kAncrageVerticalActif && g_porteurParAvatar.count(networkId) != 0;
 
         // ── L'AMORTISSEMENT DE L'ERREUR — la couche de finition, et ses limites ────────────
         //
@@ -7003,15 +7288,154 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // laissait celui-ci tourner : un test qui croit avoir tout coupe mesure encore un
         // correcteur actif. C'est exactement la confusion qui a produit un premier verdict faux le
         // 2026-08-17 (F-PLY-085) — un instrument qui n'eteint pas tout ce qu'il pretend eteindre.
+        // ── ⭐ LA CIBLE DEFILE-T-ELLE ? (2026-08-27) ────────────────────────────────────────
+        //
+        // On compare la cible de CETTE frame a celle de la precedente. Un corps vraiment immobile
+        // a une cible figee ; un corps PORTE (ascenseur, plateforme, un jour un train) a une cible
+        // qui defile alors que sa locomotion dit « au repos ».
+        //
+        // ⚠️ C'est cette confusion qui a produit le defaut rapporte par Lucas le 2026-08-27 : un
+        // passager d'ascenseur tombait dans la branche « immobile », donc corrige toutes les DEUX
+        // SECONDES, au-dela de CINQ CENTIMETRES, et par `PlacerSansCommande` — dont ce meme fichier
+        // avait deja prouve qu'elle N'APPLIQUE RIEN (F-PLY-070, 3048 echantillons). Trois freins
+        // empiles, dont un total : l'avatar ne bougeait tout simplement pas pendant que la cabine
+        // descendait autour de lui.
+        const RED4ext::Vector4 cibleActuelle = positionVoulue;
+        float defilementCible = 0.0f;
+        float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+        if (suiviImmobile.cibleImmobileConnue && deltaTime > 0.0001f)
+        {
+            const float dx = cibleActuelle.X - suiviImmobile.cibleImmobilePrecedente.X;
+            const float dy = cibleActuelle.Y - suiviImmobile.cibleImmobilePrecedente.Y;
+            const float dz = cibleActuelle.Z - suiviImmobile.cibleImmobilePrecedente.Z;
+            defilementCible = std::sqrt(dx * dx + dy * dy + dz * dz);
+            vx = dx / deltaTime;
+            vy = dy / deltaTime;
+            vz = dz / deltaTime;
+        }
+        suiviImmobile.cibleImmobilePrecedente = cibleActuelle;
+        suiviImmobile.cibleImmobileConnue = true;
+
+        // 1 cm entre deux frames : en dessous, c'est du bruit de pose ; au-dessus, la cible defile
+        // vraiment. Une cabine a 4 m/s parcourt ~7 cm par frame a 60 fps — tres au-dessus du seuil.
+        static constexpr float kDefilementCibleM = 0.01f;
+        const bool ciblePortee = defilementCible > kDefilementCibleM;
+
+        // ── ⭐⭐ EXTRAPOLATION : ON ANNULE LE RETARD AU LIEU DE LE SUBIR ─────────────────────
+        //
+        // Lucas, 2026-08-27 : « quand on monte, les genoux dans le sol ; quand on descend, les
+        // avatars volent ». MEME SIGNATURE DANS LES DEUX SENS : l'avatar est EN RETARD sur la
+        // cabine. Ce n'est donc pas une imprecision de placement — c'est un decalage entre DEUX
+        // HORLOGES, et ce fichier le documentait deja quelques centaines de lignes plus haut :
+        //
+        //   · la pose reseau est reconstituee a `TempsRendu()`, deliberement en retard d'un tampon
+        //     d'interpolation — c'est ce qui rend le mouvement des autres joueurs fluide ;
+        //   · la CABINE, elle, est rendue MAINTENANT : c'est une entite locale.
+        //
+        // A 4 m/s, 100 ms de tampon font 40 cm. C'est exactement la hauteur d'un genou.
+        //
+        // On avance donc la cible de la duree du tampon, a la vitesse mesuree de la cible. Pour un
+        // ascenseur — vitesse quasi constante, aucune entree joueur — l'extrapolation est presque
+        // exacte, et elle s'ANNULE d'elle-meme a l'arret (vitesse nulle, donc terme nul).
+        //
+        // ⚠️ POURQUOI CECI PLUTOT QUE L'ANCRAGE SUR LA CABINE : ca ne demande de connaitre NI la
+        // cabine, NI sa geometrie d'etages, NI la courbe de son trajet — les trois choses sur
+        // lesquelles la session du 2026-08-27 a bute. Et ca vaut pour TOUT corps porte : plateforme,
+        // benne, un jour un train.
+        //
+        // ⚠️ Le pire cas est BORNE et transitoire : au demarrage et au freinage la vitesse change,
+        // donc l'extrapolation depasse d'environ `acceleration x delai²` — quelques centimetres, le
+        // temps de la rampe. A comparer aux 40 cm permanents qu'elle supprime.
+        if (ciblePortee)
+        {
+            // Borne de securite : au-dela de 300 ms de tampon on n'extrapole pas plus loin. Un fil
+            // degrade ne doit pas projeter un avatar a plusieurs metres de sa cible.
+            const float delai = static_cast<float>(g_horlogeRendu.DelaiCourant());
+            const float delaiBorne = delai > 0.3f ? 0.3f : (delai < 0.0f ? 0.0f : delai);
+            positionVoulue.X += vx * delaiBorne;
+            positionVoulue.Y += vy * delaiBorne;
+            positionVoulue.Z += vz * delaiBorne;
+
+            // ── ⭐⭐⭐ LA CORRECTION COSMETIQUE : ON S'ALIGNE SUR LE JOUEUR LOCAL ────────────
+            //
+            // Demande de Lucas, 2026-08-27 : « la hauteur, ce n'est pas grave dans les ascenseurs,
+            // on peut tolerer quelques dizaines de centimetres de correction pour avoir quelque
+            // chose de propre — que chaque client corrige ca de maniere esthetique. »
+            //
+            // C'est la bonne idee, et c'est la pratique standard : la position AUTORITAIRE et la
+            // position AFFICHEE n'ont aucune raison d'etre la meme. Le serveur garde la verite ;
+            // le rendu montre ce qui est juste a l'oeil.
+            //
+            // ⭐ Le point cle : il existe une reference locale, rendue MAINTENANT, exempte de tout
+            // retard reseau — LE JOUEUR LOCAL. S'il est dans la meme cabine, les deux corps sont
+            // sur le MEME plancher, donc a la MEME altitude. On n'a besoin de connaitre ni la
+            // cabine, ni sa geometrie, ni sa courbe : juste ou sont nos propres pieds.
+            //
+            // ⚠️ C'est aussi la seule voie qui ne depend d'AUCUN des accesseurs qui ont echoue
+            // cette session (F-ASC-041, hauteur de composant ; la geometrie d'etage ; la courbe de
+            // trajet). `Entity_GetWorldPosition` sur le joueur local est le chemin le plus eprouve
+            // de tout le mod.
+            //
+            // ── LES DEUX GARDES, ET POURQUOI ELLES SONT ETROITES ──────────────────────────────
+            //
+            // 1. PROXIMITE HORIZONTALE. Une cabine fait quelques metres ; au-dela, les deux corps
+            //    ne sont pas sur le meme plancher et aligner serait FAUX. 3 m couvre une cabine
+            //    d'ascenseur et exclut a peu pres tout le reste.
+            // 2. ECART VERTICAL BORNE. Si l'ecart depasse 2 m, ce n'est pas un retard de tampon :
+            //    c'est un autre etage, une autre cabine, ou une erreur. On ne corrige alors PAS —
+            //    mieux vaut un avatar visiblement mal place qu'un avatar teleporte par surprise.
+            //
+            // ⚠️ ET C'EST BIEN COSMETIQUE : on ne touche qu'a `positionVoulue`, c'est-a-dire a ce
+            // qu'on AFFICHE. Rien ne remonte au serveur, aucune pose n'est reecrite, et la position
+            // autoritaire de l'autre joueur reste la sienne. Si le serveur et l'ecran divergent de
+            // 30 cm dans une cabine, personne ne peut le voir et rien n'en depend.
+            static constexpr float kRayonMemePlancherM = 3.0f;
+            static constexpr float kEcartVerticalMaxM = 2.0f;
+            if (const auto joueurLocal = Cyberverse::Utils::GetPlayer())
+            {
+                const auto posLocale = Cyberverse::Utils::Entity_GetWorldPosition(joueurLocal);
+                const float dxl = positionVoulue.X - posLocale.X;
+                const float dyl = positionVoulue.Y - posLocale.Y;
+                const float distanceHorizontale = std::sqrt(dxl * dxl + dyl * dyl);
+                const float ecartVertical = std::fabs(positionVoulue.Z - posLocale.Z);
+                if (distanceHorizontale < kRayonMemePlancherM && ecartVertical < kEcartVerticalMaxM)
+                {
+                    positionVoulue.Z = posLocale.Z;
+                }
+            }
+        }
+
+        // Une cible qui defile se suit a la CADENCE DES SNAPSHOTS, pas plus vite : corriger a
+        // 60 Hz une donnee qui arrive a 20 Hz n'ajoute aucune information et triple le cout.
+        static constexpr float kPeriodeCiblePorteeS = 0.05f;
+        const float periode = ciblePortee ? kPeriodeCiblePorteeS : kPeriodePlacementImmobileS;
+        const float bandeMorte = ciblePortee ? 0.01f : kBandeMorteImmobileM;
+
         if (!g_suspendreCorrections && !passager
-            && (deriveImmobile > kBandeMorteImmobileM || deriveYaw > kBandeMorteYawDeg)
-            && suiviImmobile.depuisPlacementImmobileS >= kPeriodePlacementImmobileS)
+            && (deriveImmobile > bandeMorte || deriveYaw > kBandeMorteYawDeg)
+            && suiviImmobile.depuisPlacementImmobileS >= periode)
         {
             suiviImmobile.depuisPlacementImmobileS = 0.0f;
-            // La correction n°2 du pave ci-dessus etait PRESCRITE et jamais appliquee : le
-            // commentaire disait `PlacerSansCommande`, le code appelait `SetEntityPosition`. Un
-            // correctif documente mais absent est pire qu'un correctif manquant — on le croit fait.
-            PlacerSansCommande(entityId, positionVoulue, pose.yaw);
+            if (ciblePortee)
+            {
+                // ⭐ `SetEntityPosition` — le SEUL placement dont l'effet soit prouve (F-PLY-085).
+                //
+                // Il empile un `AITeleportCommand`, et c'est ce qui interdisait de l'appeler a
+                // chaque frame sur un avatar QUI MARCHE : la commande de teleport annule la
+                // commande de marche, soixante fois par seconde. Ici le corps est au repos — il n'y
+                // a aucune commande de marche a annuler — et la cadence est bornee a 20 Hz.
+                //
+                // ⚠️ L'autre objection historique etait « ca cree du flou ». Elle est LEVEE : le
+                // flou etait le FLOU CINETIQUE du jeu, un reglage graphique, identifie par Lucas le
+                // 2026-08-27. F-ASC-037 (« le flou vient du placement image par image ») est donc
+                // refute — on avait attribue a notre code un effet qui ne lui appartenait pas.
+                SetEntityPosition(entityId, positionVoulue, pose.yaw);
+            }
+            else
+            {
+                // Corps reellement immobile : le placement doux suffit, et il ne coute rien.
+                PlacerSansCommande(entityId, positionVoulue, pose.yaw);
+            }
         }
 
         // ── T10 bis : L'INSTRUMENT ÉTAIT AVEUGLE SUR UN AVATAR IMMOBILE ────────────────────
@@ -7232,7 +7656,24 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // remis à zéro par tout placement, donc il dit déjà exactement « depuis combien de temps cet
     // avatar n'a pas été posé ». La branche immobile, elle, a besoin de son propre compteur parce
     // qu'elle sort AVANT l'incrément (voir `depuisPlacementImmobileS`).
-    static constexpr float kPeriodePlacementVolS = 0.1f;
+    // ⚠️⚠️ 100 ms ETAIT LA MOITIE DU DEFAUT DE L'ASCENSEUR, et le nombre le dit.
+    //
+    // Cette cadence a ete choisie pour un SAUT : un corps en chute libre, une seconde, ou 100 ms de
+    // retard ne se voient pas. Mais `locomotion == 6` (« en l'air ») couvre AUSSI le passager d'une
+    // plateforme en mouvement — le jeu le classe ainsi parce que le sol bouge sous lui.
+    //
+    // A 3 m/s, 100 ms font 30 cm de derive entre deux corrections. Le releve du 2026-08-27 mesure
+    // un ecart qui croit avec la vitesse jusqu'a 44 cm : ~30 cm de cadence + ~14 cm de tampon
+    // d'interpolation (traite par l'extrapolation, plus haut). Les deux termes comptent, et aucun
+    // des deux n'est negligeable devant l'autre.
+    //
+    // 30 ms (~33 Hz) ramene le terme de cadence sous 10 cm. C'est plus rapide que l'arrivee des
+    // snapshots (25 Hz), donc on ne cree pas d'information — on cesse seulement d'en perdre.
+    //
+    // ⚠️ Le cout est borne et connu : `SetEntityPosition` empile un `AITeleportCommand`, et c'est
+    // ce qui avait fait tomber le jeu a 60 Hz par avatar le 2026-08-06. Ici on reste sous 33 Hz,
+    // et SEULEMENT pour un avatar en l'air — un etat rare et bref hors ascenseur.
+    static constexpr float kPeriodePlacementVolS = 0.03f;
     if (!g_suspendreCorrections && enLair && derive <= kSautFrancM)
     {
         auto& s = g_suiviAvatars[networkId];

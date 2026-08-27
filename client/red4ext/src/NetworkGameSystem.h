@@ -316,6 +316,32 @@ struct SuiviAvatar
     /// etant appele a chaque frame (2026-08-06).
     float depuisPlacementImmobileS = 0.0f;
 
+    /// ⭐ LA CIBLE PRECEDENTE, pour savoir si elle BOUGE — et pas si l'avatar bouge.
+    ///
+    /// Un passager d'ascenseur est « immobile » au sens de la locomotion (il ne marche pas), mais
+    /// sa position monde DEFILE avec la cabine. La branche immobile le corrigeait donc toutes les
+    /// deux secondes, au-dela de 5 cm, par un appel inerte — autant dire jamais. Pendant ce temps
+    /// la cabine descendait autour de lui : « le personnage monte au plafond » (Lucas, 2026-08-27).
+    ///
+    /// Comparer la cible d'une frame a l'autre distingue les deux cas sans rien deviner : une cible
+    /// figee = un corps reellement immobile (cadence lente, c'est le cas de loin le plus frequent) ;
+    /// une cible qui defile = un corps porte, ou tire par autre chose que ses jambes.
+    RED4ext::Vector4 cibleImmobilePrecedente{};
+    bool cibleImmobileConnue = false;
+
+    /// ⭐ VITESSE VERTICALE LISSEE de la cible, en m/s — et le lissage n'est pas du confort.
+    ///
+    /// L'extrapolation multiplie la vitesse par le delai du tampon. Une vitesse estimee sur UNE
+    /// image est donc aussi bruitee que la duree de cette image : a deux instances sur la meme
+    /// machine, une image longue fait bondir l'estimation, et l'extrapolation avec elle.
+    ///
+    /// Mesure du 2026-08-27 : l'ecart oscillait a ±5 cm, avec DEUX pics isoles a 0,69 m — tous deux
+    /// sur une image ou l'ecart de cible par frame passait de 0,09 a 0,26 m. Le lissage supprime
+    /// ces pics sans toucher au regime etabli : une plateforme va a vitesse quasi constante, donc
+    /// lisser ne coute rien en justesse et gagne tout en stabilite.
+    float vitesseZLissee = 0.0f;
+    bool vitesseZConnue = false;
+
     /// Derniere posture POUSSEE a cet avatar : 0 debout, 1 accroupi.
     ///
     /// ⚠️ INITIALISE A 0, PAS A -1, et ce n'est pas un detail de style. Un pantin naît DEBOUT :
@@ -728,6 +754,8 @@ private:
     /// possedes rien »), l'absence de message n'en est pas un. Les confondre ferait vider les
     /// joueurs d'un serveur qui n'a jamais parle d'inventaire.
     bool m_sacRecu = false;
+    /// Combien de sacs autoritaires ont ete appliques. Voir `Tessera_SacSeq`.
+    int32_t m_sacSeq = 0;
 
     // --- LE COFFRE D'UN VEHICULE, meme doctrine que le sac ---
     //
@@ -737,6 +765,10 @@ private:
     std::vector<ItemAutoritaire> m_coffreAutoritaire;
     /// L'id RESEAU du vehicule dont on tient le coffre. 0 = aucun coffre en cours.
     uint64_t m_coffreVehicule = 0;
+    /// L'ordre d'invocation courant — voir `HandleInteractionOpen` et F-VEH-054.
+    uint64_t m_invocationVehicule = 0;
+    std::string m_invocationRecord;
+    int32_t m_invocationSeq = 0;
     /// La session d'interaction ouverte par le serveur — a renvoyer telle quelle a la fermeture.
     uint64_t m_coffreSession = 0;
     uint16_t m_coffreCapacite = 0;
@@ -983,6 +1015,9 @@ public:
     /// ou : il comprenait ces deux verbes depuis toujours, aucun client ne les a jamais envoyes.
     /// Zero octet de protocole ajoute.
     void RapporterMontage(uint64_t vehiculeReseau, uint32_t siege, bool monte);
+
+    /// Voir la definition — rapporte la position choisie par le jeu, et FERME la session.
+    bool SendRapportInvocation(float x, float y, float z);
 
     /// Id RESEAU d'une entite du jeu, ou 0 si elle n'en a pas (objet purement local).
     ///
@@ -1540,6 +1575,14 @@ public:
     // d'inventaire — une taille de 0 se lit alors comme « retire tout ».
     bool Tessera_SacRecu() const { return m_sacRecu; }
 
+    /// Le numero du sac autoritaire courant. Change a CHAQUE sac recu.
+    ///
+    /// ⚠️ Un COMPTEUR, pas un booleen, et pour la meme raison que la sequence du coffre : deux sacs
+    /// successifs au contenu identique seraient indiscernables par un drapeau. C'est ce qui permet
+    /// a la veille d'attendre un sac *neuf* apres avoir ferme un coffre, plutot que de repartir sur
+    /// un cache perime et de rendre au joueur ce qu'il vient de ranger.
+    int32_t Tessera_SacSeq() const { return m_sacSeq; }
+
     int32_t Tessera_SacTaille() const { return static_cast<int32_t>(m_sacAutoritaire.size()); }
 
     Red::CString Tessera_SacItemId(int32_t index) const
@@ -1571,6 +1614,31 @@ public:
     /// qui decide si le coffre est propose. Sans lui, il faudrait ecrire dans `m_playerVehicle`,
     /// un champ PERSISTANT du systeme de sauvegarde : un etat qu'on pose et qu'il faut ensuite
     /// penser a retirer. Repondre a une question coute moins cher que modifier un etat.
+    // ── L'INVOCATION : « fais naitre ta voiture, et dis-moi OU » ────────────────────────────
+    //
+    // ⚠️ Un COMPTEUR, pas un booleen : un joueur sort sa voiture plusieurs fois, et deux ordres
+    // successifs pour le meme vehicule seraient indiscernables par un drapeau — le second ne
+    // partirait jamais.
+    int32_t Tessera_InvocationSeq() const { return m_invocationSeq; }
+
+    /// Le record a invoquer. Chaine VIDE quand aucun ordre n'est en cours.
+    ///
+    /// ⚠️ C'est le record de la variante **JOUEUR** que le serveur doit envoyer
+    /// (`..._player`) : le garage du jeu ne connait pas les variantes de circulation, et
+    /// `EnablePlayerVehicle` les refuse (F-VEH-055). Le client ne corrige PAS ce nom — s'il est
+    /// faux, l'invocation echoue et le dit, plutot que de deviner.
+    Red::CString Tessera_InvocationRecord() const
+    {
+        return Red::CString(m_invocationRecord.c_str());
+    }
+
+    /// Rapporte la position que le JEU a choisie. Rend `false` si aucun ordre n'est en cours —
+    /// donc si on rapporte deux fois, ou sans avoir ete sollicite.
+    bool Tessera_RapporterInvocation(float x, float y, float z)
+    {
+        return SendRapportInvocation(x, y, z);
+    }
+
     bool Tessera_EstVehiculeReseau(RED4ext::ent::EntityID cible) const
     {
         if (!cible.IsDefined())
@@ -1941,6 +2009,41 @@ public:
             }
         }
         return n;
+    }
+
+    /// L'id RESEAU du N-ieme vehicule serveur, en decimal. Chaine VIDE hors bornes.
+    ///
+    /// ⚠️ POURQUOI UNE CHAINE POUR UN NOMBRE. C'est un id sur 64 bits, et il ne sert qu'a etre LU
+    /// et COMPARE par un humain ou par un script de sonde — jamais a calculer. Le rendre en texte
+    /// evite la question du transport d'un entier 64 bits jusqu'a Lua, qui n'en a pas.
+    ///
+    /// ⭐ CE QU'IL DEBLOQUE, ET CE N'EST PAS DU CONFORT. Sans lui, un designateur ne peut viser que
+    /// « le plus proche » — or les voitures du serveur sont groupees a quelques metres les unes des
+    /// autres, et surtout elles ne se valent pas : celles du MANIFESTE n'ont aucune ligne en base,
+    /// donc **aucun coffre**. Une sonde de coffre tiree sur l'une d'elles ne mesure rien et le dit
+    /// mal : le serveur ignore la demande en silence, ce qui ressemble exactement a une chaine
+    /// cassee. Mesure du 2026-08-26 : `tick N seq=0` a l'infini, pour une sonde parfaitement saine
+    /// tiree sur la mauvaise voiture.
+    Red::CString Tessera_VehiculeReseauIdParIndex(int32_t index) const
+    {
+        if (index < 0)
+        {
+            return Red::CString("");
+        }
+        int32_t n = 0;
+        for (const auto& [reseauId, casse] : m_degatsConnus)
+        {
+            if (m_networkedEntitiesLookup.find(reseauId) == m_networkedEntitiesLookup.end())
+            {
+                continue;
+            }
+            if (n == index)
+            {
+                return Red::CString(std::to_string(reseauId).c_str());
+            }
+            ++n;
+        }
+        return Red::CString("");
     }
 
     /// L'`EntityID` LOCALE du N-ieme vehicule serveur. Vide hors bornes — l'appelant doit tester.
@@ -2482,6 +2585,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_CoffreViderRapport);
     RTTI_METHOD(Tessera_CoffreAjouterAuRapport);
     RTTI_METHOD(Tessera_CoffreEnvoyerRapport);
+    RTTI_METHOD(Tessera_InvocationSeq);
+    RTTI_METHOD(Tessera_InvocationRecord);
+    RTTI_METHOD(Tessera_RapporterInvocation);
     /// Annonce montante d'une demande de POSTURE (s'asseoir, s'appuyer). `emplacementId == 0`
     /// libere. Le serveur decide — le client ne fait que demander.
     RTTI_METHOD(Tessera_AppareilTotalRecus);
@@ -2517,7 +2623,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AvatarJoueurParIndex);
     RTTI_METHOD(Tessera_CompteVehiculesReseau);
     RTTI_METHOD(Tessera_VehiculeReseauParIndex);
+    RTTI_METHOD(Tessera_VehiculeReseauIdParIndex);
     RTTI_METHOD(Tessera_SacRecu);
+    RTTI_METHOD(Tessera_SacSeq);
     RTTI_METHOD(Tessera_SacTaille);
     RTTI_METHOD(Tessera_SacItemId);
     RTTI_METHOD(Tessera_SacItemQuantite);
