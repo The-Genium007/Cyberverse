@@ -121,7 +121,24 @@ jobs:
           # RESTENT DEHORS, et c'est voulu : AppearanceProbe, ChuteProbe et CrowdProbe. Leur
           # bandeau dit « SONDE » — elles mesurent et journalisent, elles n'ont rien a faire
           # chez un joueur.
-          foreach ($f in @('NetworkGameSystem.reds', 'PlayerActionTracker.reds', 'AvatarNeutre.reds', 'LootOff.reds', 'DegatsPvp.reds', 'SanteLocale.reds', 'ArmeAvatar.reds', 'PoliceOff.reds', 'Promotion.reds', 'StimObserver.reds')) {
+          # ⚠️ CINQ FICHIERS AJOUTÉS LE 2026-08-27, et c'est LA MÊME PANNE QUE LE 2026-08-22.
+          #
+          # Le fork portait alors 14 `.reds` et cette liste en nommait six ; quatre ont été ajoutés
+          # ce jour-là. Quatre jours plus tard, cinq nouveaux fichiers de production étaient
+          # retombés dans le même trou — parce que la liste est NOMINATIVE et que rien, dans le
+          # geste d'écrire un `.reds`, ne rappelle son existence.
+          #
+          #   HabillageAvatar   — l'avatar distant porte les vêtements décidés par le serveur.
+          #                       Sans lui, chaque joueur voit les autres en tenue par défaut.
+          #   ReglesServeur     — les règles de l'opérateur (dont la coupure des PNJ hostiles).
+          #   VehiculeCoffre    — le contenu du coffre, sous autorité serveur.
+          #   VehiculeDegats    — la casse partagée entre joueurs, et sa fenêtre de calme.
+          #   VehiculeInvocation— la sortie de véhicule par la recette native d'invocation.
+          #
+          # ⚠️ CE QUI REND CE TROU SI COÛTEUX : IL EST INVISIBLE EN DÉVELOPPEMENT. Le poste de dev
+          # déploie tout `src/Network/` à la main, donc tout marche ici — et seul un joueur réel
+          # découvre l'absence. Un test in-game ne peut PAS l'attraper. C'est ce fichier, ou rien.
+          foreach ($f in @('NetworkGameSystem.reds', 'PlayerActionTracker.reds', 'AvatarNeutre.reds', 'LootOff.reds', 'DegatsPvp.reds', 'SanteLocale.reds', 'ArmeAvatar.reds', 'PoliceOff.reds', 'Promotion.reds', 'StimObserver.reds', 'HabillageAvatar.reds', 'ReglesServeur.reds', 'VehiculeCoffre.reds', 'VehiculeDegats.reds', 'VehiculeInvocation.reds')) {
             $src = "client/RedscriptModule/src/Network/$f"
             if (-not (Test-Path $src)) { Write-Error "Module redscript introuvable : $src"; exit 1 }
             Copy-Item $src $reds/; Write-Host "Redscript -> r6/scripts/Cyberverse : $f"
