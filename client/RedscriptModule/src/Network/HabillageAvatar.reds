@@ -1,43 +1,53 @@
 module Cyberverse.Network.Managers
 
-// ⛔ L'HABILLAGE NE SE FAIT PLUS ICI — ce fichier MESURE le mélange, et prépare son correctif.
+// L'AVATAR DISTANT PORTE LES VÊTEMENTS DE L'INVENTAIRE DE SON JOUEUR.
 //
-// Les vêtements sont des composants de `avatar_distant_ma.ent` depuis F-PLY-286. Ce qui reste ici
-// est l'instrument qui a permis de comprendre pourquoi les avatars se mélangent.
+// ⭐ Demande de Lucas, 2026-08-24 : *« il faut que ce soit les mêmes »*. Le serveur décide déjà ce
+// qui est porté (`contenus.porte`) et l'envoie ; ce fichier est le dernier mètre.
 //
-// ── LES TROIS IMPASSES DE CE FICHIER, à ne pas rouvrir sans mesure neuve ─────────────────────
+// ── ⚠️ POURQUOI ON ALLUME, ET POURQUOI ON N'ÉQUIPE PAS ──────────────────────────────────────
 //
-//   1. **L'ÉQUIPEMENT** — 🔴 F-PLY-275 : l'entité d'item ne naît jamais.
-//   2. **L'APPARENCE APRÈS LA NAISSANCE** — F-PLY-283 : l'ordre prend, le corps disparaît.
-//   3. **RIEN NE SE DÉCIDE APRÈS LA CONSTRUCTION** — F-PLY-191, la loi qui explique les deux.
+// Équiper un pantin distant est une impasse **mesurée deux fois, par deux mécanismes distincts** :
+// item réel (F-PLY-275) et item de prévisualisation façon `EquipmentEx` (F-PLY-304). Dans les deux
+// cas `AddItemToSlot` rend `true`, le slot passe en « naissance d'entité en cours », et **il y
+// reste indéfiniment** — neuf passes, `GetItemInSlot` toujours `null`. Le wiki de modding dit la
+// même chose dans l'autre sens : sur un PNJ, les vêtements sont cuits dans l'apparence, **à la
+// construction** (F-PLY-305), ce qui est exactement la loi F-PLY-191.
 //
-// ── ⭐ CE QU'ON SAIT DU MÉLANGE, ET CE QUE CE FICHIER MESURE ─────────────────────────────────
+// Ce que la mesure autorise, c'est d'**éteindre et rallumer un composant déjà monté** — `Toggle`,
+// vérifié en capture (F-PLY-306). D'où l'architecture, décidée le 2026-08-24 :
 //
-// **Chaque spectateur imprime son propre V sur l'avatar qu'il regarde** (F-PLY-296, prouvé en
-// réduisant la charge à une seule paire : la coiffure et le teint du spectateur restaient sur le
-// corps d'en face). Le corps est donc bâti à partir de notre charge **et** de l'état de
-// customisation, qui est un singleton portant le V du joueur local.
+//     tous les vêtements du catalogue serveur sont CUITS dans l'entité, `isEnabled = 0` ;
+//     ici, on ALLUME ceux que le serveur déclare portés.
 //
-// ⚠️ Et « couvrir tous les slots du voisin » ne suffirait pas : les deux esthétiques de test ne
-// partagent que **8 slots sur 21 et 18** — les slots encodent le sexe. Treize slots du spectateur
-// resteraient non surchargés, et ce sont exactement ceux qui fuient (coiffure, organes).
+// La cuisson est faite hors jeu par `tools/re-probe/entites/cuire-garde-robe.py`.
 //
-// D'où la question que ce fichier a posée : **peut-on faire taire l'état ?**
+// ── ⭐ LA CONVENTION QUI ÉVITE TOUT FICHIER DE CORRESPONDANCE ────────────────────────────────
 //
-// ⛔ **RÉPONSE : NON, ET C'EST MESURÉ (F-PLY-297).** `ClearState()` rend **`false`** en cours de
-// partie — elle refuse — et le joueur local est rigoureusement inchangé : 28 composants de mesh
-// avant, 28 après ; 26 avant, 26 après sur l'autre instance. La méthode n'est utilisable que dans
-// le parcours du créateur de personnage.
+//     nom du composant  =  <appearanceName de TweakDB> + <m|w>
+//     exemple           =  t1_tshirt_04_old_02_m
 //
-// La voie est donc fermée, et elle l'a été en un lancement, sans rien casser. La sonde reste ici
-// parce qu'elle est **inerte** et qu'elle documente le refus : quelqu'un aura l'idée à nouveau.
+// Le client reçoit un `TweakDBID` d'item ; `appearanceName` est un flat de ce record, lisible au
+// script. Il n'y a donc **aucune table à embarquer** — donc rien qui puisse diverger en silence de
+// l'entité livrée. Et le préfixe (`t1_`, `t2_`, `l1_`, `s1_`) est conservé, ce que le moteur exige
+// pour reconnaître un vêtement (« Garment Support »).
 //
-//   grep "\[Melange\]" <jeu>/red4ext/logs/cyberverse.red4ext-*.log
+// ⚠️ Un vêtement peut avoir PLUSIEURS meshes (une veste en a deux) : ils sont suffixés `__1`,
+// `__2`. On allume donc tout ce qui **commence par** la clé — jamais ce qui lui est égal.
+//
+// ── ⚠️ LES SOUS-VÊTEMENTS SUIVENT LE RÉGLAGE DE NUDITÉ ──────────────────────────────────────
+//
+// Consigne de Lucas, 2026-08-24 : *« il y a un réglage sur le jeu pour la nudité et j'aimerais que
+// ça respecte ce réglage »*. Le jeu l'expose : `IsNudityAllowed()` sur le système de customisation.
+// Les sous-vêtements viennent de l'apparence de base (ils sont déjà montés et allumés) ; la règle
+// est donc de les ÉTEINDRE uniquement si la nudité est permise ET que le joueur n'en porte pas.
+//
+//   grep "\[Habillage\]" <jeu>/red4ext/logs/cyberverse.red4ext-*.log
 
-func TesseraJournalMelange(texte: String) -> Void {
+func TesseraJournalHabillage(texte: String) -> Void {
     let reseau = GameInstance.GetNetworkGameSystem();
     if IsDefined(reseau) {
-        reseau.Tessera_Journal("[Melange] " + texte);
+        reseau.Tessera_Journal("[Habillage] " + texte);
     }
 }
 
@@ -50,26 +60,144 @@ func TesseraCorpsDeLEntite(cible: EntityID) -> ref<Entity> {
     return entite;
 }
 
-// Appelée par `PiloterAvatar` (C++) par créneaux bornés — le seul chemin qui atteint les corps de la
-// voie enrichie (F-PLY-278). Rend `true` quand le relevé est fait.
+// La clé de composant d'un item, pour une morphologie donnée.
+//
+// ⚠️ Rend `""` quand l'item n'a pas de `appearanceName` — ce qui arrive (nourriture, argent,
+// cyberware). Un item sans apparence n'est pas une erreur : il n'a simplement rien à montrer.
+func TesseraCleVetement(record: TweakDBID, corpsMasculin: Bool) -> String {
+    let app = TweakDBInterface.GetCName(record + t".appearanceName", n"");
+    if Equals(app, n"") {
+        return "";
+    }
+    return NameToString(app) + (corpsMasculin ? "m" : "w");
+}
+
+// Appelée par `PiloterAvatar` (C++) par créneaux bornés — le seul chemin qui atteint les corps de
+// la voie enrichie (F-PLY-278). Rend `true` quand il n'y a plus rien à faire.
 func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     // ⚠️ On attend quelques passes : un corps qui vient de naître n'a pas fini de monter ses
-    // composants, et relever trop tôt donnerait une liste courte qu'on lirait comme une absence.
-    if passe < 3u {
+    // composants, et compter trop tôt donnerait une liste courte qu'on lirait comme une absence.
+    if passe < 2u {
         return false;
     }
-    let corps = TesseraCorpsDeLEntite(cible);
+    let corps = TesseraCorpsDeLEntite(cible) as GameObject;
     if !IsDefined(corps) {
         return false;
     }
-    TesseraJournalMelange(s"=== avatar \(EntityID.ToDebugString(cible)) ===");
-    TesseraReleverApparences(corps, "avatar");
+    let reseau = GameInstance.GetNetworkGameSystem();
+    if !IsDefined(reseau) {
+        return false;
+    }
 
-    // ── ⭐ LA SONDE DU JOUR : VIDER L'ÉTAT CASSE-T-IL LE JOUEUR LOCAL ? ──────────────────────
+    let combien = reseau.Tessera_NombreDeVetements(cible);
+    let masculin = reseau.Tessera_AvatarCorpsMasculin(cible);
+
+    // Les clés à allumer, calculées une fois.
+    let cles: array<String>;
+    let i = 0;
+    while i < combien {
+        let cle = TesseraCleVetement(reseau.Tessera_VetementDeLEntite(cible, i), masculin);
+        if NotEquals(cle, "") {
+            ArrayPush(cles, cle);
+        }
+        i += 1;
+    }
+
+    // ── LA POSE ────────────────────────────────────────────────────────────────────────────
     //
-    // Une seule fois par session — le drapeau vit dans le système réseau, pas ici, parce que cette
-    // fonction est rappelée pour chaque avatar et qu'on ne veut pas vider l'état vingt fois.
-    TesseraSonderVidageEtat();
+    // ⚠️ On parcourt les composants UNE fois et on décide pour chacun, plutôt que de chercher
+    // chaque clé dans la liste : le coût est linéaire au lieu de quadratique, et à des dizaines de
+    // joueurs autour, ce parcours tourne pour chaque avatar à chaque créneau.
+    let composants = corps.GetComponents();
+    let allumes = 0;
+    let j = 0;
+    while j < ArraySize(composants) {
+        let nom = NameToString(composants[j].GetName());
+        let k = 0;
+        let voulu = false;
+        while k < ArraySize(cles) {
+            if StrBeginsWith(nom, cles[k]) {
+                voulu = true;
+            }
+            k += 1;
+        }
+        // On ne touche QU'aux composants de garde-robe : tout ce qui ne commence pas par un
+        // préfixe de vêtement appartient au corps, et l'éteindre le mutilerait.
+        if voulu && !composants[j].IsEnabled() {
+            composants[j].Toggle(true);
+            allumes += 1;
+        }
+        j += 1;
+    }
+
+    // ── LES SOUS-VÊTEMENTS SUIVENT LE RÉGLAGE DE NUDITÉ ────────────────────────────────────
+    //
+    // Consigne de Lucas, 2026-08-24 : *« les sous-vêtements doivent être activés (…) et il y a un
+    // réglage sur le jeu pour la nudité, j'aimerais que ça respecte ce réglage »*.
+    //
+    // Les sous-vêtements viennent de l'apparence de base : ils sont **déjà montés et allumés**.
+    // La règle n'a donc qu'un seul cas à traiter — les ÉTEINDRE — et il est doublement gardé :
+    //
+    //     on éteint  ⟺  la nudité est permise  ET  aucun vêtement ne couvre cette zone
+    //
+    // ⚠️ LE DÉFAUT EST « HABILLÉ », ET C'EST VOULU. Si le système de customisation est injoignable,
+    // si le réglage ne se lit pas, si la liste des vêtements est vide — dans tous ces cas on ne
+    // touche à rien. Une panne ne doit jamais pouvoir déshabiller quelqu'un devant les autres.
+    let systeme = GameInstance.GetCharacterCustomizationSystem(GetGameInstance());
+    if IsDefined(systeme) && systeme.IsNudityAllowed() {
+        // Une zone est couverte si un vêtement demandé porte son préfixe. Le préfixe est celui de
+        // la nomenclature CDPR : `t` pour le torse, `l` pour les jambes.
+        let torseCouvert = false;
+        let jambesCouvertes = false;
+        let z = 0;
+        while z < ArraySize(cles) {
+            if StrBeginsWith(cles[z], "t") { torseCouvert = true; }
+            if StrBeginsWith(cles[z], "l") { jambesCouvertes = true; }
+            z += 1;
+        }
+        let eteints = 0;
+        let c = 0;
+        while c < ArraySize(composants) {
+            let nom = NameToString(composants[c].GetName());
+            // ⚠️ On ne vise QUE les sous-vêtements de l'apparence de base, nommés par CDPR :
+            // `__bra`, `__panties`, `__boxers`. Jamais un préfixe seul — `t1_` désigne aussi les
+            // t-shirts, et on éteindrait la tenue qu'on vient d'allumer.
+            let estSousVetement = StrContains(nom, "__bra") || StrContains(nom, "__panties")
+                || StrContains(nom, "__boxers");
+            let zoneLibre = (StrBeginsWith(nom, "t") && !torseCouvert)
+                || (StrBeginsWith(nom, "l") && !jambesCouvertes);
+            if estSousVetement && zoneLibre && composants[c].IsEnabled() {
+                composants[c].Toggle(false);
+                eteints += 1;
+            }
+            c += 1;
+        }
+        if eteints > 0 {
+            TesseraJournalHabillage(s"  nudite permise : \(eteints) sous-vetement(s) eteint(s)");
+        }
+    }
+
+    // ── ⛔ LA SONDE DE WRAPPERS D ARME A ETE RETIREE — elle etait FAUSSE ET NUISIBLE ────────
+    //
+    // Elle poussait `Wea_Fists` et `WeaponRight` a 1.0 pour voir si l avatar prenait une garde.
+    //
+    // 1. **Elle ne marchait pas.** Verdict de Lucas, 2026-08-25 : « ca ne veut pas se mettre en
+    //    garde ». F-PLY-311 est REFUTE — j avais lu un changement de posture dans deux captures
+    //    prises a trente minutes d ecart, ce qui n est pas un A/B.
+    // 2. **⚠️ Et elle CASSAIT le corps.** Capture du 2026-08-26 : l avatar n a plus ni visage ni
+    //    mains, les manches s arretent sur du vide. Tenir une arme change le JEU DE MESHES DE BRAS
+    //    dans le rig CDPR ; forcer la couche sans arme reelle bascule vers un jeu qui n est pas la.
+    //
+    // ⚠️ LA LECON, au-dela de cette sonde : un poids de wrapper n est pas une ecriture inoffensive.
+    // Il selectionne des ressources. Une sonde d animation doit donc etre RETIREE des son verdict
+    // pris — pas laissee en place « au cas ou ».
+
+    TesseraJournalHabillage(
+        s"avatar \(EntityID.ToDebugString(cible)) : \(ArraySize(cles)) vetement(s) demande(s), \(allumes) composant(s) allume(s) [corps \(masculin ? "M" : "F")]");
+
+    // ⚠️ On rend `true` dès qu'on a fait le tour : rallumer ce qui est déjà allumé ne sert à rien,
+    // et laisser la boucle tourner ferait relire tous les composants de tous les avatars à chaque
+    // créneau — pour rien, et à l'échelle de dizaines de joueurs ça se paierait.
     return true;
 }
 
@@ -84,43 +212,11 @@ func TesseraReleverApparences(entite: ref<Entity>, etiquette: String) -> Void {
     while i < ArraySize(composants) {
         let mesh = composants[i] as entSkinnedMeshComponent;
         if IsDefined(mesh) {
-            TesseraJournalMelange(
+            TesseraJournalHabillage(
                 s"  \(etiquette) · \(NameToString(mesh.name)) = \(NameToString(mesh.meshAppearance))");
             n += 1;
         }
         i += 1;
     }
-    TesseraJournalMelange(s"  \(etiquette) : \(n) composant(s) de mesh sur \(ArraySize(composants))");
-}
-
-// ⚠️ SONDE DESTRUCTIVE POTENTIELLE — elle appelle `ClearState()` sur le système de customisation.
-//
-// C'est le geste dont on veut savoir s'il est sûr : si l'état peut être vidé sans abîmer le V du
-// joueur local, alors on tient la voie pour empêcher ce V de contaminer les avatars des voisins
-// (F-PLY-296). On relève donc le joueur AVANT et APRÈS, dans la même session, et la comparaison des
-// deux listes est le verdict.
-//
-// ⚠️ Une seule fois par session : vider l'état à chaque avatar serait une mesure ininterprétable, et
-// un martèlement d'un système partagé.
-func TesseraSonderVidageEtat() -> Void {
-    let reseau = GameInstance.GetNetworkGameSystem();
-    if !IsDefined(reseau) || !reseau.Tessera_PremierVidageEtat() {
-        return;
-    }
-    let joueur = GameInstance.GetPlayerSystem(GetGameInstance())
-        .GetLocalPlayerControlledGameObject();
-    if !IsDefined(joueur) {
-        TesseraJournalMelange("sonde vidage : pas de joueur local, abandon");
-        return;
-    }
-    let systeme = GameInstance.GetCharacterCustomizationSystem(GetGameInstance());
-    if !IsDefined(systeme) {
-        TesseraJournalMelange("sonde vidage : systeme de customisation INJOIGNABLE");
-        return;
-    }
-    TesseraJournalMelange("--- sonde vidage : AVANT ClearState ---");
-    TesseraReleverApparences(joueur, "joueur-AVANT");
-    let vide = systeme.ClearState();
-    TesseraJournalMelange(s"--- ClearState rend \(vide) ---");
-    TesseraReleverApparences(joueur, "joueur-APRES");
+    TesseraJournalHabillage(s"  \(etiquette) : \(n) composant(s) de mesh sur \(ArraySize(composants))");
 }

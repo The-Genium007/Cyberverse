@@ -72,6 +72,15 @@ using Reserve_t = void (*)(void* aTableau, std::uint32_t aCapacite, std::uint32_
 /// echouera chez un joueur — proprement, en retombant sur la voie sure, mais elle echouera.
 constexpr const char* kRecordEnrichi = "Character.Tessera_Avatar_Marche_Male";
 
+/// ⭐ LA VARIANTE FEMININE — meme record a un champ pres : elle pointe `avatar_distant_wa.ent`,
+/// dont les trois composants de vetements portent des meshes `_wa_`.
+///
+/// ⚠️ ELLE N'EXISTE PAS POUR LE CORPS. Le corps suit la charge d'esthetique (F-PLY-267) : c'est
+/// mesure, et l'entite masculine rend tres bien un V feminin. Elle existe parce que les VETEMENTS
+/// sont des composants de l'entite (F-PLY-286) et sont donc figes a sa construction (F-PLY-191) —
+/// il n'y a aucun moyen de les changer apres coup.
+constexpr const char* kRecordEnrichiFeminin = "Character.Tessera_Avatar_Marche_Female";
+
 /// L'ascendance de notre record : c'est elle que la sonde reconnait (`Player_Puppet`).
 const std::uint64_t kRecordPhotomode = RED4ext::TweakDBID("Character.Player_Puppet_Photomode").value;
 const std::uint64_t kRecordPhotomodeBase = RED4ext::TweakDBID("Character.Player_Puppet_Base").value;
@@ -362,7 +371,7 @@ constexpr std::uint32_t kPassagesMax = 250;   // ~10 s : 30 passages ne faisaien
 static std::map<std::uint64_t, EnAttente> g_enAttente;
 
 Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob,
-                const RED4ext::Vector4& aPosition)
+                const RED4ext::Vector4& aPosition, bool aCorpsMasculin)
 {
     Resultat r;
 
@@ -524,7 +533,7 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
 
     // Le record est le NOTRE, jamais celui du serveur (voir `kRecordEnrichi`). Hache une seule fois
     // par appel : `TweakDBID` est un CRC32 du nom, plus la longueur dans les 32 bits hauts.
-    const RED4ext::TweakDBID recordId(kRecordEnrichi);
+    const RED4ext::TweakDBID recordId(aCorpsMasculin ? kRecordEnrichi : kRecordEnrichiFeminin);
     const std::uint64_t aRecord = recordId.value;
 
     // ── LES DEUX OBJETS DU JEU ──────────────────────────────────────────────────────────────────
@@ -642,6 +651,22 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     requete[0xE9] = 1;
     requete[0xEA] = 1;
 
+    // ── SONDE `--tessera-drapeaux=E8:1,EA:0` ────────────────────────────────────────────────
+    // Ecrase des octets APRES les valeurs par defaut, pour les faire varier un par un sans
+    // reconstruire. La garde de borne est ICI : le parseur ne connait pas la taille de la requete.
+    std::string diagDrapeaux;
+    for (const auto& [offset, valeur] : DrapeauxRequete(GetCommandLineA()))
+    {
+        if (offset >= kTailleRequete)
+        {
+            continue;
+        }
+        requete[offset] = valeur;
+        char b[32];
+        std::snprintf(b, sizeof(b), " %02zX=%u", offset, static_cast<unsigned>(valeur));
+        diagDrapeaux += b;
+    }
+
     // ── L'ETAT DU MONDE AVANT L'APPEL ───────────────────────────────────────────────────────────
     // On photographie les corps de ce record AVANT, pour retrouver le neuf par difference. Sans
     // cette photo, un corps deja present serait pris pour celui qu'on vient de faire naitre.
@@ -649,6 +674,67 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     Relever(aRecord, avant);
 
     // ── L'APPEL ─────────────────────────────────────────────────────────────────────────────────
+    // ── ⭐ SONDE `--tessera-sans-recolte` : FAIRE TAIRE LE V LOCAL PENDANT L'APPEL ──────────
+    //
+    // Le spawner ne recoit aucun pointeur d'etat (F-PLY-317) : il lit le singleton, et c'est de la
+    // que vient la contamination (F-PLY-296). On met donc a ZERO le compte de chaque groupe juste
+    // avant l'appel, et on le restaure juste apres.
+    //
+    // ⚠️ La disposition a ete LUE AU DESASSEMBLEUR avant d'ecrire (ADR 0034) :
+    //     desc = localisateur(etat, etat + conteneur, hashDuGroupe, 0)   // RVA 0x38582C
+    //     *(uint*)(desc + 0x14) = le COMPTE      (entrees de 0x28 octets, nom en +0x00)
+    //
+    // ⚠️ RESTAURATION INCONDITIONNELLE. Elle vit dans un objet a duree de vie liee au bloc : si
+    // l'appel natif jette ou sort par un chemin qu'on n'a pas prevu, le compte est remis. Laisser
+    // un groupe a zero abimerait le V du joueur LOCAL, pas seulement l'avatar.
+    struct RecolteEteinte
+    {
+        std::vector<std::pair<std::uint32_t*, std::uint32_t>> sauves;
+        ~RecolteEteinte()
+        {
+            for (auto& [ou, valeur] : sauves)
+            {
+                *ou = valeur;
+            }
+        }
+    } recolteEteinte;
+
+    if (SansRecolteDemandee(GetCommandLineA()) && etat != nullptr)
+    {
+        using Localiser_t = std::uintptr_t (*)(std::uintptr_t, void*, std::uint64_t, std::uint64_t);
+        const auto localiser = reinterpret_cast<Localiser_t>(base + 0x38582Cull);
+
+        // ⚠️ TROIS COMPTEURS, PAS UN. Le premier jet n'imprimait que les succes — et « 0 groupe(s) »
+        // recouvrait alors trois pannes sans rapport : table de groupes vide, localisateur qui rend
+        // 0, ou garde de lisibilite qui rejette. Mesure le 2026-08-26 : la sonde a tire sur
+        // 0 groupe(s), et le diagnostic ne permettait pas de dire laquelle des trois.
+        std::size_t vus = 0, sansDesc = 0, illisibles = 0;
+        for (const auto& g : EsthetiqueV::Groupes())
+        {
+            ++vus;
+            auto* conteneur = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(etat) + g.conteneur);
+            const auto desc = localiser(reinterpret_cast<std::uintptr_t>(etat), conteneur,
+                                        RED4ext::CName(g.nom).hash, 0ull);
+            if (desc == 0)
+            {
+                ++sansDesc;
+                continue;
+            }
+            if (!EsthetiqueV::Lisible(desc + 0x14, sizeof(std::uint32_t)))
+            {
+                ++illisibles;
+                continue;
+            }
+            auto* compte = reinterpret_cast<std::uint32_t*>(desc + 0x14);
+            recolteEteinte.sauves.emplace_back(compte, *compte);
+            *compte = 0;
+        }
+        diagDrapeaux += " [sans-recolte " + std::to_string(recolteEteinte.sauves.size())
+                      + "/" + std::to_string(vus) + " groupe(s)"
+                      + " sansDesc=" + std::to_string(sansDesc)
+                      + " illisibles=" + std::to_string(illisibles) + "]";
+    }
+
     const auto fn = reinterpret_cast<SpawnEnrichi_t>(base + kRvaSpawnEnrichi);
     void* sortie[2] = {nullptr, nullptr};
     fn(reinterpret_cast<void*>(spawner), &sortie[0], &requete[0], aRecord, &charge);
@@ -767,7 +853,10 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
                   "appel enrichi PARTI%s — %u paire(s) (%u+%u+%u), recolte %u (local %u+%u+%u), "
                   "capacite %u · %u entite(s) autour avant · retour 0x%llX. Recherche du corps aux "
                   "passages suivants (creation asynchrone).",
-                  chargeMinimale ? " [SONDE charge minimale]" : "", nInj, nHead, nBody, nArms, recolte,
+                  (std::string(aCorpsMasculin ? "" : " [feminin]")
+                   + (chargeMinimale ? " [SONDE charge minimale]" : "")
+                   + (diagDrapeaux.empty() ? "" : " [drapeaux" + diagDrapeaux + "]")).c_str(),
+                  nInj, nHead, nBody, nArms, recolte,
                   parSection[0], parSection[1], parSection[2], charge.capacity,
                   static_cast<unsigned>(g_enAttente[aNetworkId].avant.size()),
                   reinterpret_cast<unsigned long long>(sortie[0]));

@@ -86,6 +86,8 @@ struct Resultat
 ///
 /// Rend toujours — jamais d'exception, jamais de sortie sans diagnostic. `resultat.entite` vide
 /// signifie « l'appelant doit reprendre la voie sure », quelle qu'en soit la raison.
+/// ⚠️ `aCorpsMasculin` choisit l'ENTITE, donc la TENUE — jamais le corps, qui suit la charge
+/// (F-PLY-267). Deux records derivés existent, un par sexe ; voir `kRecordEnrichi*`.
 Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob,
-                const RED4ext::Vector4& aPosition);
+                const RED4ext::Vector4& aPosition, bool aCorpsMasculin = true);
 }  // namespace Tessera::SpawnEnrichi

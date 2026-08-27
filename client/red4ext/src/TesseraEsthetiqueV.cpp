@@ -33,13 +33,6 @@ constexpr std::size_t kOffsetFinalise = 0x41;
 /// ⚠️ Les groupes d'une section sont des ALTERNATIVES, pas des couches (F-PLY-197) : `TPP_Body` et
 /// `FPP_Body` sont la meme chair vue de deux points de vue, les `holstered_*` sont des etats
 /// mutuellement exclusifs du meme bras. Enumerer tout empile les variantes sur le squelette.
-struct Groupe
-{
-    std::size_t conteneur;
-    std::uint64_t rva;
-    const char* nom;
-    int section;
-};
 
 /// ⚠️⚠️ CETTE TABLE PORTE DEUX DEFAUTS CONNUS, audites le 2026-08-21 (F-PLY-226). Ils sont ici
 /// parce que ce port est une COPIE FIDELE de la sonde, et les corriger d'un cote sans l'autre les
@@ -122,6 +115,12 @@ bool Lisible(std::uintptr_t aPtr, std::size_t aSize)
     }
     const auto fin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
     return aPtr + aSize <= fin;
+}
+
+const std::vector<Groupe>& Groupes()
+{
+    static const std::vector<Groupe> table(std::begin(kGroupes), std::end(kGroupes));
+    return table;
 }
 
 /// Recolte les six groupes dans `aCharge`, et rend le compte PAR SECTION.

@@ -490,6 +490,18 @@ public native class NetworkGameSystem extends IGameSystem {
     // proximité est donc aveugle à nos objets ; il faut demander au netcode.
     public native func Tessera_CompteVehiculesReseau() -> Int32;
     public native func Tessera_VehiculeReseauParIndex(index: Int32) -> EntityID;
+    /// L'id RÉSEAU du N-ième véhicule, en décimal. Chaîne vide hors bornes.
+    /// Sert à distinguer une voiture POSSÉDÉE (ligne en base, donc un coffre) d'une voiture du
+    /// MANIFESTE (aucune ligne, donc aucun coffre) — deux objets identiques à l'écran.
+    public native func Tessera_VehiculeReseauIdParIndex(index: Int32) -> String;
+
+    // ── L'INVOCATION — le serveur ordonne, le JEU choisit l'emplacement (F-VEH-054) ──────────
+    //
+    // ⚠️ `Tessera_InvocationSeq` est un COMPTEUR : un joueur sort sa voiture plusieurs fois, et un
+    // booléen rendrait le second ordre invisible.
+    public native func Tessera_InvocationSeq() -> Int32;
+    public native func Tessera_InvocationRecord() -> String;
+    public native func Tessera_RapporterInvocation(x: Float, y: Float, z: Float) -> Bool;
 
     // ── Le sac AUTORITAIRE (ADR 0026) — le serveur énonce, le client s'aligne ────────────────
     //
@@ -498,6 +510,9 @@ public native class NetworkGameSystem extends IGameSystem {
     // confondre viderait les joueurs de tout serveur qui n'a jamais parlé d'inventaire, puisqu'une
     // taille de 0 se lirait alors comme « retire tout ».
     public native func Tessera_SacRecu() -> Bool;
+    /// Le numéro du sac autoritaire courant — change à CHAQUE sac reçu. Permet d'attendre un sac
+    /// NEUF après avoir fermé un coffre, au lieu de repartir sur un cache périmé.
+    public native func Tessera_SacSeq() -> Int32;
     public native func Tessera_SacTaille() -> Int32;
     public native func Tessera_SacItemId(index: Int32) -> String;
     public native func Tessera_SacItemQuantite(index: Int32) -> Int32;
@@ -754,6 +769,8 @@ public native class NetworkGameSystem extends IGameSystem {
     private let m_regardYaw: array<Float>;
     private let m_regardPitch: array<Float>;
     private let m_regardEvent: array<ref<LookAtAddEvent>>;
+    // Compte les lignes de trace du pointage deja ecrites — s eteint a 12 (voir plus bas).
+    private let m_pointageTrace: Int32 = 0;
 
     public func TesseraPousserRegard(entityId: EntityID, lookYaw: Float, lookPitch: Float) -> Bool {
         let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
@@ -821,10 +838,24 @@ public native class NetworkGameSystem extends IGameSystem {
         // ⚠️ ARME EN MAIN SEULEMENT. Au repos, un buste qui pivote avec le regard donnerait une
         // posture de combat permanente à tous les avatars du serveur.
         //
-        // ⚠️ NON MESURÉ — écrit le 2026-08-26 pendant que le jeu était tenu par un autre agent.
-        // L'effet ne se lit sur aucun compteur : consigne d'observation « regarde le BUSTE de
-        // l'avatar d'en face pendant qu'il vise sur le côté ».
-        if this.Tessera_ArmeDeLEntite(entityId) != TDBID.None() {
+        // ⚠️ TESTÉ LE 2026-08-26, SANS EFFET VISIBLE (F-PLY-325) — Lucas, arme dégainée et hors
+        // de l'appartement : « quand on vise, on voit pas la différence ». Le verdict VISUEL
+        // reste humain (consigne : « regarde le BUSTE de l'avatar d'en face pendant qu'il vise
+        // sur le côté »), mais la trace ci-dessous dit désormais si le code s'exécute.
+        // ⚠️ LA TRACE EST OBLIGATOIRE ICI, et son absence a coute un test entier (2026-08-26).
+        // Sans elle, « on voit pas la difference » ne distingue pas « la partie Chest est inerte »
+        // de « la condition ne s est jamais franchie ». Deux causes, deux suites opposees.
+        //
+        // Le compteur s eteint apres douze lignes : le regard est reemis a chaque instantane, et
+        // un journal permanent noierait le gamelog — partage par les deux instances de surcroit.
+        let armeEnMain = this.Tessera_ArmeDeLEntite(entityId);
+        if this.m_pointageTrace < 12 {
+            this.m_pointageTrace += 1;
+            this.Tessera_Journal(
+                s"[Pointage] \(cle) arme=\(TDBID.ToStringDEBUG(armeEnMain)) yaw=\(Cast<Int32>(lookYaw))"
+                + " buste=" + (armeEnMain != TDBID.None() ? "AJOUTE" : "non"));
+        }
+        if armeEnMain != TDBID.None() {
             // ⚠️ CORRIGÉ le 2026-08-26 (chantier appareils) — le fichier ne compilait pas, et
             // faisait donc tomber TOUT `r6/scripts`. Deux défauts sur la même ligne :
             //   · le nom `animLookAtPartRequest` est celui du dump RTTI ; le nom SCRIPTÉ est

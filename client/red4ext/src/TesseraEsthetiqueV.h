@@ -19,6 +19,7 @@
 // lit un drapeau a un offset fixe. Toute montee de version du jeu doit le REVERIFIER — pas le
 // reporter tel quel. Les RVA et l'offset viennent de mesures datees, citees sur place.
 
+#include <cstddef>
 #include <RED4ext/RED4ext.hpp>
 
 #include <cstdint>
@@ -57,6 +58,22 @@ struct DynArray
 /// ⚠️⚠️ « Lisible » n'est PAS « c'est un objet de la classe que je crois ». Entre les deux il y a un
 /// crash, et il a ete paye le 2026-08-21 (F-PLY-225).
 bool Lisible(std::uintptr_t aPtr, std::size_t aSize);
+
+/// Un groupe d'esthetique : ou il vit dans l'etat, quelle fonction native le recolte, son nom.
+///
+/// ⚠️ `conteneur` est un OFFSET DANS L'ETAT (0x70 tete, 0x80 corps, 0x90 bras), `rva` est la RVA
+/// de la fonction de recolte. Les deux se ressemblent a la lecture et ne sont pas interchangeables.
+struct Groupe
+{
+    std::size_t conteneur;
+    std::uint64_t rva;
+    const char* nom;
+    int section;
+};
+
+/// La table des six groupes — UNE SEULE definition, partagee par la recolte et par la sonde
+/// `--tessera-sans-recolte`. En recopier une seconde les ferait diverger en silence.
+const std::vector<Groupe>& Groupes();
 
 /// Recolte les six groupes de customisation du V local dans `aCharge`, et rend le compte PAR
 /// SECTION (Head, Body, Arms). `aEtat` doit etre un `gameuiCharacterCustomizationState` VERIFIE.
