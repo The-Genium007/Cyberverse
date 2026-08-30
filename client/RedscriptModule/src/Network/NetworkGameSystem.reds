@@ -410,6 +410,9 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_AppareilFamille() -> Int32;
     public native func Tessera_AppareilEtat() -> Int32;
     public native func Tessera_AppareilProprietaire() -> Int32;
+    /// Combien de joueurs tiennent cet appareil ouvert (propagation d'ouverture automatique).
+    /// `0` = la fermeture automatique locale reprend ses droits.
+    public native func Tessera_AppareilTenants() -> Int32;
     // Rend `false` quand la file est vide. Le `Bool` n'est pas decoratif : une `RTTI_METHOD` en
     // `void` a deja ete compilee, liee et ABSENTE du binaire (F-PLF-020), ce qui fait tomber tout
     // `r6/scripts` sans un mot.
@@ -417,6 +420,14 @@ public native class NetworkGameSystem extends IGameSystem {
     /// Rapporte au serveur l'etat ou le joueur vient de laisser un appareil. Rend `true` si le
     /// message est PARTI — jamais qu'il a ete accepte (doctrine D1) : le serveur revalide la
     /// famille, l'etat, la distance et les droits.
+    /// « Ouvre-moi ce contenant du monde » — caisse, casier, planque (famille 3 de la spec des
+    /// appareils). Le serveur répond par un `InteractionOpen` que le netcode traite comme un coffre
+    /// de véhicule : même contenu autoritaire, même porteur, même écran natif. Voir
+    /// `NetworkGameSystem.h`, `Tessera_OuvrirContenant`.
+    ///
+    /// ⚠️ Rend `true` si le message est PARTI, jamais qu'il a été accepté (D1).
+    public native func Tessera_OuvrirContenant(device: EntityID) -> Bool;
+
     public native func Tessera_RapporterAppareil(device: EntityID, famille: Int32, action: Int32, etat: Int32) -> Bool;
 
     /// ⭐ LE CANAL DE COMMANDE D'ADMINISTRATION — il n'existait PAS avant le 2026-08-26.
@@ -429,6 +440,13 @@ public native class NetworkGameSystem extends IGameSystem {
     /// ⚠️ N'ACCORDE AUCUN DROIT. Le serveur revalide le rang et les permissions de l'appelant
     /// avant d'executer quoi que ce soit ; ceci n'ouvre que le tuyau.
     public native func Tessera_EnvoyerCommandeAdmin(texte: String) -> Bool;
+
+    // LA CONSOLE, cote LECTURE (2026-08-30). Depile une ligne au format `"<niveau>|<texte>"`,
+    // rend "" si la file est vide. Le PULL est le seul mecanisme qui marche ici : trois voies
+    // d appel C++ -> redscript echouent a la resolution de nom EN SILENCE sur ce depot.
+    public native func Tessera_ConsoleLireLigne() -> String;
+    public native func Tessera_ConsoleEnAttente() -> Int32;
+    public native func Tessera_ConsoleTotalRecu() -> Int32;
 
 
     // Le joueur local vient d'entrer (monte=true) ou de sortir d'une cabine. Sert au RENDU chez
@@ -479,6 +497,22 @@ public native class NetworkGameSystem extends IGameSystem {
     //
     // ⚠️ Même règle que ci-dessus : l'index n'est pas un identifiant. Énumérer dans la foulée,
     // mémoriser l'`EntityID`, jamais l'index.
+    /// Marque un avatar comme PORTE par une plateforme (attache `BindToComponent`), donc a ne
+    /// plus placer du tout. Rend l'etat effectif, pas l'argument.
+    /// La cabine qui PORTE l'avatar `index`, ou un EntityID vide s'il est a pied.
+    /// Meme ordre que `Tessera_AvatarJoueurParIndex`, pour se lire dans la meme boucle.
+    public native func Tessera_CabineDeAvatar(index: Int32) -> EntityID;
+    /// Ecrit l'ecart LOCAL d'un corps attache dans sa representation de mouvement.
+    /// Rend l'etat EFFECTIF (relu apres ecriture), pas l'argument.
+    /// La pose MONDE que le netcode voudrait pour cet avatar attache.
+    public native func Tessera_PoseVoulueAttachee(entiteHash: Uint32) -> Vector4;
+    /// L'allure annoncee pour cet avatar attache.
+    public native func Tessera_AllureAttachee(entiteHash: Uint32) -> Int32;
+    public native func Tessera_EcrireOffsetLocal(moveComponent: ref<IScriptable>, x: Float, y: Float, z: Float) -> Bool;
+    /// Pose par le module ascenseurs quand le joueur LOCAL embarque ou descend.
+    public native func Tessera_PoserJoueurLocalPorte(actif: Bool) -> Bool;
+    public native func Tessera_JoueurLocalPorte() -> Bool;
+    public native func Tessera_AvatarPorteParPlateforme(entiteHash: Uint32, actif: Bool) -> Bool;
     public native func Tessera_CompteAvatarsJoueurs() -> Int32;
     public native func Tessera_AvatarJoueurParIndex(index: Int32) -> EntityID;
 
@@ -632,8 +666,56 @@ public native class NetworkGameSystem extends IGameSystem {
         let velocity = puppet.GetVelocity();
         let speed = Vector4.Length(velocity);
 
+        // ── ⭐⭐⭐ L'ALLURE SE JUGE A LA VITESSE HORIZONTALE, JAMAIS A LA VITESSE 3D ──────────
+        //
+        // ⚠️ LE DEFAUT, ET IL TENAIT DANS `Vector4.Length`. Un joueur DEBOUT dans une cabine qui
+        // descend a 6 m/s a une vitesse MONDE de 6 m/s. Le repli `speed > 0.5` le classait donc
+        // `state = 2` — EN COURSE — alors qu'il ne bouge pas d'un pouce.
+        //
+        // C'est la moitie manquante de F-ASC-047 (« un passager est classe EN L'AIR ou EN
+        // COURSE, jamais immobile ») : la branche EN L'AIR avait ete traitee par
+        // `porteParCabine`, la branche EN COURSE etait restee, et c'est elle qui produisait les
+        // symptomes signales par Lucas pendant deux jours — cycle de course joue sur un corps
+        // immobile (« il marche sur une poutre »), genoux qui remontent, tremblement.
+        //
+        // ⭐ ET LE TREMBLEMENT VIENT DE LA MEME LIGNE, par `moveDir`. Sa garde etait `speed > 0.1`,
+        // donc toujours vraie dans une cabine en mouvement — alors que l'angle, lui, se calcule
+        // sur les seules composantes HORIZONTALES. On calculait donc une direction de deplacement
+        // a partir de bruit horizontal, renouvelee a chaque image. D'ou une direction qui saute.
+        //
+        // ⭐ La correction est plus JUSTE en general, pas seulement pour les ascenseurs : on ne
+        // court pas parce qu'on se deplace verticalement. Une chute reelle reste couverte en
+        // amont par `!onGround` (state 6), qui est teste avant et reste prioritaire.
+        //
+        // ⚠️ On garde `speed` (3D) sous la main : il n'est plus utilise pour l'allure, mais le
+        // supprimer masquerait qu'un choix a ete fait ici.
+        let vitesseH: Float = SqrtF(velocity.X * velocity.X + velocity.Y * velocity.Y);
+
+        // ── UN PASSAGER D'ASCENSEUR N'EST PAS EN TRAIN DE TOMBER ───────────────────────────
+        //
+        // ⭐ MESURE DU 2026-08-27 (F-ASC-047) : un joueur DEBOUT dans une cabine en mouvement
+        // rapporte `locomotion = 6` — EN L'AIR. Le blackboard dit « pas au sol » parce que le
+        // plancher bouge sous ses pieds, et cette ligne en fait un signal prioritaire.
+        //
+        // ⚠️ CE QUE CA PRODUIT CHEZ LES AUTRES, et c'est le defaut que Lucas signale depuis des
+        // heures : l'avatar distant joue une animation de CHUTE — jambes repliees, genoux plies,
+        // torse droit, pieds a cinquante centimetres du sol. « Le haut du corps ne bouge pas »
+        // parce qu'un corps en chute ne bouge que les jambes.
+        //
+        // Le moteur lui-meme connait ce cas : `IsOnMovingPlatform()` sert precisement a SUPPRIMER
+        // la chute dans `LocomotionAirDecisions.ShouldFall`. Mais il ne l'expose qu'a la machine a
+        // etats du joueur. On utilise donc ce que le module ascenseurs sait deja : quelle cabine
+        // porte le joueur local.
+        //
+        // ⚠️ On ne force PAS l'immobilite — seulement on cesse de crier « en l'air ». Un passager
+        // qui marche dans la cabine sera classe par sa vitesse, comme au sol.
+        // ⚠️ Le drapeau est POSE par le module ascenseurs, il n'est pas demande a lui : le coeur
+        // reseau ne doit pas dependre d'un module optionnel. Absent le mod, il vaut false et le
+        // comportement est celui d'avant — jamais pire.
+        let porteParCabine: Bool = this.Tessera_JoueurLocalPorte();
+
         let state: Int32;
-        if !onGround {
+        if !onGround && !porteParCabine {
             state = 6;                                  // InAir/Jump — signal prioritaire
         } else if loco == 2 {
             state = 3;                                  // Sprint
@@ -641,8 +723,8 @@ public native class NetworkGameSystem extends IGameSystem {
             state = movingH ? 5 : 4;                    // CrouchMove / CrouchIdle
         } else if detailed == 3 {
             state = 1;                                  // Walk (seul signal fiable de la marche)
-        } else if speed > 0.5 {
-            state = 2;                                  // Run (repli par la vitesse)
+        } else if vitesseH > 0.5 {
+            state = 2;                                  // Run (repli par la vitesse HORIZONTALE)
         } else {
             state = 0;                                  // Idle
         }
@@ -657,7 +739,7 @@ public native class NetworkGameSystem extends IGameSystem {
         // Sous 0.1 m/s la vélocité est du bruit et l'angle ne veut rien dire — mesuré : à l'arrêt,
         // l'angle valait 90° sur une vélocité nulle.
         let moveDir: Int32 = 0;
-        if speed > 0.1 {
+        if vitesseH > 0.1 {
             let forward = player.GetWorldForward();
             let right = player.GetWorldRight();
             // Dot2D (X,Y) et non Dot : on veut la direction dans le PLAN horizontal. Avec Dot, une
@@ -769,8 +851,11 @@ public native class NetworkGameSystem extends IGameSystem {
     private let m_regardYaw: array<Float>;
     private let m_regardPitch: array<Float>;
     private let m_regardEvent: array<ref<LookAtAddEvent>>;
-    // Compte les lignes de trace du pointage deja ecrites — s eteint a 12 (voir plus bas).
-    private let m_pointageTrace: Int32 = 0;
+    // Compte les lignes de trace du pointage deja ecrites — s eteint a 20 (voir plus bas).
+    // ⚠️ SANS INITIALISEUR, comme ses quatre voisins. Un `= 0` ici etait le SEUL initialiseur
+    // de champ du fichier, et il coincide avec la disparition de l'emetteur d'arme
+    // (F-PLF-049). `Int32` vaut zero par defaut : l'initialiseur n'apportait rien.
+    private let m_pointageTrace: Int32;
 
     public func TesseraPousserRegard(entityId: EntityID, lookYaw: Float, lookPitch: Float) -> Bool {
         let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
@@ -846,10 +931,15 @@ public native class NetworkGameSystem extends IGameSystem {
         // Sans elle, « on voit pas la difference » ne distingue pas « la partie Chest est inerte »
         // de « la condition ne s est jamais franchie ». Deux causes, deux suites opposees.
         //
-        // Le compteur s eteint apres douze lignes : le regard est reemis a chaque instantane, et
-        // un journal permanent noierait le gamelog — partage par les deux instances de surcroit.
+        // ⚠️ ON NE JOURNALISE QUE ARME EN MAIN, et c'est une correction du 2026-08-27. La version
+        // precedente tracait les douze PREMIERES pousses : les douze sont parties sur des avatars
+        // au repos, et le compteur etait vide avant que la moindre arme n'apparaisse. Un
+        // instrument qui depense sa reserve sur le cas ennuyeux ne mesure pas l'evenement.
+        //
+        // ⭐ Le silence devient alors un verdict : aucune ligne = la condition ne se franchit
+        // jamais ; des lignes = elle se franchit, et l'effet visuel est a chercher ailleurs.
         let armeEnMain = this.Tessera_ArmeDeLEntite(entityId);
-        if this.m_pointageTrace < 12 {
+        if armeEnMain != TDBID.None() && this.m_pointageTrace < 20 {
             this.m_pointageTrace += 1;
             this.Tessera_Journal(
                 s"[Pointage] \(cle) arme=\(TDBID.ToStringDEBUG(armeEnMain)) yaw=\(Cast<Int32>(lookYaw))"
@@ -2352,7 +2442,28 @@ public native class NetworkGameSystem extends IGameSystem {
     // `AIHoldPositionCommand` avec une durée courte, réémise tant que le fil se tait : elle
     // remplace la commande de marche dans la file, donc elle l'annule de fait.
     public func TesseraFigerAvatar(entityId: EntityID) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        // ⚠️⚠️ LA VOIE DE RESOLUTION ETAIT FAUSSE, ET CE GEL N A DONC JAMAIS FONCTIONNE.
+        //
+        // Mesure du 2026-08-28, les trois conditions testees separement sur un avatar distant :
+        //
+        //   voie DYNAMIQUE  : entite=false  pantin=false  controleur=false
+        //   voie RECHERCHE  : entite=true   pantin=true   controleur=true
+        //
+        // `GetDynamicEntitySystem().GetEntity()` rend NULL sur nos avatars, alors que
+        // `FindEntityByID` les trouve — avec leur pantin et leur controleur d'IA. La fonction
+        // sortait donc sur son premier `return false`, en silence, depuis le debut.
+        //
+        // ⚠️ La portee depasse le chantier ascenseurs : c'est le gel sur FIL MUET (400 ms sans
+        // nouvelles). Il n'a jamais fige personne — un avatar dont le fil se tait continuait
+        // d'executer sa derniere commande de marche, c'est-a-dire de se promener. Exactement le
+        // defaut que ce code disait corriger depuis aout.
+        //
+        // On garde la voie dynamique en REPLI : elle est peut-etre la bonne pour d'autres corps,
+        // et un remede ne doit pas retirer ce qui marchait ailleurs.
+        let entity = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        if !IsDefined(entity) {
+            entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        }
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
