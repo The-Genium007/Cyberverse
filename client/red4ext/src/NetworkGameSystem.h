@@ -58,6 +58,14 @@ namespace cyberpunk_rp::protocol {
     // Interactions joueur<->joueur (spec 2026-08-09). Meme regle, troisieme rappel.
     struct ActionCatalog;
     struct IdentitesConnues;
+    // ⚠️⚠️ QUATRIEME FOIS, 2026-08-30, et le message d'erreur etait EXACTEMENT celui que le
+    // commentaire du haut decrit : « 'CommandCatalog' n'est pas membre de cyberpunk_rp::protocol »
+    // sur la LIGNE DE DECLARATION, plus « impossible de convertir ... en 'const int' » a l'appel,
+    // 640 lignes plus loin. Le piege est documente ici depuis le 2026-08-07 — le lire ne suffit
+    // pas, il faut y penser au moment d'ajouter un `Handle<X>`.
+    // ⭐ Le type est pourtant BIEN dans `generated/protocol_generated.h` : verifier le header
+    // genere ne dit RIEN sur ce bloc, qui est une liste tenue A LA MAIN.
+    struct CommandCatalog;
     // Inventaire sous autorite serveur (ADR 0026). QUATRIEME fois que ce bloc est oublie —
     // 2026-08-13, avec exactement le message annonce ci-dessus (« impossible de convertir
     // 'const InventaireAutoritaire *' en 'const int' », qui pointe vers l'appelant alors que le
@@ -121,8 +129,36 @@ struct EtatAppareilRecu
     int32_t famille = 0;
     int32_t etat = 0;
     uint64_t proprietaire = 0;
+    // Combien de joueurs tiennent cette porte ouverte (spec propagation, 2026-08-28). Non nul =
+    // aucun client ne doit la laisser se refermer toute seule.
+    int32_t tenants = 0;
 };
 extern std::deque<EtatAppareilRecu> g_appareilsRecus;
+
+/// LA CONSOLE — une ligne que le SERVEUR a envoyee et que le client doit pouvoir AFFICHER.
+///
+/// ⚠️ Avant le 2026-08-30, `CommandResult` et `ConsoleLine` tombaient dans le `default` du switch
+/// et n'etaient que journalises comme « message non gere ». Le serveur repondait, le client
+/// jetait : tous les verdicts du palier 1 de la console ont du etre lus cote SERVEUR, et aucune
+/// interface n aurait rien eu a montrer.
+///
+/// `niveau` : 0 info · 1 succes · 2 avertissement · 3 erreur · 4 staff. Il voyage jusqu au script
+/// (encode en tete de la chaine rendue par le natif) — sans lui, la console ne peut ni colorer ni
+/// prioriser, et il faudrait rouvrir ce cablage pour un seul octet.
+struct LigneConsole
+{
+    uint8_t niveau = 0;
+    std::string texte;
+};
+extern std::deque<LigneConsole> g_lignesConsole;
+/// Compteur MONOTONE de tout ce qui est arrive, jamais decremente — meme role que
+/// `g_appareilsTotalRecus` : distinguer « rien n arrive » de « tout arrive et le script n en fait
+/// rien ». Deux pannes opposees, un seul ecran.
+extern int32_t g_lignesConsoleTotalRecues;
+/// ⚠️ La file est BORNEE. Un client qui ne depile pas — parce que la console n est pas ouverte —
+/// ne doit pas faire croitre la memoire indefiniment. Au-dela, on jette les PLUS ANCIENNES et on
+/// le DIT dans la ligne suivante, jamais en silence.
+inline constexpr size_t kMaxLignesConsole = 200;
 // Meme role que `g_ascenseursTotalRecus` : distinguer « rien n'arrive » de « tout arrive et le
 // script n'en fait rien ». Deux pannes opposees, un seul ecran.
 extern int32_t g_appareilsTotalRecus;
@@ -136,6 +172,16 @@ extern int32_t g_ascenseursTotalRecus;
 /// `PlayerState.frame` a chaque snapshot. Fonction libre parce que la table est un statique de
 /// fichier, et que le natif qui l'expose est une methode INLINE de l'en-tete.
 bool CabinePorteQuelquun(uint64_t cabineHash);
+
+/// La cabine qui porte cet avatar reseau, ou 0 s'il est a pied. Meme raison d'etre une fonction
+/// libre que `CabinePorteQuelquun` : la table est un statique de fichier.
+uint64_t CabineDeAvatarReseau(uint64_t networkId);
+
+/// La derniere pose MONDE voulue pour un avatar attache (0,0,0 s'il n'y en a pas).
+RED4ext::Vector4 PoseVoulueAttachee(uint32_t entiteHash);
+
+/// L'allure annoncee pour un avatar attache (0 s'il n'y en a pas).
+uint8_t AllureAttachee(uint32_t entiteHash);
 
 /// ── LA HAUTEUR VIVANTE DU PLANCHER D'UNE CABINE ────────────────────────────────────────────
 ///
@@ -726,6 +772,25 @@ private:
     /// Ce que CE joueur a le droit de proposer. Deja filtre par le serveur — il n'apprend jamais
     /// l'existence des actions qu'il n'a pas, donc pas de liste grisee qui expose celles du staff.
     std::vector<ActionRecue> m_actions;
+
+    /// UNE COMMANDE DE LA CONSOLE, telle que la console a besoin de l'afficher.
+    ///
+    /// `nom` sert a COMPLETER (on tape `/veh`, on obtient `/vehicle`), `affichage` sert a MONTRER
+    /// (`/vehicle <action> <id> [record] — give a car to a character`). Deux champs et pas un,
+    /// parce que completer avec la ligne d'affichage ecrirait l'aide dans le champ de saisie.
+    ///
+    /// La forme `<requis>` / `[optionnel]` est construite ICI, une fois, plutot que cote script :
+    /// le script recevrait sinon la liste d'arguments a plat et devrait la reformater a chaque
+    /// frappe, pour un resultat identique.
+    struct CommandeRecue
+    {
+        std::string nom;
+        std::string affichage;
+    };
+    /// Ce que CE joueur a le droit de TAPER. Filtre par le serveur avant l'envoi, comme
+    /// `m_actions` : le client n'apprend jamais l'existence des commandes qu'il n'a pas, donc une
+    /// suggestion ne peut pas reveler l'outillage du staff a un joueur ordinaire.
+    std::vector<CommandeRecue> m_commandes;
     /// Les noms qu'on CONNAIT, par id reseau. C'est la seule source du nametag.
     ///
     /// ⚠️ Une entree n'apparait ici que parce que le serveur l'a envoyee, et il ne l'envoie qu'a
@@ -765,6 +830,19 @@ private:
     std::vector<ItemAutoritaire> m_coffreAutoritaire;
     /// L'id RESEAU du vehicule dont on tient le coffre. 0 = aucun coffre en cours.
     uint64_t m_coffreVehicule = 0;
+
+    /// Cette session de stockage est-elle celle d'un CONTENANT DU MONDE (caisse, casier, planque)
+    /// plutot que d'un coffre de vehicule ?
+    ///
+    /// ⭐ TOUT LE RESTE EST PARTAGE, ET C'EST DELIBERE. Le contenu autoritaire, le porteur, l'ecran
+    /// natif, la lecture a la fermeture : un contenant du monde et un coffre de voiture sont le
+    /// MEME ecran sur le meme mecanisme. Seules deux choses different — le `ui_kind` qui arrive, et
+    /// le verbe de choix qui repart. Dupliquer les neuf natifs du coffre pour ca aurait garanti que
+    /// les deux copies divergent au premier correctif.
+    ///
+    /// ⚠️ Cote redscript, RIEN ne change : `Tessera_CoffreVehicule()` porte ici l'`EntityID` de la
+    /// caisse, et la veille ne s'en sert que comme temoin de session ouverte.
+    bool m_coffreEstContenant = false;
     /// L'ordre d'invocation courant — voir `HandleInteractionOpen` et F-VEH-054.
     uint64_t m_invocationVehicule = 0;
     std::string m_invocationRecord;
@@ -959,6 +1037,7 @@ protected:
     // REMPLACE l'etat local a chaque reception (join, puis chaque changement de permissions) —
     // pas un delta, donc rien a fusionner, et une action retiree disparait d'elle-meme.
     void HandleActionCatalog(const cyberpunk_rp::protocol::ActionCatalog* msg);
+    void HandleCommandCatalog(const cyberpunk_rp::protocol::CommandCatalog* msg);
     // Noms que ce joueur CONNAIT. En lot au join, a une entree a chaque presentation recue. On
     // ACCUMULE ici (contrairement au catalogue) : le message a une entree est un ajout, pas un
     // remplacement, et le traiter comme tel effacerait toutes les connaissances a chaque poignee
@@ -1532,6 +1611,31 @@ public:
 
     /// Combien d'actions ce joueur a le droit de proposer. 0 = catalogue vide (cas legitime : un
     /// serveur sans `actions.toml`), pas une erreur.
+    /// LE CATALOGUE DE COMMANDES, cote lecture — ce qui rend les suggestions possibles.
+    ///
+    /// Rend `""` hors bornes plutot que de lever : le script interroge par index dans une boucle,
+    /// et un catalogue qui retrecit entre deux images (changement de permission) ne doit pas faire
+    /// tomber `r6/scripts` entier.
+    int32_t Tessera_NombreCommandes() const { return static_cast<int32_t>(m_commandes.size()); }
+
+    Red::CString Tessera_CommandeNom(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_commandes.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_commandes[static_cast<size_t>(index)].nom.c_str());
+    }
+
+    Red::CString Tessera_CommandeAffichage(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_commandes.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_commandes[static_cast<size_t>(index)].affichage.c_str());
+    }
+
     int32_t Tessera_NombreActions() const { return static_cast<int32_t>(m_actions.size()); }
 
     /// Id de recette a la position `index` — c'est LUI qui repart au serveur dans
@@ -1804,6 +1908,8 @@ public:
         // destructifs : ils DOIVENT l'etre, sinon leur appelant est un champ de mines.
         m_coffreVehicule = 0;
         m_coffreSession = 0;
+        // Le genre aussi : une session de contenant ne doit pas teindre la suivante.
+        m_coffreEstContenant = false;
         return true;
     }
 
@@ -1890,6 +1996,25 @@ public:
 
     /// Suspend/reprend les CORRECTIONS de position en laissant la marche tourner — instrument de
     /// la mesure de determinisme (ADR 0032). Inverse de `Tessera_SuspendreCommandes`.
+    /// La pose MONDE que le netcode VOUDRAIT pour cet avatar attache. Le redscript en deduit
+    /// l'ecart local a ecrire — le petit terme du repere relatif, celui du mouvement du passager
+    /// DANS la cabine.
+    /// L'allure annoncee pour cet avatar attache.
+    int32_t Tessera_AllureAttachee(uint32_t entiteHash) const
+    {
+        return static_cast<int32_t>(AllureAttachee(entiteHash));
+    }
+
+    RED4ext::Vector4 Tessera_PoseVoulueAttachee(uint32_t entiteHash) const
+    {
+        return PoseVoulueAttachee(entiteHash);
+    }
+
+    bool Tessera_EcrireOffsetLocal(const Red::Handle<RED4ext::IScriptable>& moveComponent,
+                                   float x, float y, float z);
+    bool Tessera_PoserJoueurLocalPorte(bool actif);
+    bool Tessera_JoueurLocalPorte();
+    bool Tessera_AvatarPorteParPlateforme(uint32_t entiteHash, bool actif);
     bool Tessera_SuspendreCorrections(bool actif);
 
     /// Bascule le pilotage par les ENTREES (ADR 0032). Voir `g_pilotageParEntrees`.
@@ -1952,6 +2077,42 @@ public:
 
     // L'EntityID du N-ième avatar de JOUEUR pourvu d'un corps. `EntityID{}` si l'index est hors
     // bornes — l'appelant doit tester, comme pour `Tessera_AvatarParIndex`.
+    /// La cabine qui PORTE l'avatar `index` — meme ordre que `Tessera_AvatarJoueurParIndex`, pour
+    /// que les deux se lisent dans la meme boucle. Rend un `EntityID` vide si ce joueur est a pied.
+    ///
+    /// ⭐ C'est le declencheur de l'attache. Le C++ SAIT deja qui est passager de quelle cabine —
+    /// `g_porteurParAvatar`, alimente par `PlayerState.frame` (ADR 0039) —, mais il ne peut pas
+    /// attacher lui-meme : `BindToComponent` prend des `EntityGameInterface`, que seul le script
+    /// fabrique proprement. D'ou le patron PULL, le seul prouve sur ce pont (memoire de travail
+    /// « pont-cpp-vers-redscript ») : le C++ tient l'etat, le redscript le lit et agit.
+    RED4ext::ent::EntityID Tessera_CabineDeAvatar(int32_t index) const
+    {
+        if (index < 0)
+        {
+            return RED4ext::ent::EntityID{};
+        }
+        int32_t n = 0;
+        for (const auto& [networkId, tampon] : g_tamponsJoueurs)
+        {
+            const auto corps = m_networkedEntitiesLookup.find(networkId);
+            if (corps == m_networkedEntitiesLookup.end())
+            {
+                continue;   // meme filtre que ci-dessus : les index doivent coincider.
+            }
+            if (n == index)
+            {
+                const uint64_t cabine = CabineDeAvatarReseau(networkId);
+                if (cabine == 0)
+                {
+                    return RED4ext::ent::EntityID{};   // a pied — et c'est un VERDICT, pas un echec.
+                }
+                return RED4ext::ent::EntityID{cabine};
+            }
+            ++n;
+        }
+        return RED4ext::ent::EntityID{};
+    }
+
     RED4ext::ent::EntityID Tessera_AvatarJoueurParIndex(int32_t index) const
     {
         if (index < 0)
@@ -2261,6 +2422,17 @@ public:
             ? 0
             : static_cast<int32_t>(g_appareilsRecus.front().proprietaire & 0x7FFFFFFF);
     }
+    /// Combien de joueurs tiennent cet appareil ouvert. `0` = la fermeture automatique locale
+    /// reprend ses droits.
+    ///
+    /// ⚠️ Un client dont la DLL est en retard rend toujours 0 : il retombe sur le comportement
+    /// d'avant (fermeture locale), jamais sur une porte bloquee ouverte. Le defaut va dans le sens
+    /// sur.
+    int32_t Tessera_AppareilTenants()
+    {
+        return g_appareilsRecus.empty() ? 0 : g_appareilsRecus.front().tenants;
+    }
+
     /// ⚠️ REND UN BOOL alors qu'il n'a rien a rendre. Voir le commentaire de
     /// `Tessera_SignalerPosture` : une `RTTI_METHOD` en `void` a deja ete declaree, compilee,
     /// liee — et ABSENTE du binaire, ce qui fait tomber TOUT `r6/scripts` au lancement sans un mot
@@ -2271,6 +2443,36 @@ public:
         g_appareilsRecus.pop_front();
         return true;
     }
+
+    /// LA CONSOLE, cote LECTURE — le pendant de `Tessera_EnvoyerCommandeAdmin`.
+    ///
+    /// Depile UNE ligne et la rend sous la forme **`"<niveau>|<texte>"`**. Rend `""` quand la file
+    /// est vide — ce qui est un etat NORMAL, pas une erreur.
+    ///
+    /// ⚠️ Pourquoi une seule chaine plutot que deux natifs (le niveau, puis le texte) : deux
+    /// appels couples partagent un etat implicite entre eux, et le jour ou l un est appele sans
+    /// l autre, le script lit le niveau d une ligne et le texte d une autre — sans que rien ne le
+    /// signale. Un seul appel ne peut pas se desynchroniser.
+    Red::CString Tessera_ConsoleLireLigne()
+    {
+        if (g_lignesConsole.empty())
+        {
+            return Red::CString("");
+        }
+        const LigneConsole ligne = g_lignesConsole.front();
+        g_lignesConsole.pop_front();
+        const std::string encode = std::to_string(static_cast<int>(ligne.niveau)) + "|" + ligne.texte;
+        return Red::CString(encode.c_str());
+    }
+
+    /// Combien de lignes attendent. Sert a la pastille « non lus » quand la console est fermee —
+    /// et a distinguer, dans un diagnostic, « la file est vide » de « le script ne depile pas ».
+    int32_t Tessera_ConsoleEnAttente() { return static_cast<int32_t>(g_lignesConsole.size()); }
+
+    /// Tout ce qui est ARRIVE depuis le lancement, jamais decremente. Un `EnAttente = 0` avec un
+    /// `TotalRecu = 0` dit « le serveur n a rien envoye » ; avec un total non nul, il dit « tout a
+    /// ete consomme ». Deux pannes opposees que la file seule confondrait.
+    int32_t Tessera_ConsoleTotalRecu() { return g_lignesConsoleTotalRecues; }
 
     /// LE CANAL DE COMMANDE D'ADMINISTRATION — et il MANQUAIT ENTIEREMENT.
     ///
@@ -2307,6 +2509,26 @@ public:
     ///
     /// Rend true si le message est PARTI. Jamais qu'il a ete accepte (doctrine D1) : le serveur
     /// revalide la famille, l'etat, la distance et les droits, et refuse en silence cote fil.
+    /// « Ouvre-moi ce contenant du monde. » Le serveur repond par un `InteractionOpen` portant
+    /// `ui_kind = 8` et le contenu autoritaire — exactement comme pour un coffre de vehicule.
+    ///
+    /// ⚠️ La cible part TELLE QUELLE (`device.hash`), sans passer par `m_networkedEntitiesLookup`.
+    /// Un appareil du monde n'est pas une entite reseau : c'est une entite du DECOR, que les deux
+    /// cotes designent par son `EntityID` de jeu. C'est la meme convention que les ascenseurs
+    /// (ADR 0012 §2.5) et que `Tessera_RapporterAppareil` juste en dessous.
+    ///
+    /// Rend true si le message est PARTI — jamais qu'il a ete accepte (D1).
+    bool Tessera_OuvrirContenant(RED4ext::ent::EntityID device)
+    {
+        if (!device.IsDefined())
+        {
+            return false;
+        }
+        // kind 15 = OuvrirContenant (14 = coffre de vehicule, 13 = posture, 8 volontairement vide).
+        SendVehiculeVerbe(device.hash, 15, 0);
+        return true;
+    }
+
     bool Tessera_RapporterAppareil(RED4ext::ent::EntityID device, int32_t famille, int32_t action,
         int32_t etat)
     {
@@ -2563,6 +2785,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     // `RedscriptModule/src/Network/NetworkGameSystem.reds` : les deux cotes se posent ET se
     // deploient ENSEMBLE. Un `native func` sans backing dans la DLL deployee fait tomber TOUT
     // r6/scripts et le jeu se ferme sans un mot (F-PLF-020, F-PLF-023).
+    RTTI_METHOD(Tessera_NombreCommandes);
+    RTTI_METHOD(Tessera_CommandeNom);
+    RTTI_METHOD(Tessera_CommandeAffichage);
     RTTI_METHOD(Tessera_NombreActions);
     RTTI_METHOD(Tessera_ActionId);
     RTTI_METHOD(Tessera_ActionLibelle);
@@ -2596,9 +2821,14 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AppareilFamille);
     RTTI_METHOD(Tessera_AppareilEtat);
     RTTI_METHOD(Tessera_AppareilProprietaire);
+    RTTI_METHOD(Tessera_AppareilTenants);
     RTTI_METHOD(Tessera_AppareilRetirer);
+    RTTI_METHOD(Tessera_OuvrirContenant);
     RTTI_METHOD(Tessera_RapporterAppareil);
     RTTI_METHOD(Tessera_EnvoyerCommandeAdmin);
+    RTTI_METHOD(Tessera_ConsoleLireLigne);
+    RTTI_METHOD(Tessera_ConsoleEnAttente);
+    RTTI_METHOD(Tessera_ConsoleTotalRecu);
     RTTI_METHOD(Tessera_AscenseurTotalRecus);
     RTTI_METHOD(Tessera_AscenseurEnAttente);
     RTTI_METHOD(Tessera_AscenseurCabine);
@@ -2615,6 +2845,13 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AvatarParIndex);
     // ⚠️ Ces deux-là comptent des JOUEURS, contrairement aux deux ci-dessus (F-PLY-047).
     RTTI_METHOD(Tessera_SuspendreCommandes);
+    RTTI_METHOD(Tessera_CabineDeAvatar);
+    RTTI_METHOD(Tessera_AllureAttachee);
+    RTTI_METHOD(Tessera_PoseVoulueAttachee);
+    RTTI_METHOD(Tessera_EcrireOffsetLocal);
+    RTTI_METHOD(Tessera_PoserJoueurLocalPorte);
+    RTTI_METHOD(Tessera_JoueurLocalPorte);
+    RTTI_METHOD(Tessera_AvatarPorteParPlateforme);
     RTTI_METHOD(Tessera_SuspendreCorrections);
     RTTI_METHOD(Tessera_PilotageParEntrees);
     RTTI_METHOD(Tessera_SpawnEnrichi);

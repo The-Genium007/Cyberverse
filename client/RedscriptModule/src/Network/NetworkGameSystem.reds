@@ -448,6 +448,13 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_ConsoleEnAttente() -> Int32;
     public native func Tessera_ConsoleTotalRecu() -> Int32;
 
+    // LE CATALOGUE DE COMMANDES (2026-08-30) — ce qui rend les suggestions possibles.
+    // `Tessera_CommandeNom` sert a COMPLETER, `Tessera_CommandeAffichage` a MONTRER. Les deux
+    // rendent "" hors bornes : le catalogue peut retrecir entre deux images si un droit change.
+    public native func Tessera_NombreCommandes() -> Int32;
+    public native func Tessera_CommandeNom(index: Int32) -> String;
+    public native func Tessera_CommandeAffichage(index: Int32) -> String;
+
 
     // Le joueur local vient d'entrer (monte=true) ou de sortir d'une cabine. Sert au RENDU chez
     // les autres : le serveur relaie le porteur, et l'observateur accroche l'interpolation de

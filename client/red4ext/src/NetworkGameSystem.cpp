@@ -711,7 +711,25 @@ constexpr uint8_t kComportementATerre = 5;
 /// cette table qui permet de rejouer l'apparence a son attachement.
 std::deque<EtatAscenseurRecu> g_ascenseursRecus;
 int32_t g_ascenseursTotalRecus = 0;
+/// Range une ligne pour le script, en BORNANT la file.
+///
+/// ⚠️ Quand la borne est atteinte on jette la PLUS ANCIENNE **et on le dit** : une file qui perd
+/// des lignes en silence transforme un probleme visible (« il en manque ») en probleme invisible
+/// (« le serveur n a rien envoye »). C est la meme discipline que partout ailleurs ici.
+static void PousserLigneConsole(uint8_t niveau, std::string texte)
+{
+    ++g_lignesConsoleTotalRecues;
+    if (g_lignesConsole.size() >= kMaxLignesConsole)
+    {
+        g_lignesConsole.pop_front();
+        texte = "[...lignes perdues, console non lue...] " + texte;
+    }
+    g_lignesConsole.push_back(LigneConsole{ niveau, std::move(texte) });
+}
+
 std::deque<EtatAppareilRecu> g_appareilsRecus;
+std::deque<LigneConsole> g_lignesConsole;
+int32_t g_lignesConsoleTotalRecues = 0;
 int32_t g_appareilsTotalRecus = 0;
 std::map<uint64_t, uint64_t> g_apparencesStatiques;
 /// Le ROSTER : de quoi RECREER un statique chez un client a qui il manque (spec 2026-08-09).
@@ -1057,6 +1075,159 @@ Red::CString NetworkGameSystem::Tessera_LireTableAlias()
 
     std::string resume = std::to_string(lignes.size()) + " lignes -> " + chemin;
     return Red::CString(resume.c_str());
+}
+
+/// Avatars distants ATTACHES a une plateforme par `BindToComponent` — donc portes par le MOTEUR,
+/// et qu'il ne faut plus placer du tout.
+///
+/// ⭐ MESURE DU 2026-08-28 (F-ASC-057) : l'attache porte le corps parfaitement — X et Y verrouilles
+/// au centimetre sur la cabine pendant 74 m de montee, sans un ecart, et le corps reste VISIBLE.
+/// C'est structurellement superieur au collage par ecriture (F-ASC-055), dont le retard residuel
+/// est proportionnel a 1/fps : le verdict de Lucas etait « moins bon » a 25 images/s qu'a 39, a
+/// code identique.
+///
+/// ⚠️⚠️ ET CE N'EST PAS UNE OPTIMISATION, C'EST UNE OBLIGATION MECANIQUE. Une fois le corps
+/// attache, sa transformee devient LOCALE au plancher. Continuer a lui ecrire des positions MONDE
+/// les fait interpreter comme des offsets locaux, et la position se compose a chaque ecriture :
+/// mesure le 2026-08-28, le corps part a des centaines de metres en quelques secondes, avec un
+/// increment par ecriture egal a la hauteur de la cabine.
+///
+/// ⚠️ Le registre est en HASH d'EntityID, pas en identifiant reseau : c'est ce que le redscript
+/// tient au moment ou il attache (`EntityID.GetHash`), et `m_networkedEntitiesLookup` donne
+/// l'EntityID a l'autre bout. Un seul point de conversion, cote client.
+static std::set<uint32_t> g_avatarsAttachesPlateforme;
+
+/// La derniere pose MONDE voulue pour chaque avatar attache. Le redscript la relit pour en deduire
+/// l'ecart local — c'est le petit terme du modele en repere relatif, celui qui porte le mouvement
+/// du passager DANS la cabine.
+static std::map<uint32_t, RED4ext::Vector4> g_poseVoulueAttachee;
+
+/// L'allure annoncee pour chaque avatar attache. Sert a deux choses, et il faut les distinguer :
+/// figer un passager IMMOBILE (sinon son pantin joue une animation de marche sur place), et
+/// laisser libre celui qui MARCHE dans la cabine.
+///
+/// ⚠️ Un passager est classe « EN L'AIR » (6) ou « EN COURSE » (2), jamais 0 pendant un trajet
+/// (F-ASC-047) : « le sol bouge sous lui, le moteur le declare en chute ». La valeur telle quelle
+/// ne dit donc PAS s'il marche. C'est le deplacement REEL qui tranche, pas l'etiquette.
+static std::map<uint32_t, uint8_t> g_allureAttachee;
+
+/// Le joueur LOCAL est-il porte par une cabine ? Pose par le module ascenseurs, lu par
+/// `ReadLocomotionPacked` pour cesser d'annoncer « en l'air ».
+///
+/// ⚠️ LE SENS DE LA DEPENDANCE EST DELIBERE : le mod ascenseurs PREVIENT le netcode, le netcode ne
+/// connait pas le mod. L'inverse ferait dependre le coeur reseau d'un module optionnel.
+static bool g_joueurLocalPorte = false;
+
+uint8_t AllureAttachee(uint32_t cle)
+{
+    const auto it = g_allureAttachee.find(cle);
+    return it == g_allureAttachee.end() ? 0 : it->second;
+}
+
+RED4ext::Vector4 PoseVoulueAttachee(uint32_t cle)
+{
+    const auto it = g_poseVoulueAttachee.find(cle);
+    return it == g_poseVoulueAttachee.end() ? RED4ext::Vector4{} : it->second;
+}
+
+/// Marque un avatar comme PORTE par une plateforme (ou leve la marque). Appele par le redscript
+/// au moment ou il attache/detache — c'est lui qui sait, nous ne pouvons pas le deviner.
+///
+/// Rend l'etat effectif, pas l'argument : un appelant qui verifie ne peut pas se faire mentir.
+/// Ecrire l'ecart LOCAL d'un corps attache, dans sa representation de mouvement.
+///
+/// ⭐ POURQUOI CE NATIF EXISTE. `BindToComponent` reparente la transformee, mais la representation
+/// de mouvement du corps contient encore une position MONDE (F-PLY-336) — desormais relue comme un
+/// ecart LOCAL. Le corps part donc a des centaines de metres et disparait de l'ecran. Mesure du
+/// 2026-08-28 : verdict de Lucas, « quand la cabine se met en route, les pantins disparaissent ».
+///
+/// L'ecriture d'un petit ecart local remet le corps a sa place. C'est la seule ecriture qui
+/// atteigne un avatar distant (F-PLY-337), et le chemin est mesure : composant -> `+0x160`
+/// (`activeEntry`) -> `+0x20` (position).
+///
+/// ⚠️ CE QUI REND CE NATIF ACCEPTABLE DANS UNE DLL LIVREE, et c'est delibere :
+///   · le composant est fourni PAR LE REDSCRIPT — aucun parcours de composants a coups d'offsets
+///     bruts ici, donc aucun risque de lire a cote sur une montee de version ;
+///   · garde d'ECRITURE stricte : page engagee ET inscriptible, pas seulement lisible ;
+///   · bornes de plausibilite : un ecart local depasse rarement la taille d'une cabine, jamais
+///     mille metres. Une valeur aberrante est refusee au lieu d'etre ecrite ;
+///   · rend `false` sans rien faire au moindre doute. « Accepte » n'est pas « execute », et un
+///     appelant qui verifie ne doit pas pouvoir se faire mentir.
+bool NetworkGameSystem::Tessera_EcrireOffsetLocal(const Red::Handle<RED4ext::IScriptable>& moveComponent,
+                                                  float x, float y, float z)
+{
+    auto* comp = moveComponent.instance;
+    if (comp == nullptr)
+    {
+        return false;
+    }
+    constexpr float kBorne = 1000.0f;
+    if (!(x > -kBorne && x < kBorne && y > -kBorne && y < kBorne && z > -kBorne && z < kBorne))
+    {
+        return false;   // hors de toute cabine plausible : c'est une faute de calcul, pas une cible.
+    }
+
+    const auto champ = reinterpret_cast<std::uintptr_t>(comp) + 0x160;
+    MEMORY_BASIC_INFORMATION mbi{};
+    auto inscriptible = [&](std::uintptr_t ou, std::size_t taille)
+    {
+        if (VirtualQuery(reinterpret_cast<void*>(ou), &mbi, sizeof(mbi)) == 0
+            || mbi.State != MEM_COMMIT)
+        {
+            return false;
+        }
+        constexpr DWORD kOk = PAGE_READWRITE | PAGE_EXECUTE_READWRITE;
+        if ((mbi.Protect & kOk) == 0)
+        {
+            return false;
+        }
+        const auto fin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        return ou + taille <= fin;
+    };
+    if (!inscriptible(champ, 8))
+    {
+        return false;
+    }
+    const auto entree = *reinterpret_cast<std::uint64_t*>(champ);
+    if (entree == 0 || !inscriptible(static_cast<std::uintptr_t>(entree) + 0x20, 12))
+    {
+        return false;
+    }
+
+    auto* champs = reinterpret_cast<float*>(static_cast<std::uintptr_t>(entree) + 0x20);
+    champs[0] = x;
+    champs[1] = y;
+    champs[2] = z;
+    // On RELIT : une ecriture qui ne prend pas doit se voir ici, pas trois heures plus tard.
+    return champs[0] == x && champs[1] == y && champs[2] == z;
+}
+
+bool NetworkGameSystem::Tessera_PoserJoueurLocalPorte(bool actif)
+{
+    g_joueurLocalPorte = actif;
+    return g_joueurLocalPorte;
+}
+
+bool NetworkGameSystem::Tessera_JoueurLocalPorte()
+{
+    return g_joueurLocalPorte;
+}
+
+bool NetworkGameSystem::Tessera_AvatarPorteParPlateforme(uint32_t entiteHash, bool actif)
+{
+    if (entiteHash == 0)
+    {
+        return false;   // « pas d'entite » n'est pas « attache » — on ne marque rien.
+    }
+    if (actif)
+    {
+        g_avatarsAttachesPlateforme.insert(entiteHash);
+    }
+    else
+    {
+        g_avatarsAttachesPlateforme.erase(entiteHash);
+    }
+    return g_avatarsAttachesPlateforme.count(entiteHash) != 0;
 }
 
 bool NetworkGameSystem::Tessera_SuspendreCorrections(bool actif)
@@ -1501,6 +1672,9 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_CharacterResult:
                     HandleCharacterResult(env->msg_as_CharacterResult());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_CommandCatalog:
+                    HandleCommandCatalog(env->msg_as_CommandCatalog());
+                    break;
                 case cyberpunk_rp::protocol::ServerMsg_ActionCatalog:
                     HandleActionCatalog(env->msg_as_ActionCatalog());
                     break;
@@ -1519,6 +1693,29 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_InteractionOpen:
                     HandleInteractionOpen(env->msg_as_InteractionOpen());
                     break;
+                // ⭐ LA CONSOLE — cable le 2026-08-30. Avant, ces deux messages tombaient dans
+                // le `default` juste en dessous : le serveur repondait, le client JETAIT.
+                case cyberpunk_rp::protocol::ServerMsg_CommandResult:
+                {
+                    const auto* r = env->msg_as_CommandResult();
+                    if (r)
+                    {
+                        // 1 = succes, 3 = erreur. Le niveau part avec le texte : sans lui, la
+                        // console ne pourrait pas distinguer un refus d une confirmation.
+                        PousserLigneConsole(r->success() ? 1 : 3,
+                            r->message() ? r->message()->str() : std::string());
+                    }
+                    break;
+                }
+                case cyberpunk_rp::protocol::ServerMsg_ConsoleLine:
+                {
+                    const auto* l = env->msg_as_ConsoleLine();
+                    if (l)
+                    {
+                        PousserLigneConsole(l->level(), l->text() ? l->text()->str() : std::string());
+                    }
+                    break;
+                }
                 default:
                     // Reste non câblé : CommandResult, PermissionSync,
                     // QueueStatus, InteractionOpen, InteractionResult. Le serveur les émet déjà —
@@ -1867,6 +2064,7 @@ static uint64_t g_vehiculeLocalMonte = 0;
 /// corrige au passage suivant ; la seule consequence est une frame de pilotage en trop.
 static std::set<uint64_t> g_avatarsAssis;
 
+
 /// Avatars distants PORTES par une cabine d'ascenseur. Meme nature que `g_avatarsAssis` : un cache
 /// de RENDU, pas une autorite. Alimente par `PlayerState.frame` (ADR 0039), le seul champ qui dise
 /// « ce joueur-la est dans la cabine X ».
@@ -1932,6 +2130,14 @@ struct AncrageCabine
 /// Avatars distants portes par une cabine, et leur ancrage. Repond aussi a « cette cabine est-elle
 /// occupee ? » — la notion PARTAGEE d'occupation qui manque au moteur (`Tessera_CabineOccupee`).
 static std::map<uint64_t, AncrageCabine> g_porteurParAvatar;
+
+/// Voir la declaration dans l'en-tete : le natif qui l'expose est une methode inline, et la table
+/// ci-dessus est un statique de fichier.
+uint64_t CabineDeAvatarReseau(uint64_t networkId)
+{
+    const auto porte = g_porteurParAvatar.find(networkId);
+    return porte == g_porteurParAvatar.end() ? 0 : porte->second.cabine;
+}
 
 /// ── LA HAUTEUR VIVANTE DU PLANCHER, PUBLIEE PAR REDSCRIPT ──────────────────────────────────
 ///
@@ -3757,6 +3963,63 @@ void NetworkGameSystem::HandleCharacterResult(const cyberpunk_rp::protocol::Char
 
 // ══ INTERACTIONS JOUEUR<->JOUEUR (spec 2026-08-09) ═══════════════════════════════════════════
 
+void NetworkGameSystem::HandleCommandCatalog(const cyberpunk_rp::protocol::CommandCatalog* msg)
+{
+    if (msg == nullptr)
+    {
+        return;
+    }
+    // REMPLACEMENT, pas fusion — meme raison que pour `ActionCatalog` : le serveur envoie toujours
+    // la liste COMPLETE de ce que ce joueur a le droit de taper. Une commande retiree (kill switch,
+    // ou droit revoque) disparait donc d'elle-meme. La fusionner la laisserait suggeree pour
+    // toujours, et le joueur la taperait pour se faire refuser sans comprendre.
+    m_commandes.clear();
+    if (msg->commandes() != nullptr)
+    {
+        for (const auto* e : *msg->commandes())
+        {
+            if (e == nullptr)
+            {
+                continue;
+            }
+            CommandeRecue r;
+            r.nom = e->nom() != nullptr ? e->nom()->str() : std::string();
+            if (r.nom.empty())
+            {
+                continue;
+            }
+
+            // La ligne d'affichage, batie une fois a la reception plutot qu'a chaque frappe :
+            //     /vehicle <action> <id> [record] — give a car to a character, or repair a wreck.
+            // `<...>` pour un argument requis, `[...]` pour un optionnel — la convention de
+            // Brigadier, que tout joueur venant de Minecraft lit sans explication.
+            std::string ligne = "/" + r.nom;
+            if (e->args() != nullptr)
+            {
+                for (const auto* a : *e->args())
+                {
+                    if (a == nullptr || a->nom() == nullptr)
+                    {
+                        continue;
+                    }
+                    ligne += a->requis() ? " <" : " [";
+                    ligne += a->nom()->str();
+                    ligne += a->requis() ? ">" : "]";
+                }
+            }
+            if (e->aide() != nullptr && e->aide()->size() > 0)
+            {
+                // Tiret CADRATIN, comme partout dans l'interface Tessera.
+                ligne += " \xE2\x80\x94 ";
+                ligne += e->aide()->str();
+            }
+            r.affichage = std::move(ligne);
+            m_commandes.push_back(std::move(r));
+        }
+    }
+    SDK->logger->InfoF(PLUGIN, "CommandCatalog : %zu commande(s) disponibles", m_commandes.size());
+}
+
 void NetworkGameSystem::HandleActionCatalog(const cyberpunk_rp::protocol::ActionCatalog* msg)
 {
     if (msg == nullptr)
@@ -3982,6 +4245,7 @@ bool NetworkGameSystem::SendRapportInvocation(float x, float y, float z)
 void NetworkGameSystem::HandleInteractionOpen(const cyberpunk_rp::protocol::InteractionOpen* msg)
 {
     constexpr uint8_t kUiKindCoffre = 7;
+    constexpr uint8_t kUiKindContenant = 8;
     constexpr uint8_t kUiKindInvocation = 8;
     if (msg == nullptr)
     {
@@ -4016,14 +4280,15 @@ void NetworkGameSystem::HandleInteractionOpen(const cyberpunk_rp::protocol::Inte
             m_invocationVehicule, m_invocationRecord.c_str(), m_invocationSeq);
         return;
     }
-    if (msg->ui_kind() != kUiKindCoffre)
+    if (msg->ui_kind() != kUiKindCoffre && msg->ui_kind() != kUiKindContenant)
     {
         // ⚠️ On le DIT. Premiere version : `return` muet. Le serveur repondait, le client ne
         // decodait pas, et RIEN nulle part ne disait pourquoi — ni erreur, ni message « non
         // cable » (le routeur, lui, avait bien appele ce gestionnaire). Un chemin de sortie
         // silencieux dans un decodeur est une session de diagnostic en attente.
-        SDK->logger->InfoF(PLUGIN, "[coffre] InteractionOpen ignore : ui_kind=%u (attendu %u)",
-            static_cast<unsigned>(msg->ui_kind()), static_cast<unsigned>(kUiKindCoffre));
+        SDK->logger->InfoF(PLUGIN, "[coffre] InteractionOpen ignore : ui_kind=%u (attendus %u ou %u)",
+            static_cast<unsigned>(msg->ui_kind()), static_cast<unsigned>(kUiKindCoffre),
+            static_cast<unsigned>(kUiKindContenant));
         return;
     }
     // Le contenu voyage en tampon IMBRIQUE dans le payload opaque. Verifie avant lecture : un
@@ -4056,7 +4321,14 @@ void NetworkGameSystem::HandleInteractionOpen(const cyberpunk_rp::protocol::Inte
             m_coffreAutoritaire.push_back(std::move(ligne));
         }
     }
-    m_coffreVehicule = contenu->vehicule();
+    // ⚠️ Le champ s'appelle `contenant` depuis le 2026-08-30 : il porte un id de vehicule OU
+    // l'EntityID d'un appareil du monde (voir `protocol.fbs`). Ici on est sur le chemin VEHICULE
+    // — d'ou le membre qui garde son nom, et la recherche dans `m_networkedEntitiesLookup` juste
+    // apres, qui n'a de sens que pour un vehicule reseau.
+    // Le genre de session, retenu ICI et nulle part ailleurs : c'est la seule information que le
+    // message d'ouverture porte et que le rapport de fermeture devra rendre.
+    m_coffreEstContenant = (msg->ui_kind() == kUiKindContenant);
+    m_coffreVehicule = contenu->contenant();
     m_coffreCapacite = contenu->capacite();
     m_coffreSession = msg->session_id();
     // EN DERNIER, comme le drapeau du sac : tant que la sequence n'a pas bouge, redscript ne
@@ -4094,16 +4366,24 @@ void NetworkGameSystem::SendCoffreRapport()
 
     flatbuffers::FlatBufferBuilder builder;
     const auto payload = builder.CreateVector(interne.GetBufferPointer(), interne.GetSize());
+    // ⛔ LE VERBE EST CE QUI DISTINGUE LES DEUX RAPPORTS, ET IL N'Y A RIEN D'AUTRE.
+    //
+    // Cote serveur, `extract_rapport_coffre` ne regarde AUCUN verbe : il reconnait un coffre au
+    // fait que `session_id` tombe dans la plage d'ids des vehicules. Or un `EntityID` d'appareil
+    // n'a aucune plage reservee et peut y tomber par hasard — d'ou un verbe EXPLICITE pour le
+    // contenant (16), et l'ordre d'essai cote Gateway qui tente le plus specifique en premier.
+    // Se tromper ici ferait ecrire le contenu d'une caisse dans le coffre d'une voiture.
+    const uint32_t verbeChoix = m_coffreEstContenant ? 16u : 0u;
     const auto choix = cyberpunk_rp::protocol::CreateInteractionChoice(
-        builder, m_coffreSession, 0, 0, payload);
+        builder, m_coffreSession, verbeChoix, 0, payload);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_InteractionChoice, choix.Union());
     builder.Finish(env);
     m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 
-    SDK->logger->InfoF(PLUGIN, "[coffre] rapport envoye : %zu ligne(s) pour le vehicule %llu",
-        m_coffreRapport.size(), m_coffreVehicule);
+    SDK->logger->InfoF(PLUGIN, "[coffre] rapport envoye : %zu ligne(s), verbe %u, cible %llu",
+        m_coffreRapport.size(), static_cast<unsigned>(verbeChoix), m_coffreVehicule);
 }
 
 // ── LES VERBES VEHICULE : LE CANAL MONTANT QUI MANQUAIT ──────────────────────────────────────
@@ -4243,6 +4523,7 @@ void NetworkGameSystem::HandleDeviceState(const cyberpunk_rp::protocol::DeviceSt
     etat.famille = static_cast<int32_t>(msg->famille());
     etat.etat = static_cast<int32_t>(msg->etat());
     etat.proprietaire = msg->proprietaire();
+    etat.tenants = static_cast<int32_t>(msg->tenants());
 
     // BORNE DE FILE, meme raison que les ascenseurs : sans mod appareils installe, personne ne
     // draine et la file grossirait sans borne. On jette les PLUS ANCIENS — un etat perime n'a
@@ -6349,6 +6630,7 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
             continue;
         }
 
+
         // ── UN PASSAGER D'ASCENSEUR SE MONTE, IL NE SE PLACE PAS ───────────────────────────
         //
         // Meme raisonnement que pour un passager de vehicule, juste au-dessus : quand le moteur
@@ -6488,6 +6770,32 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // position FAIT AUTORITE, on ne veut pas que le moteur lui recalcule un chemin autour d'un
     // obstacle, on le veut la ou le serveur le dit.
     RED4ext::Vector4 positionVoulue = { pose.x, pose.y, pose.z, 1.0f };
+
+    // ── UN CORPS ATTACHE A UNE PLATEFORME NE SE PLACE PLUS DU TOUT ─────────────────────────
+    //
+    // ⚠️ Ecrire une position monde sur un corps attache ne fait pas que « lutter » : ca CASSE. Sa
+    // transformee est devenue LOCALE au plancher, donc la position se compose avec celle de la
+    // cabine et le corps part a des centaines de metres (mesure du 2026-08-28, F-ASC-057).
+    //
+    // ⭐ MAIS ON MEMORISE LA POSE VOULUE AVANT DE SORTIR. C'est elle qui porte le mouvement PROPRE
+    // du passager dans la cabine — celui que l'attache seule fige, et dont l'absence se voit :
+    // « le PNJ a ete fige, il se remet a jour quand la cabine s'arrete » (Lucas, 2026-08-28). Le
+    // redscript la relit et ecrit l'ecart LOCAL correspondant, ce qui complete le modele en repere
+    // relatif : la cabine par l'attache (sans retard), le passager par le fil (petit et lent).
+    //
+    // ⚠️ La garde est ICI et plus dans la boucle appelante : la-bas, la pose n'est pas encore
+    // calculee, et sortir avant de la connaitre reviendrait a jeter la seule chose qu'on veut.
+    {
+        const uint32_t cle = static_cast<uint32_t>(entityId.hash);
+        if (g_avatarsAttachesPlateforme.count(cle) != 0)
+        {
+            g_poseVoulueAttachee[cle] = positionVoulue;
+            g_allureAttachee[cle] = pose.locomotion;
+            return;
+        }
+        g_poseVoulueAttachee.erase(cle);
+        g_allureAttachee.erase(cle);
+    }
 
     const auto entite = Cyberverse::Utils::GetDynamicEntity(entityId);
     if (!entite.has_value())
@@ -6976,7 +7284,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // ⚠️ Un residu SYSTEMATIQUE (toujours du meme signe) se corrige ; un residu qui change
             // de signe est du bruit et ne se corrige pas. C'est le signe constant qui autorise ce
             // terme, pas sa taille.
-            float avance = vzCible * (delaiBorne + deltaTime);
+            // ── ⭐ UNE IMAGE ET DEMIE, ET LE DEMI VIENT D'UNE MESURE ────────────────────────
+            //
+            // Releve du 2026-08-27, gaine de 91,8 m, 116 echantillons, apres le terme `+1 x dt` :
+            //
+            //     cible LENTE  (|dz par image| < 0,05)  ecart median  +0,011 m
+            //     cible RAPIDE (|dz par image| > 0,15)  ecart median  +0,205 m
+            //
+            // Lucas, au meme moment : « il ne touche pas le sol quand on descend, il y a toujours
+            // une vingtaine de centimetres ». Les deux se rejoignent au centimetre.
+            //
+            // ⭐ L'ajustement `ecart = k x |dz par image|` donne **k = 0,48** : le residu n'est donc
+            // PAS un decalage constant, c'est un retard PROPORTIONNEL A LA VITESSE, et il vaut une
+            // demi-image. Une valeur negative fixe — la premiere idee, naturelle — aurait
+            // sur-corrige a vitesse lente et sous-corrige au pic. C'est la mesure qui a departage
+            // les deux, pas le raisonnement.
+            //
+            // Apres retrait du terme, le residu median tombe a +0,005 m.
+            static constexpr float kImagesDAvance = 1.5f;
+            float avance = vzCible * (delaiBorne + kImagesDAvance * deltaTime);
             // ⚠️ FILET DE SECURITE, et il est la parce qu'un bug l'a franchi. Une cabine de Night
             // City ne parcourt jamais 2 m en un tampon d'interpolation (ce serait 20 m/s). Au-dela,
             // ce n'est plus une extrapolation, c'est un emballement — on refuse, et le pire cas
@@ -7677,7 +8003,30 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     if (!g_suspendreCorrections && enLair && derive <= kSautFrancM)
     {
         auto& s = g_suiviAvatars[networkId];
-        if (s.depuisPlaceS >= kPeriodePlacementVolS)
+        // ── ⭐ A LA VITESSE DE POINTE, ON CORRIGE A CHAQUE IMAGE ────────────────────────────
+        //
+        // Lucas, 2026-08-27 : « c'est pendant la vitesse de pointe que vraiment ça n'arrive pas a
+        // se recaler ». Le nombre lui donne raison : entre deux corrections espacees de 30 ms, une
+        // cabine a 6 m/s parcourt 18 cm. La cadence est donc, a elle seule, une source d'erreur
+        // PROPORTIONNELLE A LA VITESSE — celle que l'on voit au milieu du trajet et nulle part
+        // ailleurs.
+        //
+        // On supprime l'espacement quand la cible defile vite, et on le garde sinon. Le cout est
+        // borne a ce cas precis : un corps porte par une plateforme rapide, ce qui est rare et
+        // bref. Un saut ordinaire (l'autre usage de `locomotion == 6`) reste a 33 Hz.
+        //
+        // ⚠️ Pourquoi ce n'est pas le defaut de 2026-08-06 : cet effondrement venait de
+        // `SetEntityPosition` appele a 60 Hz sur CHAQUE avatar, en permanence. Ici c'est un avatar
+        // dont la cible DEFILE de plus de 8 cm par image — autant dire, en pratique, quelqu'un dans
+        // un ascenseur rapide.
+        // Le declencheur se lit sur place : « la cible a-t-elle quitte de plus de 8 cm l'endroit ou
+        // l'on a POSE le corps la derniere fois ? ». Il croit tout seul entre deux corrections, donc
+        // il se declenche d'autant plus tot que la cabine va vite — exactement le comportement
+        // voulu, et sans avoir a estimer une vitesse.
+        static constexpr float kEcartDepuisPlacementM = 0.08f;
+        const bool cibleTropLoin =
+            s.placeValide && std::fabs(positionVoulue.Z - s.placeZ) > kEcartDepuisPlacementM;
+        if (cibleTropLoin || s.depuisPlaceS >= kPeriodePlacementVolS)
         {
             // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On
             // suit donc la verticale SANS lissage, et on garde l'amortissement sur l'horizontale.
@@ -7692,6 +8041,33 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             const float rvolx = reluvol.X - vol.X, rvoly = reluvol.Y - vol.Y, rvolz = reluvol.Z - vol.Z;
             g_ecartApresPose = std::sqrt(rvolx * rvolx + rvoly * rvoly + rvolz * rvolz);
             g_telemetrie.Evenement("saut_place", networkId, "");
+
+            // ── ⭐ L'INSTRUMENT QUI SEPARE LES DEUX SEULES CAUSES POSSIBLES ─────────────────
+            //
+            // Releve du 2026-08-27 : a la vitesse de pointe, l'ecart reste a ~20 cm MALGRE une
+            // cible deja extrapolee. Deux causes, et elles demandent des correctifs OPPOSES :
+            //
+            //   · le placement n'est pas APPELE assez souvent  -> `rvolz` sera petit (on atteint la
+            //     cible quand on la vise) et l'ecart se creuse ENTRE deux appels ;
+            //   · le placement est appele et ECRASE juste apres -> `rvolz` sera deja grand DANS LA
+            //     MEME FRAME : le moteur ramene le corps ailleurs immediatement.
+            //
+            // `rvolz` est relu APRES le placement, dans la meme frame. C'est la seule facon de les
+            // distinguer de l'exterieur — et c'est exactement le genre de question que j'ai passe
+            // la journee a ne pas poser.
+            {
+                auto& tracePose = g_suiviAvatars[networkId];
+                tracePose.depuisLogS += deltaTime;
+                if (std::fabs(vol.Z - position.Z) > 0.05f && tracePose.depuisLogS >= 0.4f)
+                {
+                    tracePose.depuisLogS = 0.0f;
+                    SDK->logger->InfoF(PLUGIN,
+                        "[pose %llu] visee.z=%.3f avant.z=%.3f APRES.z=%.3f | colle=%+.3f "
+                        "| demande=%+.3f | dt=%.4f",
+                        networkId, vol.Z, position.Z, reluvol.Z, reluvol.Z - vol.Z,
+                        vol.Z - position.Z, deltaTime);
+                }
+            }
         }
     }
     else if (!g_suspendreCorrections && deriveHorizontale > kCorrectionMiniM
