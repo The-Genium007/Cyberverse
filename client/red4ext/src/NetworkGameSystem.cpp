@@ -2100,7 +2100,31 @@ namespace Tessera
 ///
 /// A `false`, un passager est un avatar distant comme un autre : sa position vient du fil, la
 /// physique du jeu fait le reste. Moins juste dans une cabine en mouvement, et ASSUME.
-inline constexpr bool kAncrageVerticalActif = false;
+inline constexpr bool kAncrageVerticalActif = true;
+// ⭐⭐ RALLUME LE 2026-08-31, ET LA CONDITION QUI L'AVAIT ETEINT EST LEVEE — MESUREE.
+//
+// Il avait ete eteint parce que son ENTREE sautait d'un etage a l'autre : « aucune valeur
+// intermediaire, l'avatar reste a une altitude fixe pendant que la cabine descend autour de lui ».
+// Le mecanisme n'a jamais ete en cause, seulement ce qu'on lui donnait a manger.
+//
+// L'entree a ete refaite depuis (interpolation de trajet cote redscript, et surtout lecture de
+// l'altitude du JOUEUR LOCAL quand il partage la cabine — que le moteur porte parfaitement,
+// F-ASC-001). MESURE du 2026-08-31 sur un trajet reel de la gaine du megabatiment :
+//
+//     cabine=2707237757  publications=785  distinctes=512  amplitude=91,84 m
+//
+// 65 % des publications portent une valeur NEUVE. En marches, on aurait vu deux ou trois valeurs
+// distinctes sur 785. Les 35 % restants sont les battements a l'arret, ou la valeur ne change pas.
+// L'amplitude de 91,84 m atteste qu'on a bien mesure un TRAJET et pas un stationnement.
+//
+// ⚠️ ET C'EST LA SUITE DIRECTE DE F-ASC-074 : le parentage etait la cause du tremblement et des
+// genoux (mesure par suppression). Le remplacer par une correction de la position VISEE laisse le
+// netcode piloter l'animation comme pour tout autre avatar — c'est le seul chemin qui porte le
+// passager SANS orpheliner son animation.
+//
+// ⚠️ Cette constante garde DEUX choses, et la seconde compte autant : le calcul de hauteur
+// ci-dessous, et le retrait de l'AMORTISSEMENT pour les passagers (voir `passager`, plus bas).
+// L'amortissement avait ete pose pour masquer le flou ; il le FABRIQUAIT. Les deux vont ensemble.
 }   // namespace Tessera
 
 struct AncrageCabine
