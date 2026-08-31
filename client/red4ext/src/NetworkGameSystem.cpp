@@ -1675,6 +1675,9 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_CommandCatalog:
                     HandleCommandCatalog(env->msg_as_CommandCatalog());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_StaffMode:
+                    HandleStaffMode(env->msg_as_StaffMode());
+                    break;
                 case cyberpunk_rp::protocol::ServerMsg_ActionCatalog:
                     HandleActionCatalog(env->msg_as_ActionCatalog());
                     break;
@@ -3962,6 +3965,20 @@ void NetworkGameSystem::HandleCharacterResult(const cyberpunk_rp::protocol::Char
 }
 
 // ══ INTERACTIONS JOUEUR<->JOUEUR (spec 2026-08-09) ═══════════════════════════════════════════
+
+void NetworkGameSystem::HandleStaffMode(const cyberpunk_rp::protocol::StaffMode* msg)
+{
+    if (msg == nullptr)
+    {
+        return;
+    }
+    // AFFECTATION, pas bascule. Le serveur envoie l ETAT, pas un evenement « ca a change » — donc
+    // deux `/gm on` de suite laissent le temoin allume, et un message perdu se rattrape au message
+    // suivant ou au prochain `Join`. Une bascule ferait exactement l inverse : elle DIVERGERAIT
+    // au premier message manque, et plus rien ne la remettrait d aplomb.
+    m_modeStaff = msg->on();
+    SDK->logger->InfoF(PLUGIN, "StaffMode : %s", m_modeStaff ? "ON" : "OFF");
+}
 
 void NetworkGameSystem::HandleCommandCatalog(const cyberpunk_rp::protocol::CommandCatalog* msg)
 {

@@ -66,6 +66,10 @@ namespace cyberpunk_rp::protocol {
     // ⭐ Le type est pourtant BIEN dans `generated/protocol_generated.h` : verifier le header
     // genere ne dit RIEN sur ce bloc, qui est une liste tenue A LA MAIN.
     struct CommandCatalog;
+    // ⚠️ Cinquieme entree de ce bloc, et cinquieme rappel : toute table manipulee plus bas se
+    // declare AUSSI ici. L oublier ne donne pas « type inconnu » — le compilateur lit le
+    // parametre comme `const int` et se plaint A L APPEL, plusieurs centaines de lignes plus loin.
+    struct StaffMode;
     // Inventaire sous autorite serveur (ADR 0026). QUATRIEME fois que ce bloc est oublie —
     // 2026-08-13, avec exactement le message annonce ci-dessus (« impossible de convertir
     // 'const InventaireAutoritaire *' en 'const int' », qui pointe vers l'appelant alors que le
@@ -791,6 +795,17 @@ private:
     /// `m_actions` : le client n'apprend jamais l'existence des commandes qu'il n'a pas, donc une
     /// suggestion ne peut pas reveler l'outillage du staff a un joueur ordinaire.
     std::vector<CommandeRecue> m_commandes;
+
+    /// ⭐ MODE STAFF — l'etat, pas un texte.
+    ///
+    /// Le serveur le pousse quand il CHANGE et a chaque `Join`. Depuis le 2026-08-31 l elevation
+    /// ne s eteint plus toute seule : ce booleen est donc ce qui allume le temoin permanent, et
+    /// c est lui qui remplace l ancienne echeance de 30 minutes comme garde-fou contre l oubli.
+    ///
+    /// ⚠️ Faux par defaut, et il le RESTE tant que le serveur n a rien dit. Un temoin allume a
+    /// tort ferait croire a des pouvoirs qu on n a pas ; eteint a tort, on tape une commande et
+    /// le serveur refuse. Des deux erreurs, la seconde se corrige toute seule.
+    bool m_modeStaff = false;
     /// Les noms qu'on CONNAIT, par id reseau. C'est la seule source du nametag.
     ///
     /// ⚠️ Une entree n'apparait ici que parce que le serveur l'a envoyee, et il ne l'envoie qu'a
@@ -1038,6 +1053,7 @@ protected:
     // pas un delta, donc rien a fusionner, et une action retiree disparait d'elle-meme.
     void HandleActionCatalog(const cyberpunk_rp::protocol::ActionCatalog* msg);
     void HandleCommandCatalog(const cyberpunk_rp::protocol::CommandCatalog* msg);
+    void HandleStaffMode(const cyberpunk_rp::protocol::StaffMode* msg);
     // Noms que ce joueur CONNAIT. En lot au join, a une entree a chaque presentation recue. On
     // ACCUMULE ici (contrairement au catalogue) : le message a une entree est un ajout, pas un
     // remplacement, et le traiter comme tel effacerait toutes les connaissances a chaque poignee
@@ -1616,6 +1632,9 @@ public:
     /// Rend `""` hors bornes plutot que de lever : le script interroge par index dans une boucle,
     /// et un catalogue qui retrecit entre deux images (changement de permission) ne doit pas faire
     /// tomber `r6/scripts` entier.
+    /// Le joueur local est-il en mode staff ? Lu par le HUD pour allumer son temoin.
+    bool Tessera_ModeStaff() const { return m_modeStaff; }
+
     int32_t Tessera_NombreCommandes() const { return static_cast<int32_t>(m_commandes.size()); }
 
     Red::CString Tessera_CommandeNom(int32_t index) const
@@ -2785,6 +2804,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     // `RedscriptModule/src/Network/NetworkGameSystem.reds` : les deux cotes se posent ET se
     // deploient ENSEMBLE. Un `native func` sans backing dans la DLL deployee fait tomber TOUT
     // r6/scripts et le jeu se ferme sans un mot (F-PLF-020, F-PLF-023).
+    RTTI_METHOD(Tessera_ModeStaff);
     RTTI_METHOD(Tessera_NombreCommandes);
     RTTI_METHOD(Tessera_CommandeNom);
     RTTI_METHOD(Tessera_CommandeAffichage);

@@ -455,6 +455,10 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_CommandeNom(index: Int32) -> String;
     public native func Tessera_CommandeAffichage(index: Int32) -> String;
 
+    // MODE STAFF (2026-08-31) — l'etat pousse par le serveur, pas une deduction. Allume le
+    // temoin permanent du HUD tant que `/gm on` n'a pas ete defait par `/gm off`.
+    public native func Tessera_ModeStaff() -> Bool;
+
 
     // Le joueur local vient d'entrer (monte=true) ou de sortir d'une cabine. Sert au RENDU chez
     // les autres : le serveur relaie le porteur, et l'observateur accroche l'interpolation de

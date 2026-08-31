@@ -211,6 +211,9 @@ struct CommandCatalogBuilder;
 struct ConsoleLine;
 struct ConsoleLineBuilder;
 
+struct StaffMode;
+struct StaffModeBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -427,11 +430,12 @@ enum ServerMsg : uint8_t {
   ServerMsg_DeviceStateMsg = 23,
   ServerMsg_CommandCatalog = 24,
   ServerMsg_ConsoleLine = 25,
+  ServerMsg_StaffMode = 26,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_ConsoleLine
+  ServerMsg_MAX = ServerMsg_StaffMode
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[26] {
+inline const ServerMsg (&EnumValuesServerMsg())[27] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -458,13 +462,14 @@ inline const ServerMsg (&EnumValuesServerMsg())[26] {
     ServerMsg_InventaireAutoritaire,
     ServerMsg_DeviceStateMsg,
     ServerMsg_CommandCatalog,
-    ServerMsg_ConsoleLine
+    ServerMsg_ConsoleLine,
+    ServerMsg_StaffMode
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[27] = {
+  static const char * const names[28] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -491,13 +496,14 @@ inline const char * const *EnumNamesServerMsg() {
     "DeviceStateMsg",
     "CommandCatalog",
     "ConsoleLine",
+    "StaffMode",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_ConsoleLine)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_StaffMode)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -604,6 +610,10 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::CommandCatalog> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ConsoleLine> {
   static const ServerMsg enum_value = ServerMsg_ConsoleLine;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaffMode> {
+  static const ServerMsg enum_value = ServerMsg_StaffMode;
 };
 
 template <bool B = false>
@@ -2648,12 +2658,12 @@ inline ::flatbuffers::Offset<CoffreLigne> CreateCoffreLigneDirect(
 struct CoffreContenu FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef CoffreContenuBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_VEHICULE = 4,
+    VT_CONTENANT = 4,
     VT_CAPACITE = 6,
     VT_LIGNES = 8
   };
-  uint64_t vehicule() const {
-    return GetField<uint64_t>(VT_VEHICULE, 0);
+  uint64_t contenant() const {
+    return GetField<uint64_t>(VT_CONTENANT, 0);
   }
   uint16_t capacite() const {
     return GetField<uint16_t>(VT_CAPACITE, 0);
@@ -2664,7 +2674,7 @@ struct CoffreContenu FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyField<uint64_t>(verifier, VT_VEHICULE, 8) &&
+           VerifyField<uint64_t>(verifier, VT_CONTENANT, 8) &&
            VerifyField<uint16_t>(verifier, VT_CAPACITE, 2) &&
            VerifyOffset(verifier, VT_LIGNES) &&
            verifier.VerifyVector(lignes()) &&
@@ -2677,8 +2687,8 @@ struct CoffreContenuBuilder {
   typedef CoffreContenu Table;
   ::flatbuffers::FlatBufferBuilder &fbb_;
   ::flatbuffers::uoffset_t start_;
-  void add_vehicule(uint64_t vehicule) {
-    fbb_.AddElement<uint64_t>(CoffreContenu::VT_VEHICULE, vehicule, 0);
+  void add_contenant(uint64_t contenant) {
+    fbb_.AddElement<uint64_t>(CoffreContenu::VT_CONTENANT, contenant, 0);
   }
   void add_capacite(uint16_t capacite) {
     fbb_.AddElement<uint16_t>(CoffreContenu::VT_CAPACITE, capacite, 0);
@@ -2699,11 +2709,11 @@ struct CoffreContenuBuilder {
 
 inline ::flatbuffers::Offset<CoffreContenu> CreateCoffreContenu(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    uint64_t vehicule = 0,
+    uint64_t contenant = 0,
     uint16_t capacite = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>>> lignes = 0) {
   CoffreContenuBuilder builder_(_fbb);
-  builder_.add_vehicule(vehicule);
+  builder_.add_contenant(contenant);
   builder_.add_lignes(lignes);
   builder_.add_capacite(capacite);
   return builder_.Finish();
@@ -2711,13 +2721,13 @@ inline ::flatbuffers::Offset<CoffreContenu> CreateCoffreContenu(
 
 inline ::flatbuffers::Offset<CoffreContenu> CreateCoffreContenuDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    uint64_t vehicule = 0,
+    uint64_t contenant = 0,
     uint16_t capacite = 0,
     const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>> *lignes = nullptr) {
   auto lignes__ = lignes ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::CoffreLigne>>(*lignes) : 0;
   return cyberpunk_rp::protocol::CreateCoffreContenu(
       _fbb,
-      vehicule,
+      contenant,
       capacite,
       lignes__);
 }
@@ -5269,7 +5279,8 @@ struct DeviceStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_DEVICE = 4,
     VT_FAMILLE = 6,
     VT_ETAT = 8,
-    VT_PROPRIETAIRE = 10
+    VT_PROPRIETAIRE = 10,
+    VT_TENANTS = 12
   };
   uint64_t device() const {
     return GetField<uint64_t>(VT_DEVICE, 0);
@@ -5283,6 +5294,9 @@ struct DeviceStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t proprietaire() const {
     return GetField<uint64_t>(VT_PROPRIETAIRE, 0);
   }
+  uint8_t tenants() const {
+    return GetField<uint8_t>(VT_TENANTS, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -5290,6 +5304,7 @@ struct DeviceStateMsg FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_FAMILLE, 1) &&
            VerifyField<uint8_t>(verifier, VT_ETAT, 1) &&
            VerifyField<uint64_t>(verifier, VT_PROPRIETAIRE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_TENANTS, 1) &&
            verifier.EndTable();
   }
 };
@@ -5310,6 +5325,9 @@ struct DeviceStateMsgBuilder {
   void add_proprietaire(uint64_t proprietaire) {
     fbb_.AddElement<uint64_t>(DeviceStateMsg::VT_PROPRIETAIRE, proprietaire, 0);
   }
+  void add_tenants(uint8_t tenants) {
+    fbb_.AddElement<uint8_t>(DeviceStateMsg::VT_TENANTS, tenants, 0);
+  }
   explicit DeviceStateMsgBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -5326,10 +5344,12 @@ inline ::flatbuffers::Offset<DeviceStateMsg> CreateDeviceStateMsg(
     uint64_t device = 0,
     uint8_t famille = 0,
     uint8_t etat = 0,
-    uint64_t proprietaire = 0) {
+    uint64_t proprietaire = 0,
+    uint8_t tenants = 0) {
   DeviceStateMsgBuilder builder_(_fbb);
   builder_.add_proprietaire(proprietaire);
   builder_.add_device(device);
+  builder_.add_tenants(tenants);
   builder_.add_etat(etat);
   builder_.add_famille(famille);
   return builder_.Finish();
@@ -5662,6 +5682,48 @@ inline ::flatbuffers::Offset<ConsoleLine> CreateConsoleLineDirect(
       text__);
 }
 
+struct StaffMode FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef StaffModeBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ON = 4
+  };
+  bool on() const {
+    return GetField<uint8_t>(VT_ON, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint8_t>(verifier, VT_ON, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct StaffModeBuilder {
+  typedef StaffMode Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_on(bool on) {
+    fbb_.AddElement<uint8_t>(StaffMode::VT_ON, static_cast<uint8_t>(on), 0);
+  }
+  explicit StaffModeBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<StaffMode> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<StaffMode>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<StaffMode> CreateStaffMode(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool on = false) {
+  StaffModeBuilder builder_(_fbb);
+  builder_.add_on(on);
+  return builder_.Finish();
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -5951,6 +6013,9 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::ConsoleLine *msg_as_ConsoleLine() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_ConsoleLine ? static_cast<const cyberpunk_rp::protocol::ConsoleLine *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::StaffMode *msg_as_StaffMode() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_StaffMode ? static_cast<const cyberpunk_rp::protocol::StaffMode *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -6059,6 +6124,10 @@ template<> inline const cyberpunk_rp::protocol::CommandCatalog *ServerEnvelope::
 
 template<> inline const cyberpunk_rp::protocol::ConsoleLine *ServerEnvelope::msg_as<cyberpunk_rp::protocol::ConsoleLine>() const {
   return msg_as_ConsoleLine();
+}
+
+template<> inline const cyberpunk_rp::protocol::StaffMode *ServerEnvelope::msg_as<cyberpunk_rp::protocol::StaffMode>() const {
+  return msg_as_StaffMode();
 }
 
 struct ServerEnvelopeBuilder {
@@ -6303,6 +6372,10 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_ConsoleLine: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::ConsoleLine *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_StaffMode: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaffMode *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
