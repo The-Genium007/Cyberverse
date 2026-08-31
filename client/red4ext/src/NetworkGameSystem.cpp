@@ -2182,6 +2182,27 @@ struct HauteurCabineSuivie
     float zAvant = 0.0f;
     float zDernier = 0.0f;
     bool deuxPoints = false;
+    /// ⭐⭐ INSTANT DU DERNIER MOUVEMENT AVERE — le verrou anti-scintillement.
+    ///
+    /// ⚠️ MESURE DU 2026-08-31, ET ELLE EXPLIQUE LE DEFAUT QUE LUCAS VOIT DEPUIS DEUX JOURS.
+    /// `enMouvement` se decidait sur la pente entre les DEUX DERNIERS echantillons. Or deux
+    /// echantillons identiques arrivent souvent : la hauteur publiee vient de l'altitude du
+    /// joueur local, qui n'avance pas a chaque battement de 50 ms. La pente vaut alors zero, la
+    /// cabine est declaree A L'ARRET, et l'ancrage RECAPTURE son ecart de reference — donc la
+    /// position affichee redevient celle du fil, en retard. Au battement suivant la pente est
+    /// non nulle, l'ecart est garde, et la position redevient ancree.
+    ///
+    /// Resultat : deux valeurs ALTERNENT, a plusieurs dizaines de metres d'ecart. Releve pendant
+    /// une descente reelle, ou la vraie position ne fait que BAISSER :
+    ///     119.105 (x5) -> 117.196 -> 115.848 -> 104.769 (x4) -> 63.687 -> 52.435 -> 42.883
+    ///     -> 72.466 (+30 m !) -> 54.962 -> 48.947 -> 51.086 (+2 m) -> 49.450 -> ...
+    /// Une serie NON MONOTONE sur un trajet monotone : ce n'est pas un retard, ce sont deux
+    /// ecrivains qui se relaient. C'est le « il remonte » signale par Lucas.
+    ///
+    /// Le remede est un VERROU, pas un seuil : une cabine qui a bouge est declaree en mouvement
+    /// pendant encore un demi-seconde. Un echantillon plat ne peut plus, a lui seul, faire croire
+    /// a un arret et reinitialiser la reference.
+    double tDernierMouvement = 0.0;
     /// Derniere hauteur rendue, pour savoir si la cabine bouge sans rien demander de plus.
     float zPrecedent = 0.0f;
     bool zPrecedentValide = false;
@@ -2288,7 +2309,22 @@ bool HauteurCabineA(uint64_t cabineHash, double instant, float& sortie, bool& en
         return false;
     }
     const double pente = (h.zDernier - h.zAvant) / duree;   // m/s
-    enMouvement = std::fabs(pente) > 0.05;
+
+    // ⭐ VERROU ANTI-SCINTILLEMENT (voir `tDernierMouvement`). Un seul echantillon plat ne doit
+    // pas pouvoir declarer la cabine a l'arret : la hauteur publiee vient de l'altitude du joueur
+    // local, qui se repete d'un battement a l'autre. Sans ce verrou, l'ancrage relache sa
+    // reference une image sur deux et la position ALTERNE entre deux valeurs eloignees.
+    //
+    // ⚠️ 0,5 s est choisi pour couvrir largement un trou d'echantillonnage a 20 Hz sans survivre
+    // a un arret reel — une cabine qui s'arrete redevient « immobile » en une demi-seconde, ce qui
+    // est bien plus court que le temps qu'un joueur met a sortir. A ajuster par la MESURE si le
+    // recalage a l'arrivee se voyait, jamais par raisonnement.
+    static constexpr double kMemoireMouvementS = 0.5;
+    if (std::fabs(pente) > 0.05)
+    {
+        h.tDernierMouvement = h.tDernier;
+    }
+    enMouvement = (instant - h.tDernierMouvement) < kMemoireMouvementS;
 
     // ⚠️ EXTRAPOLATION BORNEE. Si redscript cesse de publier (cabine de-streamee, tick mort), on ne
     // prolonge pas la rampe indefiniment — ce serait envoyer l'avatar sous la carte. Au-dela de
