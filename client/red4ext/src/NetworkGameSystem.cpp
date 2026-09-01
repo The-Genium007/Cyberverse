@@ -7956,10 +7956,26 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const float periode = ciblePortee ? kPeriodeCiblePorteeS : kPeriodePlacementImmobileS;
         const float bandeMorte = ciblePortee ? 0.01f : kBandeMorteImmobileM;
 
+        // ⚠️ L'ERREUR SE RECALCULE ICI, CONTRE LA CIBLE FINALE — et pas avant.
+        //
+        // `deriveImmobile` a ete calcule bien plus haut, AVANT l'extrapolation et AVANT le calage
+        // vertical sur le joueur local. Or ces deux etapes deplacent `positionVoulue`, parfois de
+        // plusieurs metres. Tester la bande morte sur l'ancienne valeur, c'est decider d'un
+        // placement d'apres une erreur qui n'existe plus.
+        //
+        // ⚠️ Et le defaut ne se voit PAS pendant un trajet — l'erreur y est grande dans les deux
+        // cas, donc la bande morte passait de toute facon. Il se voit quand elle devient PETITE :
+        // a l'arret, et juste apres le calage vertical. C'est exactement le domaine ou une bande
+        // morte compte, donc exactement la ou il ne faut pas se tromper.
+        const float efx = positionVoulue.X - placeActuelle.X;
+        const float efy = positionVoulue.Y - placeActuelle.Y;
+        const float efz = positionVoulue.Z - placeActuelle.Z;
+        const float deriveFinale = std::sqrt(efx * efx + efy * efy + efz * efz);
+
         // ⭐ PLUS DE `!passager` ICI : un passager passe desormais par ce regime, comme tout
         // avatar dont la cible defile. Voir le pave ci-dessus.
         if (!g_suspendreCorrections
-            && (deriveImmobile > bandeMorte || deriveYaw > kBandeMorteYawDeg)
+            && (deriveFinale > bandeMorte || deriveYaw > kBandeMorteYawDeg)
             && suiviImmobile.depuisPlacementImmobileS >= periode)
         {
             suiviImmobile.depuisPlacementImmobileS = 0.0f;
