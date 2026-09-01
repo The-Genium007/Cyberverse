@@ -790,6 +790,13 @@ private:
     {
         std::string nom;
         std::string affichage;
+        /// ⭐ Les VALEURS proposables du premier argument qui en a — en pratique, les joueurs
+        /// connectes pour `/tp`.
+        ///
+        /// ⚠️ Le PREMIER seulement, et c est assume : aucune commande de l arbre n a deux
+        /// arguments a completer. Le jour ou ca arrive, ce champ devient un vecteur de vecteurs
+        /// — et ce jour-la on saura ce qu on complete, au lieu de le prevoir a vide.
+        std::vector<std::string> valeurs;
     };
     /// Ce que CE joueur a le droit de TAPER. Filtre par le serveur avant l'envoi, comme
     /// `m_actions` : le client n'apprend jamais l'existence des commandes qu'il n'a pas, donc une
@@ -1653,6 +1660,31 @@ public:
             return Red::CString("");
         }
         return Red::CString(m_commandes[static_cast<size_t>(index)].affichage.c_str());
+    }
+
+    /// Combien de valeurs proposables pour la commande `index` — les joueurs connectes, pour
+    /// `/tp`. Zero pour toutes les autres.
+    int32_t Tessera_NombreValeurs(int32_t index) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_commandes.size())
+        {
+            return 0;
+        }
+        return static_cast<int32_t>(m_commandes[static_cast<size_t>(index)].valeurs.size());
+    }
+
+    Red::CString Tessera_CommandeValeur(int32_t index, int32_t rang) const
+    {
+        if (index < 0 || static_cast<size_t>(index) >= m_commandes.size())
+        {
+            return Red::CString("");
+        }
+        const auto& v = m_commandes[static_cast<size_t>(index)].valeurs;
+        if (rang < 0 || static_cast<size_t>(rang) >= v.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(v[static_cast<size_t>(rang)].c_str());
     }
 
     int32_t Tessera_NombreActions() const { return static_cast<int32_t>(m_actions.size()); }
@@ -2808,6 +2840,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_NombreCommandes);
     RTTI_METHOD(Tessera_CommandeNom);
     RTTI_METHOD(Tessera_CommandeAffichage);
+    RTTI_METHOD(Tessera_NombreValeurs);
+    RTTI_METHOD(Tessera_CommandeValeur);
     RTTI_METHOD(Tessera_NombreActions);
     RTTI_METHOD(Tessera_ActionId);
     RTTI_METHOD(Tessera_ActionLibelle);

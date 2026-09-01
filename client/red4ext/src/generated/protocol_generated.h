@@ -5454,7 +5454,8 @@ struct CommandEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_AIDE = 8,
     VT_EXEMPLE = 10,
     VT_SENSIBLE = 12,
-    VT_EXIGE_ELEVATION = 14
+    VT_EXIGE_ELEVATION = 14,
+    VT_USAGE = 16
   };
   const ::flatbuffers::String *nom() const {
     return GetPointer<const ::flatbuffers::String *>(VT_NOM);
@@ -5474,6 +5475,9 @@ struct CommandEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool exige_elevation() const {
     return GetField<uint8_t>(VT_EXIGE_ELEVATION, 0) != 0;
   }
+  const ::flatbuffers::String *usage() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_USAGE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -5488,6 +5492,8 @@ struct CommandEntry FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            verifier.VerifyString(exemple()) &&
            VerifyField<uint8_t>(verifier, VT_SENSIBLE, 1) &&
            VerifyField<uint8_t>(verifier, VT_EXIGE_ELEVATION, 1) &&
+           VerifyOffset(verifier, VT_USAGE) &&
+           verifier.VerifyString(usage()) &&
            verifier.EndTable();
   }
 };
@@ -5514,6 +5520,9 @@ struct CommandEntryBuilder {
   void add_exige_elevation(bool exige_elevation) {
     fbb_.AddElement<uint8_t>(CommandEntry::VT_EXIGE_ELEVATION, static_cast<uint8_t>(exige_elevation), 0);
   }
+  void add_usage(::flatbuffers::Offset<::flatbuffers::String> usage) {
+    fbb_.AddOffset(CommandEntry::VT_USAGE, usage);
+  }
   explicit CommandEntryBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -5532,8 +5541,10 @@ inline ::flatbuffers::Offset<CommandEntry> CreateCommandEntry(
     ::flatbuffers::Offset<::flatbuffers::String> aide = 0,
     ::flatbuffers::Offset<::flatbuffers::String> exemple = 0,
     bool sensible = false,
-    bool exige_elevation = false) {
+    bool exige_elevation = false,
+    ::flatbuffers::Offset<::flatbuffers::String> usage = 0) {
   CommandEntryBuilder builder_(_fbb);
+  builder_.add_usage(usage);
   builder_.add_exemple(exemple);
   builder_.add_aide(aide);
   builder_.add_args(args);
@@ -5550,11 +5561,13 @@ inline ::flatbuffers::Offset<CommandEntry> CreateCommandEntryDirect(
     const char *aide = nullptr,
     const char *exemple = nullptr,
     bool sensible = false,
-    bool exige_elevation = false) {
+    bool exige_elevation = false,
+    const char *usage = nullptr) {
   auto nom__ = nom ? _fbb.CreateString(nom) : 0;
   auto args__ = args ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::CommandArg>>(*args) : 0;
   auto aide__ = aide ? _fbb.CreateString(aide) : 0;
   auto exemple__ = exemple ? _fbb.CreateString(exemple) : 0;
+  auto usage__ = usage ? _fbb.CreateString(usage) : 0;
   return cyberpunk_rp::protocol::CreateCommandEntry(
       _fbb,
       nom__,
@@ -5562,7 +5575,8 @@ inline ::flatbuffers::Offset<CommandEntry> CreateCommandEntryDirect(
       aide__,
       exemple__,
       sensible,
-      exige_elevation);
+      exige_elevation,
+      usage__);
 }
 
 struct CommandCatalog FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {

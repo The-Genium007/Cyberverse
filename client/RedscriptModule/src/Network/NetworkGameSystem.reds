@@ -459,6 +459,11 @@ public native class NetworkGameSystem extends IGameSystem {
     // temoin permanent du HUD tant que `/gm on` n'a pas ete defait par `/gm off`.
     public native func Tessera_ModeStaff() -> Bool;
 
+    // Les VALEURS proposables d'une commande (2026-09-01) — les joueurs connectes, pour `/tp`.
+    // Zero pour toutes les autres. Rendent "" hors bornes.
+    public native func Tessera_NombreValeurs(index: Int32) -> Int32;
+    public native func Tessera_CommandeValeur(index: Int32, rang: Int32) -> String;
+
 
     // Le joueur local vient d'entrer (monte=true) ou de sortir d'une cabine. Sert au RENDU chez
     // les autres : le serveur relaie le porteur, et l'observateur accroche l'interpolation de
