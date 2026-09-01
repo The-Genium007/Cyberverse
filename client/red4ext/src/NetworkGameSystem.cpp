@@ -2139,6 +2139,22 @@ struct AncrageCabine
     bool montageRefuse = false;
     /// Le nom d'emplacement retenu, pour le demontage.
     RED4ext::CName emplacement;
+    /// ⭐⭐ LE DERNIER PLANCHER CONNU — pour que l'echec d'une lecture ne fasse jamais SAUTER le corps.
+    ///
+    /// ⚠️ MESURE DU 2026-08-31. `HauteurCabineA` peut rendre `false` en pleine descente : deux
+    /// publications tombees dans la meme image donnent `duree = 0`, et la fonction abandonne. Tout
+    /// le bloc d'ancrage etait alors SAUTE, et la position retombait sur celle du fil — perimee de
+    /// plus d'une seconde, donc plusieurs metres plus haut. Une image sur deux, le corps sautait.
+    ///
+    /// Releve apres le verrou anti-scintillement, sur une descente ou la vraie position ne fait
+    /// que BAISSER : 101.557 -> 116.672 (+15 m), 56.236 -> 70.001 (+14 m), 39.212 -> 51.408 (+12 m).
+    /// Le verrou avait supprime les longs gels ; ces trois sauts-la venaient d'ailleurs.
+    ///
+    /// ⭐ LA REGLE : un repli sur une valeur PERIMEE est pire que pas de repli du tout. On garde
+    /// donc le dernier plancher connu et on continue d'ancrer dessus. Le corps derive alors au
+    /// pire de quelques centimetres pendant l'image manquante, au lieu de sauter de quinze metres.
+    float plancherConnu = 0.0f;
+    bool plancherVu = false;
     /// ── L'ERREUR VISUELLE, ET SA DECROISSANCE ──────────────────────────────────────────────
     /// On n'affiche jamais la cible brute : on affiche `cible + erreur`, et on fait DECROITRE
     /// l'erreur. C'est le patron d'Unreal sur ses proxys simules et de Gaffer On Games
@@ -4070,18 +4086,51 @@ void NetworkGameSystem::HandleCommandCatalog(const cyberpunk_rp::protocol::Comma
             //     /vehicle <action> <id> [record] — give a car to a character, or repair a wreck.
             // `<...>` pour un argument requis, `[...]` pour un optionnel — la convention de
             // Brigadier, que tout joueur venant de Minecraft lit sans explication.
-            std::string ligne = "/" + r.nom;
+            //
+            // ⭐ SAUF si le serveur envoie un `usage` explicite. `/tp` prend SOIT un joueur, SOIT
+            // deux nombres, SOIT trois : une ALTERNATIVE, que la liste plate rendait
+            // `<player|x> [y] [z]` — exact et illisible.
+            std::string ligne;
+            if (e->usage() != nullptr && e->usage()->size() > 0)
+            {
+                ligne = e->usage()->str();
+            }
+            else
+            {
+                ligne = "/" + r.nom;
+                if (e->args() != nullptr)
+                {
+                    for (const auto* a : *e->args())
+                    {
+                        if (a == nullptr || a->nom() == nullptr)
+                        {
+                            continue;
+                        }
+                        ligne += a->requis() ? " <" : " [";
+                        ligne += a->nom()->str();
+                        ligne += a->requis() ? ">" : "]";
+                    }
+                }
+            }
+
+            // Les valeurs proposables du PREMIER argument qui en porte. Pour `/tp`, ce sont les
+            // joueurs connectes — le serveur les met a jour a chaque arrivee.
             if (e->args() != nullptr)
             {
                 for (const auto* a : *e->args())
                 {
-                    if (a == nullptr || a->nom() == nullptr)
+                    if (a == nullptr || a->valeurs() == nullptr || a->valeurs()->size() == 0)
                     {
                         continue;
                     }
-                    ligne += a->requis() ? " <" : " [";
-                    ligne += a->nom()->str();
-                    ligne += a->requis() ? ">" : "]";
+                    for (const auto* v : *a->valeurs())
+                    {
+                        if (v != nullptr)
+                        {
+                            r.valeurs.push_back(v->str());
+                        }
+                    }
+                    break;
                 }
             }
             if (e->aide() != nullptr && e->aide()->size() > 0)
@@ -6340,6 +6389,44 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
                                        worldPosition.X, worldPosition.Y, worldPosition.Z);
                 }
             }
+
+            // ── ⭐⭐⭐ ON VERROUILLE L'APPARENCE : LE PRESET NE DOIT PAS ECRASER LE VRAI V ─────
+            //
+            // ⛔ LE DEFAUT, mesure le 2026-09-01, chronologie du journal a la milliseconde :
+            //
+            //     17:40:18.225  Spawn ENRICHI 4 -> entity 10039790  (porte le V de ce joueur)
+            //     17:40:21.432  AppearanceSync 4  ... arme=114125024658   <- un DEGAINAGE
+            //
+            // Trois secondes apres sa naissance, le corps enrichi se faisait REECRIRE son
+            // apparence. Le declencheur n'a rien a voir avec l'apparence : c'est un changement
+            // d'arme, qui fait re-emettre le spec entier.
+            //
+            // Et ce qui etait applique, hash resolu contre `appearance-presets.toml` :
+            //     record     108153521249            = Character.CitizenRichMale
+            //     apparence  17980800529530541511    = citizen__rich_ma_rich_10
+            // ...soit l'apparence d'un PASSANT, posee sur le pantin qui porte le V du joueur.
+            //
+            // ⭐ CE N'EST UN BUG D'AUCUN DES DEUX COTES : ce sont DEUX MODELES D'APPARENCE qui
+            // tournent en meme temps sur le meme pantin. Le modele PRESET (decision du
+            // 2026-07-25, repli assume quand le corps au visage exact etait bloque) et le modele
+            // ENRICHI, qui marche depuis. Le second a rendu le premier caduc sans le debrancher.
+            //
+            // ⭐⭐ Ca explique la coiffure DOUBLEE (la charge en pose une, le preset une autre),
+            // le visage MELANGE, le corps DECAPITE (quand le preset resolu est une apparence de
+            // `player_base_bodies`, sans tete par construction), et la NON-DETERMINATION mesuree
+            // sur quatre lancements (F-PLY-357) : le resultat depend de l'avancement de la charge
+            // au moment de la reecriture, et de l'instant du premier degainage.
+            //
+            // La voie SURE, elle, enregistrait deja son apparence juste apres `SpawnNetworkAvatar`
+            // (plus bas). C'est cette symetrie qui manquait — pas un mecanisme neuf.
+            //
+            // ⚠️ ET CE N'EST PAS UN GEL. Le garde de `ApplyAppearance` ne bloque que la MEME
+            // valeur : un vrai changement d'apparence (tenue, coiffure) porte un autre hash et
+            // passera. On refuse la re-application du preset de naissance, pas les mises a jour.
+            if (it->second.appearance != 0)
+            {
+                m_appliedAppearance[networkId] = it->second.appearance;
+            }
             return true;
         }
         // ── L'APPEL EST PARTI, LE CORPS N'EST PAS ENCORE NE : ON PATIENTE ────────────────────
@@ -7043,8 +7130,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         {
             float plancher = 0.0f;
             bool cabineEnMouvement = false;
-            if (HauteurCabineA(ancre->second.cabine, g_tempsLocalS, plancher, cabineEnMouvement))
+            bool planchierLu = HauteurCabineA(ancre->second.cabine, g_tempsLocalS, plancher,
+                                              cabineEnMouvement);
+            if (!planchierLu && ancre->second.plancherVu)
             {
+                // ⭐ REPLI SUR LE DERNIER PLANCHER CONNU, jamais sur la position du fil (voir
+                // `plancherConnu`). Une lecture ratee ne doit pas relacher l'ancrage : elle doit
+                // le figer une image, ce qui coute des centimetres au lieu de metres.
+                plancher = ancre->second.plancherConnu;
+                cabineEnMouvement = true;   // on ne RECAPTURE pas l'ecart sur une lecture ratee
+                planchierLu = true;
+            }
+            if (planchierLu)
+            {
+                ancre->second.plancherConnu = plancher;
+                ancre->second.plancherVu = true;
                 if (!ancre->second.ecartConnu || !cabineEnMouvement)
                 {
                     ancre->second.dz = positionVoulue.Z - plancher;
