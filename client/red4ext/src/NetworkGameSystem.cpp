@@ -1487,9 +1487,21 @@ void NetworkGameSystem::PlacerSansCommande(const RED4ext::ent::EntityID entityId
     // Ici : uniquement `TeleportationFacility`. L'entité bouge, la file de commandes n'est pas
     // touchée, la marche continue. C'est ce que Q6b avait mesuré comme viable — un Teleport
     // PENDANT une commande de marche active, pas un Teleport QUI REMPLACE la commande.
+    // ⚠️ CETTE FONCTION ABANDONNAIT EN SILENCE, A DEUX ENDROITS — et un placement qui echoue sans
+    // rien dire est indiscernable d'un placement qui reussit sans effet. C'est precisement la
+    // confusion qui a fait accuser la fonction elle-meme le 2026-09-01. On compte, desormais.
+    static std::atomic<std::uint64_t> s_sansEntite{0};
+    static std::atomic<std::uint64_t> s_sansCast{0};
     const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
     if (!entity.has_value())
     {
+        const auto n = s_sansEntite.fetch_add(1) + 1;
+        if (n == 1 || n % 500 == 0)
+        {
+            SDK->logger->WarnF(PLUGIN,
+                "[placement] ABANDON : entite %llu irresolvable (%llu fois) — le corps n'est pas place",
+                entityId.hash, n);
+        }
         return;
     }
     const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yaw };
@@ -1513,6 +1525,14 @@ void NetworkGameSystem::PlacerSansCommande(const RED4ext::ent::EntityID entityId
     const auto cible = Red::Cast<RED4ext::game::Object>(entity.value());
     if (!cible)
     {
+        const auto n = s_sansCast.fetch_add(1) + 1;
+        if (n == 1 || n % 500 == 0)
+        {
+            SDK->logger->WarnF(PLUGIN,
+                "[placement] ABANDON : entite %llu n'est pas un gameObject (%llu fois) — "
+                "c'est le defaut de F-PLY-070, et il serait REVENU",
+                entityId.hash, n);
+        }
         return;
     }
     Red::CallVirtual(teleportFacility, "Teleport", cible, worldPosition, angles);
@@ -2094,12 +2114,21 @@ namespace Tessera
 /// separer serait un piege : desactiver l'un sans l'autre laisse un demi-mecanisme actif, et un
 /// demi-mecanisme est plus difficile a diagnostiquer qu'un mecanisme entier.
 ///
-/// Pourquoi c'est a `false` : voir le pave a l'endroit du calcul. En un mot — la branche passager
-/// appelait `PlacerSansCommande`, dont ce meme fichier avait DEJA prouve qu'elle n'applique rien
-/// (F-PLY-070, 3048 echantillons). L'avatar n'etait donc jamais place pendant le trajet.
+/// ⚠️⚠️ CE COMMENTAIRE ETAIT PERIME, ET IL M'A COUTE TROIS HEURES (corrige le 2026-09-01).
 ///
-/// A `false`, un passager est un avatar distant comme un autre : sa position vient du fil, la
-/// physique du jeu fait le reste. Moins juste dans une cabine en mouvement, et ASSUME.
+/// Il disait : « la branche passager appelait `PlacerSansCommande`, dont ce meme fichier avait
+/// DEJA prouve qu'elle n'applique rien (F-PLY-070, 3048 echantillons) ». C'etait vrai au moment
+/// ou il a ete ecrit. Ca ne l'est PLUS : F-PLY-070 portait sur un **cast manquant**, et ce cast
+/// a ete ajoute depuis (`Red::Cast<RED4ext::game::Object>`, voir le corps de la fonction).
+///
+/// ⭐ Un commentaire qui raconte un piege decrit le code AVANT sa correction. Le lire comme le
+/// present a produit ici un diagnostic faux : j'ai conclu « la fonction est inerte » et cherche
+/// une troisieme voie, alors que le vrai defaut etait ailleurs — le passager etait EXCLU du
+/// regime « cible portee » par un `!passager`, donc corrige toutes les deux secondes au lieu de
+/// vingt fois par seconde. Trois freins empiles, et j'en accusais un quatrieme qui n'existait plus.
+///
+/// La regle : avant de basculer une constante, lire son doc-comment EN ENTIER **et** verifier que
+/// chaque raison qu'il invoque est encore vraie dans le code d'aujourd'hui.
 inline constexpr bool kAncrageVerticalActif = true;
 // ⭐⭐ RALLUME LE 2026-08-31, ET LA CONDITION QUI L'AVAIT ETEINT EST LEVEE — MESUREE.
 //
@@ -7123,6 +7152,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     //
     // Remettre `Tessera::kAncrageVerticalActif` a `true` pour reactiver — tout le mecanisme est
     // intact en dessous, et le CAS PASSAGER plus bas est garde par la meme constante.
+    // ⭐ L'ancrage a-t-il fourni le Z ? Si oui, cette composante n'a AUCUN retard (lecture
+    // locale du plancher), et l'extrapolation plus bas ne doit surtout pas s'y appliquer.
+    bool ancrageAFourniZ = false;
     if constexpr (Tessera::kAncrageVerticalActif)
     {
         const auto ancre = g_porteurParAvatar.find(networkId);
@@ -7147,10 +7179,24 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 ancre->second.plancherVu = true;
                 if (!ancre->second.ecartConnu || !cabineEnMouvement)
                 {
-                    ancre->second.dz = positionVoulue.Z - plancher;
+                    // ⚠️ BORNE DE PLAUSIBILITE — cas C12 de la spec du 2026-09-01.
+                    //
+                    // `dz` est la hauteur du corps AU-DESSUS du plancher : un passager debout vaut
+                    // quelques centimetres, jamais plusieurs metres. La capture est juste a l'arret,
+                    // mais elle a lieu AUSSI a la premiere vue d'un avatar — et si cette premiere
+                    // vue tombe pendant un trajet (avatar re-streame en mouvement), le Z du fil est
+                    // en retard de plusieurs metres et `dz` fige ce retard POUR TOUT LE TRAJET.
+                    //
+                    // On borne donc a [-1 m, +3 m]. Hors de cette plage, ce n'est pas une hauteur
+                    // de passager : c'est un retard, et on prefere zero — le corps sera alors au
+                    // niveau du plancher, ce qui est faux de quelques centimetres au lieu de
+                    // plusieurs metres. La capture suivante, a l'arret, remettra la vraie valeur.
+                    const float dzBrut = positionVoulue.Z - plancher;
+                    ancre->second.dz = (dzBrut > -1.0f && dzBrut < 3.0f) ? dzBrut : 0.0f;
                     ancre->second.ecartConnu = true;
                 }
                 positionVoulue.Z = plancher + ancre->second.dz;
+                ancrageAFourniZ = true;
             }
         }
     }
@@ -7744,46 +7790,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // Bande morte de 1 cm : pendant un trajet elle ne bloque jamais rien (la cabine parcourt
         // 4 cm par frame a 2,5 m/s), et a l'arret elle ramene le cout d'un passager a une
         // soustraction par frame.
-        static constexpr float kBandeMortePassagerM = 0.01f;
-        if (!g_suspendreCorrections && passager && deriveImmobile > kBandeMortePassagerM)
-        {
-            suiviImmobile.depuisPlacementImmobileS = 0.0f;
-            PlacerSansCommande(entityId, positionVoulue, pose.yaw);
-        }
-
-        // ── ⭐ L'INSTRUMENT QUI TRANCHE : LA CIBLE EST-ELLE JUSTE, ET EST-ELLE ATTEINTE ? ────
+        // ⛔⛔ LA BRANCHE PASSAGER EST SUPPRIMEE — c'est elle qui empechait le placement.
         //
-        // Lucas, 2026-08-26 : « on passe sous le plancher PROGRESSIVEMENT », et le sens s'inverse
-        // entre montee et descente. Un retard constant donnerait un ecart FIXE ; un ecart qui
-        // GRANDIT veut dire que l'avatar suit la cabine moins vite qu'elle ne bouge.
+        // ⚠️ MESURE DU 2026-09-01, trois nombres cote a cote pendant une descente reelle :
+        //     plancher=77.653 bouge=1 dz=0.791 cible=80.391 reel=103.037 ecart=22.646
+        // La CIBLE suit parfaitement le plancher. Le REEL ne bouge pas. L'ecart croit de 4,3 a
+        // 29,1 m sans que rien ne le signale.
         //
-        // Deux causes possibles, et elles demandent des correctifs opposes :
-        //   · la CIBLE derive       -> `plancher + dz` est faux, c'est notre calcul ;
-        //   · la cible est juste mais N'EST PAS ATTEINTE -> le placement ne prend pas, et c'est le
-        //     moteur qui ramene le corps ailleurs entre deux frames.
+        // La cause tient en une chaine, et le cas particulier en est le premier maillon :
+        //     `passager` devient vrai  ->  le `!passager` de la condition generale l'EXCLUT
+        //       ->  il tombe ici  ->  `PlacerSansCommande`  ->  le corps n'est jamais place.
         //
-        // On ne peut pas les distinguer de l'exterieur : il faut les trois nombres cote a cote.
-        // `reel` est relu AVANT le placement de cette frame, donc il porte le resultat du
-        // placement PRECEDENT — c'est exactement ce qu'on veut savoir.
-        if (passager)
-        {
-            auto& suiviTrace = g_suiviAvatars[networkId];
-            suiviTrace.depuisLogS += deltaTime;
-            if (suiviTrace.depuisLogS >= 0.5f)
-            {
-                suiviTrace.depuisLogS = 0.0f;
-                float plancherTrace = 0.0f;
-                bool bougeTrace = false;
-                const bool lu = HauteurCabineA(g_porteurParAvatar[networkId].cabine, g_tempsLocalS,
-                                               plancherTrace, bougeTrace);
-                SDK->logger->InfoF(PLUGIN,
-                    "[passager %llu] plancher=%.3f (lu=%d bouge=%d) dz=%.3f cible=%.3f reel=%.3f "
-                    "ecart=%.3f",
-                    networkId, plancherTrace, lu ? 1 : 0, bougeTrace ? 1 : 0,
-                    g_porteurParAvatar[networkId].dz, positionVoulue.Z, placeActuelle.Z,
-                    placeActuelle.Z - positionVoulue.Z);
-            }
-        }
+        // ⭐ LE CAS PARTICULIER AJOUTE POUR AIDER LES PASSAGERS EST CE QUI LES EMPECHAIT D'ETRE
+        // PLACES. Le regime « cible portee », juste en dessous, est deja concu exactement pour un
+        // corps dont la cible defile : cadence 20 Hz, bande morte 1 cm, extrapolation du retard
+        // d'interpolation, calage vertical sur le joueur local quand on partage la cabine, et
+        // `SetEntityPosition` — le seul placement dont l'effet soit prouve (F-PLY-085).
+        //
+        // Un passager EST un avatar dont la cible defile. Il n'a jamais eu besoin d'un regime a
+        // lui ; il avait besoin qu'on ne l'exclue pas du bon.
 
         // ⚠️ La garde `g_suspendreCorrections` porte ici AUSSI, et elle manquait.
         //
@@ -7857,7 +7882,24 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             const float delaiBorne = delai > 0.3f ? 0.3f : (delai < 0.0f ? 0.0f : delai);
             positionVoulue.X += vx * delaiBorne;
             positionVoulue.Y += vy * delaiBorne;
-            positionVoulue.Z += vz * delaiBorne;
+            // ⚠️⚠️ LA VERTICALE NE S'EXTRAPOLE PAS QUAND L'ANCRAGE L'A FOURNIE.
+            //
+            // L'extrapolation existe pour annuler le retard d'interpolation : la pose vient du fil,
+            // donc elle date. Mais quand l'ancrage vertical a pose `Z = plancher(lu LOCALEMENT) +
+            // dz`, cette composante n'a AUCUN retard — elle sort d'une lecture locale, pas du fil.
+            // L'extrapoler la pousse au-dela de la cible.
+            //
+            // A 9 m/s et 0,15 s de delai, le depassement vaut 1,35 m : la moitie de la hauteur
+            // d'une cabine.
+            //
+            // ⚠️ Et il est MASQUE quand l'observateur partage la cabine — le calage sur le joueur
+            // local, quelques lignes plus bas, ecrase Z juste apres. Il ne se voit donc QUE depuis
+            // le palier, c'est-a-dire le cas le moins teste. C'est exactement le genre de defaut
+            // qu'on ne trouve qu'en le cherchant.
+            if (!ancrageAFourniZ)
+            {
+                positionVoulue.Z += vz * delaiBorne;
+            }
 
             // ── ⭐⭐⭐ LA CORRECTION COSMETIQUE : ON S'ALIGNE SUR LE JOUEUR LOCAL ────────────
             //
@@ -7914,7 +7956,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const float periode = ciblePortee ? kPeriodeCiblePorteeS : kPeriodePlacementImmobileS;
         const float bandeMorte = ciblePortee ? 0.01f : kBandeMorteImmobileM;
 
-        if (!g_suspendreCorrections && !passager
+        // ⭐ PLUS DE `!passager` ICI : un passager passe desormais par ce regime, comme tout
+        // avatar dont la cible defile. Voir le pave ci-dessus.
+        if (!g_suspendreCorrections
             && (deriveImmobile > bandeMorte || deriveYaw > kBandeMorteYawDeg)
             && suiviImmobile.depuisPlacementImmobileS >= periode)
         {
@@ -7938,6 +7982,42 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             {
                 // Corps reellement immobile : le placement doux suffit, et il ne coute rien.
                 PlacerSansCommande(entityId, positionVoulue, pose.yaw);
+            }
+        }
+
+        // ── ⭐ L'INSTRUMENT QUI TRANCHE : LA CIBLE EST-ELLE JUSTE, ET EST-ELLE ATTEINTE ? ────
+        //
+        // ⚠️ DEPLACE ICI LE 2026-09-01, ET CE N'EST PAS COSMETIQUE. Il vivait AVANT le calcul du
+        // regime, donc il ne pouvait pas dire lequel avait ete choisi — or c'est exactement la
+        // question qui a coute deux jours : la cible etait juste, le regime etait mauvais, et
+        // aucune trace ne le montrait. Un instrument place avant la decision qu'il doit juger ne
+        // peut pas la juger.
+        //
+        // Trois nombres, et ils separent trois causes qui se ressemblent de l'exterieur :
+        //   · `cible` derive          -> notre calcul `plancher + dz` est faux ;
+        //   · `cible` juste, `reel` fige -> le placement ne prend pas (le defaut du 2026-08-31) ;
+        //   · `regime=immobile` en plein trajet -> la detection de defilement a echoue.
+        //
+        // `reel` est relu AVANT le placement de cette frame : il porte donc le resultat du
+        // placement PRECEDENT — c'est exactement ce qu'on veut savoir.
+        if (passager)
+        {
+            auto& suiviTrace = g_suiviAvatars[networkId];
+            suiviTrace.depuisLogS += deltaTime;
+            if (suiviTrace.depuisLogS >= 0.5f)
+            {
+                suiviTrace.depuisLogS = 0.0f;
+                float plancherTrace = 0.0f;
+                bool bougeTrace = false;
+                const bool lu = HauteurCabineA(g_porteurParAvatar[networkId].cabine, g_tempsLocalS,
+                                               plancherTrace, bougeTrace);
+                SDK->logger->InfoF(PLUGIN,
+                    "[passager %llu] plancher=%.3f (lu=%d bouge=%d) dz=%.3f cible=%.3f reel=%.3f "
+                    "ecart=%.3f regime=%s ancreZ=%d defile=%.3f",
+                    networkId, plancherTrace, lu ? 1 : 0, bougeTrace ? 1 : 0,
+                    g_porteurParAvatar[networkId].dz, positionVoulue.Z, placeActuelle.Z,
+                    placeActuelle.Z - positionVoulue.Z, ciblePortee ? "portee" : "immobile",
+                    ancrageAFourniZ ? 1 : 0, defilementCible);
             }
         }
 
