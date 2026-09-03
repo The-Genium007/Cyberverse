@@ -108,6 +108,33 @@ inline bool SpawnEnrichiDemande(char* commandLine)
     return std::string(commandLine).find("--tessera-spawn-enrichi") != std::string::npos;
 }
 
+// `--tessera-charge-exhaustive` — LE CORRECTIF de F-PLY-366, en sonde d'abord.
+//
+// ⭐⭐⭐ CE QU'IL CORRIGE. L'avatar NAIT avec le visage du joueur LOCAL : l'appel natif construit la
+// tete depuis l'etat de customisation du JEU, et nos paires ne font que RECOUVRIR, slot par slot.
+// Mesure du 2026-09-02, aussi nette qu'on peut l'esperer — recolte coupee sur les six groupes ET
+// une seule paire injectee : la tete du pantin MASCULIN etait 100 % feminine, 6 composants sur 6.
+//
+// Consequence : tout slot que notre charge NE COUVRE PAS laisse transparaitre le visage du joueur
+// local. Une charge creuse produit donc un MELANGE — « il a a la fois le design de LUCAS1 et celui
+// de REDDA », rapporte par Lucas depuis le premier jour.
+//
+// ⭐ CE QUE FAIT LE DRAPEAU. On copie les slots du V local AVANT de les ecraser, puis, pour chaque
+// slot present chez lui et absent de notre charge, on ecrit explicitement une valeur NEUTRE. Le
+// visage de dessous n'a plus nulle part ou transparaitre.
+//
+// ⚠️ CE QUI RESTE NON MESURE, et c'est pourquoi c'est une SONDE : que `0` soit bien la valeur
+// « rien » pour le moteur. Si ce n'est pas le cas, la sonde le dira tout de suite — les composants
+// feminins resteront, ou d'autres disparaitront. C'est une question a un lancement.
+inline bool ChargeExhaustiveDemandee(const char* commandLine)
+{
+    if (commandLine == nullptr)
+    {
+        return false;
+    }
+    return std::string(commandLine).find("--tessera-charge-exhaustive") != std::string::npos;
+}
+
 // `--tessera-charge-minimale` — SONDE. N'injecte qu'UNE SEULE paire d'esthetique au lieu de toutes.
 //
 // ⭐ CE QU'ELLE TRANCHE. L'avatar d'un joueur porte des options qui ne sont PAS dans sa charge
@@ -182,6 +209,22 @@ inline std::vector<std::pair<std::size_t, std::uint8_t>> DrapeauxRequete(char* c
 inline bool SansRecolteDemandee(char* commandLine)
 {
     return commandLine != nullptr && std::string(commandLine).find("--tessera-sans-recolte") != std::string::npos;
+}
+
+// ⭐ `--tessera-effacer-residu` : efface les paires du V LOCAL qui survivent au-dela de `size`
+// dans le tableau de charge. Sonde d'un A/B, pas un correctif — voir TesseraSpawnEnrichi.cpp.
+// ⭐ `--tessera-aligner-sections` : ecrit chaque section (tete/corps/bras) a l offset que le
+// JOUEUR LOCAL occupe, au lieu de les concatener. Sonde du melange de designs decrit par Lucas.
+inline bool AlignerSectionsDemande(char* commandLine)
+{
+    return commandLine != nullptr
+        && std::string(commandLine).find("--tessera-aligner-sections") != std::string::npos;
+}
+
+inline bool EffacerResiduDemande(char* commandLine)
+{
+    return commandLine != nullptr
+        && std::string(commandLine).find("--tessera-effacer-residu") != std::string::npos;
 }
 
 inline bool ChargeMinimaleDemandee(char* commandLine)

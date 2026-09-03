@@ -426,6 +426,10 @@ public native class NetworkGameSystem extends IGameSystem {
     /// `NetworkGameSystem.h`, `Tessera_OuvrirContenant`.
     ///
     /// ⚠️ Rend `true` si le message est PARTI, jamais qu'il a été accepté (D1).
+    /// « Je vise cet appareil » — le netcode colle la cible aux commandes `door …` qui n'en
+    /// portent pas déjà une. `EntityID` non défini efface la visée.
+    public native func Tessera_PoserAppareilVise(device: EntityID) -> Void;
+
     public native func Tessera_OuvrirContenant(device: EntityID) -> Bool;
 
     public native func Tessera_RapporterAppareil(device: EntityID, famille: Int32, action: Int32, etat: Int32) -> Bool;

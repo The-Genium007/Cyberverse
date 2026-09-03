@@ -378,6 +378,10 @@ struct SuiviAvatar
     /// une cible qui defile = un corps porte, ou tire par autre chose que ses jambes.
     RED4ext::Vector4 cibleImmobilePrecedente{};
     bool cibleImmobileConnue = false;
+    /// Instant du dernier defilement AVERE de la cible — le verrou anti-scintillement du
+    /// regime. Voir le pave a l'endroit de `ciblePortee` : sans lui, deux images sur trois
+    /// tombent a `defile=0` et le regime bascule soixante fois par seconde.
+    double dernierDefilementS = 0.0;
 
     /// ⭐ VITESSE VERTICALE LISSEE de la cible, en m/s — et le lissage n'est pas du confort.
     ///
@@ -513,6 +517,22 @@ struct NetworkAppearance
 {
     uint64_t baseRecord = 0;
     uint64_t appearance = 0;
+    // ⭐⭐ LA VERSION ET L'EMPREINTE DE L'ETAT VISUEL, telles que le SERVEUR les annonce. Le client
+    // les renvoie inchangees dans `AvatarProjectionReport` — c'est cet aller-retour qui ferme la
+    // boucle. Sans lui, toute verification d'apparence est le serveur qui se parle a lui-meme, ce
+    // qui est la lecon la plus chere du depot (les tests Rust encodaient ET decodaient en Rust,
+    // verts des deux cotes pendant que le fil etait casse).
+    //
+    // ⚠️ Elles ne font PAS double emploi :
+    //   version   : « ta copie est PERIMEE »        · aveugle a une matiere abimee en route
+    //   empreinte : « ce que tu as recu est ABIME » · aveugle a une copie ancienne
+    // Un blob tronque garde sa version, et F-PLY-172 a mesure qu'un blob tronque ne rend pas un
+    // corps casse mais UN AUTRE VISAGE, plausible. Seule l'empreinte le voit.
+    //
+    // ⚠️ `0/0` = un serveur anterieur a ces champs. On ne rapporte alors rien — un rapport
+    // fabrique a partir de rien vaudrait moins que pas de rapport du tout.
+    uint32_t version = 0;
+    uint64_t empreinte = 0;
     // Arme actuellement EN MAIN (hash TweakDBID), 0 = mains vides. Transportee par `garments` dans
     // `AppearanceSync`. ⚠️ `0` est un ETAT, pas une absence d'information : le serveur le pousse
     // quand le joueur range son arme, et le confondre avec « pas d'info » laisserait l'arme dans
@@ -865,6 +885,18 @@ private:
     /// ⚠️ Cote redscript, RIEN ne change : `Tessera_CoffreVehicule()` porte ici l'`EntityID` de la
     /// caisse, et la veille ne s'en sert que comme temoin de session ouverte.
     bool m_coffreEstContenant = false;
+
+    /// L'appareil que le joueur VISE en ce moment, ou 0.
+    ///
+    /// ⭐ POURQUOI ICI ET PAS DANS LA CONSOLE. Lucas (2026-09-01) : « un interrupteur sous forme de
+    /// commande unitaire, EN LA VISANT ». Les commandes d'appareil visent aujourd'hui « le plus
+    /// proche » — ce qui ne permet pas de choisir, parce que la carte enregistre chaque appareil a
+    /// la position de son DECOUVREUR : plusieurs decouverts du meme endroit y sont au meme point.
+    ///
+    /// En le posant au niveau du netcode plutot que dans le chemin de la console, TOUTE voie qui
+    /// envoie une commande d'administration en beneficie — la console, le pont du harnais, un
+    /// futur menu — sans qu'aucune n'ait a le savoir.
+    uint64_t m_appareilVise = 0;
     /// L'ordre d'invocation courant — voir `HandleInteractionOpen` et F-VEH-054.
     uint64_t m_invocationVehicule = 0;
     std::string m_invocationRecord;
@@ -1097,6 +1129,9 @@ protected:
     bool SpawnNetworkEntity(uint64_t networkId, const RED4ext::Vector4& worldPosition);
     // Applique une apparence serveur sur une entité déjà spawnée (changement en cours de session).
     void ApplyAppearance(uint64_t networkId, RED4ext::ent::EntityID entityId);
+    /// Rapporte au serveur ce que ce client a REELLEMENT bati pour cet avatar. Mesure, jamais
+    /// autorite (ADR 0036) : un desaccord declenche une reparation, pas une adoption.
+    void RapporterProjectionAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId);
 
 public:
     bool FullyConnected = false;
@@ -1453,6 +1488,16 @@ public:
     //
     // Renvoie true si un message est parti — jamais qu'il a ete accepte (D1).
     bool Tessera_RapporterArme(uint64_t item, bool degainee);
+
+    /// Rapporte au serveur qu'un VETEMENT vient d'etre mis ou retire. C'est le declencheur du
+    /// hot-swap de tenue : le serveur ecrit `contenus.porte`, re-annonce l'apparence, et l'avatar
+    /// se rhabille chez les voisins sans renaitre.
+    ///
+    /// ⚠️ VETEMENTS SEULEMENT. L'arme en main a son propre canal (`Tessera_RapporterArme` /
+    /// `EquipmentReport`), et son auteur a ecrit noir sur blanc pourquoi il ne faut pas melanger les
+    /// deux : « un jour l'un annulerait l'autre ». Cycles de vie, consommateurs et frequences
+    /// differents.
+    void RapporterVetement(uint64_t item, uint64_t slot, bool porte);
 
     // L'arme que le SERVEUR annonce pour une entite reseau donnee. Renvoie un `TweakDBID` INVALIDE
     // (hash 0) si l'entite est inconnue ou si le joueur a les mains vides.
@@ -2541,13 +2586,36 @@ public:
     /// soit. Ce natif ne fait qu'ouvrir le tuyau — il ne donne aucun droit.
     ///
     /// Rend true si le message est PARTI. Jamais qu'il a ete accepte (doctrine D1).
+    /// « Je vise CET appareil » — appele par la veille de visee (`ContenantsMonde.reds`).
+    /// `0` efface la cible.
+    void Tessera_PoserAppareilVise(RED4ext::ent::EntityID device)
+    {
+        m_appareilVise = device.IsDefined() ? device.hash : 0ull;
+    }
+
     bool Tessera_EnvoyerCommandeAdmin(const Red::CString& texte)
     {
         if (texte.Length() == 0)
         {
             return false;
         }
-        SendAdminCommand(texte.c_str());
+        std::string t(texte.c_str());
+        // ⭐ LA CIBLE VISEE S'AJOUTE TOUTE SEULE, et seulement quand elle a un sens.
+        //
+        // Trois gardes, et chacune evite un defaut precis :
+        //   · `door ` en tete — une commande d'un autre domaine n'a rien a faire d'un appareil ;
+        //   · pas de `@` deja present — un operateur qui a tape la cible a la main garde la sienne ;
+        //   · une cible NON NULLE — sinon on collerait « @0 », que le serveur rejetterait en
+        //     disant « appareil inconnu » alors que le vrai probleme est qu'on ne visait rien.
+        //
+        // Le serveur la detache (`admin_commands::detacher_cible`) et retombe sur « le plus
+        // proche » quand elle est absente : la commande reste tapable a la main.
+        if (m_appareilVise != 0 && t.rfind("door ", 0) == 0
+            && t.find(" @") == std::string::npos)
+        {
+            t += " @" + std::to_string(m_appareilVise);
+        }
+        SendAdminCommand(t.c_str());
         return true;
     }
 
@@ -2877,6 +2945,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AppareilProprietaire);
     RTTI_METHOD(Tessera_AppareilTenants);
     RTTI_METHOD(Tessera_AppareilRetirer);
+    RTTI_METHOD(Tessera_PoserAppareilVise);
     RTTI_METHOD(Tessera_OuvrirContenant);
     RTTI_METHOD(Tessera_RapporterAppareil);
     RTTI_METHOD(Tessera_EnvoyerCommandeAdmin);

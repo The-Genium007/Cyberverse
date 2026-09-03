@@ -121,12 +121,22 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     let masculin = reseau.Tessera_AvatarCorpsMasculin(cible);
 
     // Les clés à allumer, calculées une fois.
+    //
+    // ⭐ CETTE LISTE EST LA SEULE VÉRITÉ. Elle vient du SERVEUR, et l'avatar distant n'affichera
+    // rien d'autre : ce qui n'y est pas est éteint plus bas, quelle qu'en soit l'origine. Un joueur
+    // qui se moderait des vêtements les verrait chez lui et **chez personne d'autre** — c'est la
+    // règle posée par Lucas le 2026-09-03, et c'est ce qui empêche un client de décider seul de ce
+    // que les autres voient.
     let cles: array<String>;
+    // Parallèle à `cles` : cette clé a-t-elle trouvé au moins un composant ? Une clé orpheline
+    // désigne un vêtement que le serveur connaît mais que notre entité ne sait pas montrer.
+    let trouvees: array<Bool>;
     let i = 0;
     while i < combien {
         let cle = TesseraCleVetement(reseau.Tessera_VetementDeLEntite(cible, i), masculin);
         if NotEquals(cle, "") {
             ArrayPush(cles, cle);
+            ArrayPush(trouvees, false);
         }
         i += 1;
     }
@@ -147,6 +157,7 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
         while k < ArraySize(cles) {
             if StrBeginsWith(nom, cles[k]) {
                 voulu = true;
+                trouvees[k] = true;
             }
             k += 1;
         }
@@ -240,6 +251,32 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
 
     TesseraJournalHabillage(
         s"avatar \(EntityID.ToDebugString(cible)) : \(ArraySize(cles)) vetement(s) demande(s), \(allumes) allume(s), \(retires) retire(s) [corps \(masculin ? "M" : "F")]");
+
+    // ── ⚠️ LE PLAFOND DEVIENT MESURÉ, AU LIEU DE RESTER INDISCERNABLE D'UNE PANNE ──────────────
+    //
+    // Notre entité d'avatar ne porte que DOUZE racines de vêtement, cuites une fois pour toutes
+    // (`avatar_distant_ma.ent` / `_wa.ent`). Un vêtement que le serveur connaît mais qui n'y est pas
+    // ne s'affichera JAMAIS — et jusqu'ici, en silence.
+    //
+    // ⭐ C'est acceptable par décision : « on accepte de ne rien afficher s'il y a un élément non
+    // compatible » (Lucas, 2026-09-03). Ce qui ne l'est pas, c'est de ne pas le SAVOIR. Sans cette
+    // ligne, « le manteau n'apparaît pas » a deux causes indiscernables — le fil est cassé, ou le
+    // vêtement n'est pas cuit — et on repart chercher la panne du côté du réseau.
+    //
+    // ⚠️ On journalise la CLÉ, pas l'item : c'est elle qui manque à l'entité, et c'est elle qu'il
+    // faudra cuire. Le nom de l'item ne dit pas quel mesh il faudrait ajouter.
+    let orphelines = "";
+    let o = 0;
+    while o < ArraySize(cles) {
+        if !trouvees[o] {
+            orphelines += (Equals(orphelines, "") ? "" : ", ") + cles[o];
+        }
+        o += 1;
+    }
+    if NotEquals(orphelines, "") {
+        TesseraJournalHabillage(
+            s"  ⚠ NON CUIT dans l'entite — invisible pour les autres : \(orphelines)");
+    }
 
     // ⚠️ On rend `true` dès qu'on a fait le tour : rallumer ce qui est déjà allumé ne sert à rien,
     // et laisser la boucle tourner ferait relire tous les composants de tous les avatars à chaque

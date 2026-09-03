@@ -190,6 +190,17 @@ void PlayerActionTracker::OnItemEquipped(const RED4ext::TweakDBID slot, const RE
     player_equip.isWeapon = isWeapon;
     player_equip.isUnequipping = false;
     Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(0, player_equip);
+
+    // ⭐⭐⭐ ET LE HOT-SWAP DE TENUE. `PlayerEquipItem` ci-dessus est un message Cyberverse HERITE
+    // que notre serveur FlatBuffers ne connait pas : il tombe dans le vide depuis toujours. Pour un
+    // VETEMENT, on emet en plus le message que le serveur sait lire.
+    //
+    // ⚠️ `!isWeapon` SEULEMENT. L'arme en main a son propre canal, et melanger les deux ferait
+    // qu'un jour l'un annulerait l'autre — c'est ecrit dans le schema, par l'auteur de l'autre.
+    if (!isWeapon)
+    {
+        Red::GetGameSystem<NetworkGameSystem>()->RapporterVetement(item.tdbid.value, slot.value, true);
+    }
 }
 
 void PlayerActionTracker::OnItemUnequipped(const RED4ext::TweakDBID slot, const RED4ext::ItemID item, const bool isWeapon)
@@ -201,4 +212,11 @@ void PlayerActionTracker::OnItemUnequipped(const RED4ext::TweakDBID slot, const 
     player_equip.isWeapon = isWeapon;
     player_equip.isUnequipping = true;
     Red::GetGameSystem<NetworkGameSystem>()->EnqueueMessage(0, player_equip);
+
+    // Le pendant du retrait — c'est lui qui REND le sous-vetement masque, et sans lui la tenue ne
+    // ferait que s'empiler.
+    if (!isWeapon)
+    {
+        Red::GetGameSystem<NetworkGameSystem>()->RapporterVetement(item.tdbid.value, slot.value, false);
+    }
 }

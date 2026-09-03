@@ -5970,6 +5970,123 @@ void NetworkGameSystem::SendAttackReport(uint64_t target, uint32_t degats)
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
 }
 
+void NetworkGameSystem::RapporterProjectionAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId)
+{
+    // ⭐⭐ CE QUE LE CLIENT A REELLEMENT BATI — le message qui ferme la boucle.
+    //
+    // Sans lui, toute verification d'apparence est le serveur qui se parle a lui-meme. C'est la
+    // lecon la plus chere du depot, ecrite dans `CLAUDE.md` : « les tests Rust encodaient ET
+    // decodaient en Rust — verts des deux cotes pendant que le fil etait casse ».
+    //
+    // ⚠️ CE N'EST PAS UNE AUTORITE, C'EST UNE MESURE. Le serveur ne croit pas le client sur son
+    // apparence (ADR 0036) : il compare, et un desaccord declenche une REPARATION, jamais une
+    // adoption.
+    const auto it = m_appearances.find(networkId);
+    if (it == m_appearances.end())
+    {
+        return;
+    }
+    // ⚠️ Un serveur anterieur a ces champs annonce 0/0. Rapporter quand meme fabriquerait une
+    // concordance a partir de rien — pire que pas de rapport du tout, parce que ca se lirait
+    // comme « tout va bien ».
+    if (it->second.version == 0)
+    {
+        return;
+    }
+
+    // ⛔⛔ ON NE RAPPORTE QUE NOS AVATARS DE JOUEUR, et ce filtre a ete pose APRES coup, parce que
+    // l'instrument a trouve un defaut dans lui-meme (2026-09-02).
+    //
+    // Le rapport porte l'invariant « `apparence == 0` est l'etat SAIN » (F-PLY-016). Il ne vaut que
+    // pour un corps ENRICHI, assemble composant par composant. Un PNJ statique ou un vehicule, eux,
+    // utilisent LEGITIMEMENT le systeme d'apparence : leur `apparence` est non nulle, et c'est
+    // correct.
+    //
+    // Sans ce filtre, le serveur voyait `SecondConstructeur` sur chaque PNJ de la rue — des dizaines
+    // de faux positifs par minute, qui auraient noye les VRAIES divergences. Une alarme qui crie
+    // tout le temps ne se lit plus.
+    //
+    // ⭐ Le critere est le meme que celui de la voie enrichie elle-meme : une esthetique presente.
+    // Pas de blob `TSV1` = ce n'est pas un avatar de joueur = l'invariant ne s'applique pas.
+    if (it->second.esthetique.empty())
+    {
+        return;
+    }
+
+    const auto entite = Cyberverse::Utils::GetDynamicEntity(entityId);
+    if (!entite.has_value())
+    {
+        return;
+    }
+
+    // ── L'APPARENCE COURANTE, et `0` est l'etat SAIN ──────────────────────────────────────────
+    //
+    // ⭐ F-PLY-016 : le rendu joueur complet est assemble COMPOSANT PAR COMPOSANT, hors systeme
+    // d'apparence — le pantin photomode vivant lit `apparence = None`. Toute valeur non nulle sur
+    // un corps enrichi NOMME donc un second constructeur, entre en concurrence avec l'assemblage.
+    //
+    // ⚠️ C'est la mesure qu'on n'a jamais pu prendre, et sans elle quatre lancements a donnees
+    // identiques ont rendu quatre resultats differents (F-PLY-357).
+    RED4ext::CName apparence(static_cast<uint64_t>(0));
+    Red::CallVirtual(entite.value(), "GetCurrentAppearanceName", apparence);
+
+    flatbuffers::FlatBufferBuilder b;
+    const auto r = cyberpunk_rp::protocol::CreateAvatarProjectionReport(
+        b, networkId, it->second.version, it->second.empreinte,
+        // ⚠️ `composants` reste a 0 tant que l'enumeration cote C++ n'est pas ecrite : un compte
+        // FAUX serait pire qu'un compte absent — il se lirait comme une mesure. La sonde Lua
+        // `avatar_corps` le donne deja, et c'est elle qui fait foi en attendant.
+        0u,
+        apparence.hash,
+        static_cast<uint32_t>(it->second.esthetique.size() / 16));
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        b, cyberpunk_rp::protocol::ClientMsg_AvatarProjectionReport, r.Union());
+    b.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, b.GetBufferPointer(), b.GetSize(),
+        k_nSteamNetworkingSend_Reliable, nullptr);
+
+    SDK->logger->InfoF(PLUGIN,
+        "[projection %llu] rapportee : version=%u empreinte=%016llx apparence=%llu%s",
+        networkId, it->second.version, it->second.empreinte, apparence.hash,
+        apparence.hash == 0 ? " (SAIN)" : " ⛔ SECOND CONSTRUCTEUR");
+}
+
+void NetworkGameSystem::RapporterVetement(uint64_t item, uint64_t slot, bool porte)
+{
+    // ⭐⭐⭐ LE DECLENCHEUR DU HOT-SWAP DE TENUE, et il manquait depuis toujours.
+    //
+    // Le hot-swap etait bati aux DEUX BOUTS et n'avait pas de milieu (F-PLY-370) :
+    //   · le client sait deja se rhabiller — une signature sur les vetements portes relance les
+    //     passes d'habillage (`NetworkGameSystem.cpp`, suivi de posture) ;
+    //   · le stockage sait deja ecrire — `marquer_porte_async`, teste, SANS APPELANT ;
+    //   · rien ne CHANGEAIT la tenue en session. `portes` etait lu une seule fois, a
+    //     `SelectCharacter`, et jamais relu.
+    //
+    // ⭐ Et le hook, lui, existait DEJA : `PlayerActionTracker::OnItemEquipped` /
+    // `OnItemUnequipped` tirent sur CHAQUE changement d'equipement, avec un drapeau `isWeapon`.
+    // Ils empilaient un message Cyberverse herite (`PlayerEquipItem`) que notre serveur FlatBuffers
+    // ne connait pas — il tombait dans le vide. Cette fonction le remplace pour les vetements.
+    //
+    // ⚠️ CE N'EST PAS UNE AUTORITE. Le client dit ce qu'il a fait ; le SERVEUR decide s'il le garde
+    // (l'item doit etre dans son contenant) et c'est lui qui rediffuse. Un client qui pretend porter
+    // ce qu'il n'a pas se fait refuser par `marquer_porte_async`, qui rend `false` sur un item
+    // absent — et le serveur le journalise au lieu de le croire.
+    if (m_pInterface == nullptr || m_hConnection == k_HSteamNetConnection_Invalid)
+    {
+        return;
+    }
+    SDK->logger->InfoF(PLUGIN, "Vetement rapporte : item=%llu slot=%llu porte=%s", item, slot,
+        porte ? "oui" : "non");
+
+    flatbuffers::FlatBufferBuilder b;
+    const auto gr = cyberpunk_rp::protocol::CreateGarmentReport(b, item, slot, porte);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        b, cyberpunk_rp::protocol::ClientMsg_GarmentReport, gr.Union());
+    b.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, b.GetBufferPointer(), b.GetSize(),
+        k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
 bool NetworkGameSystem::Tessera_RapporterArme(uint64_t item, bool degainee)
 {
     if (m_pInterface == nullptr)
@@ -6051,6 +6168,8 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
     const uint64_t id = sync->id();
     NetworkAppearance appearance;
     appearance.baseRecord = sync->spec()->base_record();
+    appearance.version = sync->spec()->version();
+    appearance.empreinte = sync->spec()->empreinte();
     appearance.appearance = sync->spec()->appearance();
     // ⭐ Le sexe du corps, qui choisit la TENUE de l'avatar (voir `NetworkAppearance`). Defaut
     // `true` cote schema : un serveur qui ne l'emet pas se comporte comme avant ce champ.
@@ -6107,10 +6226,16 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
     // ⚠️ LA TAILLE EST JOURNALISEE, et c'est le seul instrument qui prouve que le blob TRAVERSE.
     // Les tests du serveur encodaient et decodaient en Rust — verts des deux cotes, muets sur le
     // fil. Cette ligne est ce qui distingue « le serveur a relaye » de « le client a recu ».
+    // ⚠️ `version`/`empreinte` SONT JOURNALISEES ICI, et ce n'est pas du confort : sans elles,
+    // « le serveur envoie 0 » et « le client lit 0 » rendent le meme silence — un rapport de
+    // projection absent, sans un mot. Les deux causes sont opposees et se traitent a des endroits
+    // differents ; les departager coute cette ligne.
     SDK->logger->InfoF(PLUGIN,
-        "AppearanceSync %llu : record=%llu apparence=%llu arme=%llu esthetique=%zu o vetements=%zu",
+        "AppearanceSync %llu : record=%llu apparence=%llu arme=%llu esthetique=%zu o vetements=%zu "
+        "version=%u empreinte=%016llx",
         id, appearance.baseRecord, appearance.appearance, appearance.arme,
-        appearance.esthetique.size(), appearance.vetements.size());
+        appearance.esthetique.size(), appearance.vetements.size(),
+        appearance.version, appearance.empreinte);
 
     // L'apparence arrive AVANT le premier Snapshot qui porte l'entite (le serveur la pousse a
     // l'entree en AoI) — dans ce cas il n'y a rien a appliquer, le spawn s'en servira. Mais elle
@@ -6119,6 +6244,10 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
     if (existing != m_networkedEntitiesLookup.end())
     {
         ApplyAppearance(id, existing->second);
+        // ⭐⭐ ET ON RAPPORTE — ici l'entite EXISTE (elle est dans la table), donc elle se resout.
+        // Chaque `AppearanceSync` sur un avatar deja ne produit une mesure : c'est ce qui permet
+        // de voir la DERIVE, pas seulement l'etat de naissance.
+        RapporterProjectionAvatar(id, existing->second);
     }
 }
 
@@ -6456,6 +6585,17 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
             {
                 m_appliedAppearance[networkId] = it->second.appearance;
             }
+
+            // ⚠️ LE RAPPORT DE PROJECTION N'EST PAS EMIS ICI, et c'est une correction mesuree le
+            // 2026-09-01 : a cet instant precis `GetDynamicEntity` ne rend RIEN. Le corps vient
+            // d'etre demande, il n'est pas encore resolvable — F-PLY-273 chiffre le delai a
+            // ~200 ms, et le bloc de diagnostic juste au-dessus pose deja la question « l'entite
+            // se RESOUT-elle ? » parce que la reponse est parfois non.
+            //
+            // Le rapport part donc du prochain `AppearanceSync` pour cette entite (voir
+            // `HandleAppearanceSync`). C'est mieux, et pas seulement plus sur : ca donne une
+            // mesure REPETEE au lieu d'un instantane de naissance — or ce qu'on cherche est
+            // justement la DERIVE (F-PLY-359 : un simple degainage rejoue `ApplyAppearance`).
             return true;
         }
         // ── L'APPEL EST PARTI, LE CORPS N'EST PAS ENCORE NE : ON PATIENTE ────────────────────
@@ -7847,7 +7987,33 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // 1 cm entre deux frames : en dessous, c'est du bruit de pose ; au-dessus, la cible defile
         // vraiment. Une cabine a 4 m/s parcourt ~7 cm par frame a 60 fps — tres au-dessus du seuil.
         static constexpr float kDefilementCibleM = 0.01f;
-        const bool ciblePortee = defilementCible > kDefilementCibleM;
+
+        // ── ⚠️⚠️ VERROU : LE REGIME NE DOIT PAS SCINTILLER (mesure du 2026-09-01) ────────────
+        //
+        // `defilementCible` est un delta PAR IMAGE. Or les poses arrivent a ~20 Hz et on rend a
+        // 60 : deux images sur trois n'apportent AUCUNE pose neuve, donc `defilementCible` vaut
+        // zero, donc le regime bascule en « immobile » — puis revient a l'image suivante.
+        //
+        // Releve pendant une descente reelle, une ligne sur deux :
+        //     cible=30.901 reel=28.344 regime=portee   defile=1.733
+        //     cible=28.997 reel=27.432 regime=immobile defile=0.000
+        //     cible=29.839 reel=27.145 regime=portee   defile=1.809
+        //
+        // ⚠️ ET QUATRE COMPORTEMENTS BASCULENT AVEC LUI : la cadence (0,05 s contre 2 s), la bande
+        // morte (1 cm contre 5 cm), la fonction de placement, et l'extrapolation (appliquee ou
+        // non). Les deux cibles different alors de tout le terme d'extrapolation, et le corps est
+        // place alternativement sur l'une et sur l'autre. C'est l'ALTERNATION, une fois de plus —
+        // meme maladie que le scintillement de `bouge`, un cran plus haut.
+        //
+        // Le remede est le meme : une cible qui a defile RECEMMENT reste « portee ». 0,5 s couvre
+        // largement un trou de paquets a 20 Hz sans survivre a un vrai arret.
+        static constexpr double kMemoireCiblePorteeS = 0.5;
+        if (defilementCible > kDefilementCibleM)
+        {
+            suiviImmobile.dernierDefilementS = g_tempsLocalS;
+        }
+        const bool ciblePortee = (g_tempsLocalS - suiviImmobile.dernierDefilementS)
+                                 < kMemoireCiblePorteeS;
 
         // ── ⭐⭐ EXTRAPOLATION : ON ANNULE LE RETARD AU LIEU DE LE SUBIR ─────────────────────
         //
@@ -7996,8 +8162,27 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             }
             else
             {
-                // Corps reellement immobile : le placement doux suffit, et il ne coute rien.
-                PlacerSansCommande(entityId, positionVoulue, pose.yaw);
+                // ⛔⛔ `PlacerSansCommande` NE PLACE PAS — remesure le 2026-09-01, et cette fois
+                // des DEUX cotes.
+                //
+                // J'avais « corrige » F-ASC-076 en disant que la fonction etait redevenue valide
+                // (le cast manquant de F-PLY-070 est bien present aujourd'hui). C'etait faux, et
+                // voici la mesure qui le montre :
+                //   · les deux abandons silencieux de la fonction sont desormais journalises,
+                //     et le journal en compte ZERO — donc l'entite est resolue, le cast passe,
+                //     et `Teleport` est bel et bien appele ;
+                //   · et le corps ne bouge pas : `cible=27.271 reel=28.282 ecart=1.012`, FIGE sur
+                //     douze releves consecutifs, regime immobile, bande morte largement franchie.
+                //
+                // L'appel se fait, l'effet n'existe pas. C'est exactement « accepte n'est pas
+                // execute », et le cast n'etait qu'UNE des raisons.
+                //
+                // ⭐ On prend donc `SetEntityPosition` ici aussi. L'objection qui l'interdisait
+                // — il empile un `AITeleportCommand` qui annule la commande de marche — ne vaut
+                // que pour un corps QUI MARCHE, appele a chaque image. Ici le regime est
+                // « immobile » par definition, et la cadence est bornee a une fois toutes les
+                // deux secondes.
+                SetEntityPosition(entityId, positionVoulue, pose.yaw);
             }
         }
 

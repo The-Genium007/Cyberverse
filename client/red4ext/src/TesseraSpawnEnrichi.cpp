@@ -587,6 +587,34 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     EsthetiqueV::Recolter(etat, base, charge, parSection);
     const std::uint32_t recolte = charge.size;
 
+    // ── ⭐⭐⭐ LES SLOTS DU V LOCAL, COPIES AVANT D'ETRE ECRASES ────────────────────────────────
+    //
+    // C'est la matiere du correctif de F-PLY-366. L'appel natif construit la tete depuis l'etat de
+    // customisation du JEU — celui du joueur local — et nos paires ne font que RECOUVRIR, slot par
+    // slot. Tout slot qu'on ne couvre pas laisse donc transparaitre le visage de dessous.
+    //
+    // Mesure : recolte coupee sur les six groupes ET une seule paire injectee -> la tete du pantin
+    // MASCULIN etait 100 % feminine, 6 composants sur 6. Ce n'est pas un residu de tableau, c'est
+    // le visage de depart.
+    //
+    // ⚠️ ON COPIE MAINTENANT, et pas plus tard : l'injection ecrase les `nInj` premieres entrees,
+    // donc lire les slots locaux apres coup ne rendrait que les notres.
+    std::vector<std::uint64_t> slotsLocaux;
+    const bool exhaustive = ChargeExhaustiveDemandee(GetCommandLineA());
+    if (exhaustive && recolte > 0)
+    {
+        const auto src = reinterpret_cast<std::uintptr_t>(charge.entries);
+        if (EsthetiqueV::Lisible(src, static_cast<std::size_t>(recolte) * kTaillePaire))
+        {
+            slotsLocaux.reserve(recolte);
+            for (std::uint32_t i = 0; i < recolte; ++i)
+            {
+                slotsLocaux.push_back(
+                    *reinterpret_cast<std::uint64_t*>(src + static_cast<std::size_t>(i) * kTaillePaire));
+            }
+        }
+    }
+
     // ⭐ LA PARADE AU « MUR DE LA CAPACITE » (F-PLY-267).
     //
     // Sans elle, on ne pourrait injecter que ce qui tient dans la capacite recoltee sur le joueur
@@ -602,10 +630,16 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     //     ecrire dans un tampon libere.
     //   · Le 5e parametre est un rappel de deplacement/destruction ; les producteurs passent 0 pour
     //     ces paires POD, on passe 0 aussi.
-    if (nInj > charge.capacity)
+    // ⚠️ La reserve doit tenir compte des paires de NEUTRALISATION qu'on ajoutera peut-etre : au
+    // pire une par slot local. Reserver apres coup obligerait a une seconde reallocation, et
+    // `Reserve` REALLOUE (le pointeur change) — deux fois, c'est deux occasions de se tromper.
+    const std::uint32_t besoin = exhaustive
+        ? nInj + static_cast<std::uint32_t>(slotsLocaux.size())
+        : nInj;
+    if (besoin > charge.capacity)
     {
         const auto reserver = reinterpret_cast<Reserve_t>(base + kRvaReserve);
-        reserver(&charge, nInj, kTaillePaire, kAlignementPaire, nullptr);
+        reserver(&charge, besoin, kTaillePaire, kAlignementPaire, nullptr);
         if (charge.capacity < nInj)
         {
             char b[220];
@@ -634,6 +668,133 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     }
     charge.size = nInj;
 
+    std::string diagResidu;
+
+    // ── ⭐⭐⭐ LA NEUTRALISATION — le correctif de F-PLY-366 ──────────────────────────────────────
+    //
+    // Pour chaque slot que le V LOCAL occupe et que NOTRE charge ne couvre pas, on ecrit
+    // explicitement une valeur neutre. Sans ca, le visage de dessous transparait exactement la —
+    // c'est la coiffure et le maquillage de l'autre joueur sur le pantin, mesures le 2026-09-02.
+    //
+    // ⚠️ `0` COMME VALEUR NEUTRE EST L'HYPOTHESE DE CETTE SONDE, pas un fait. Si le moteur ne lit
+    // pas `0` comme « rien », le relevé le dira au premier lancement : soit les composants
+    // etrangers restent, soit d'autres disparaissent. Une question a un lancement.
+    if (exhaustive && !slotsLocaux.empty())
+    {
+        std::uint32_t neutralisees = 0;
+        for (const std::uint64_t slot : slotsLocaux)
+        {
+            // Deja couvert par nous ? Alors il n'y a rien a neutraliser — notre valeur gagne.
+            bool couvert = false;
+            for (std::uint32_t i = 0; i < nInj && !couvert; ++i)
+            {
+                couvert = (paires[i * 2] == slot);
+            }
+            if (couvert)
+            {
+                continue;
+            }
+            // ⚠️ La capacite a ete reservee pour ce cas (`besoin`), mais on REVERIFIE : une reserve
+            // qui a echoue silencieusement ferait ecrire hors du tampon, et ce genre d'erreur ne se
+            // manifeste pas ici — elle se manifeste ailleurs, plus tard, en crash inexplicable.
+            if (charge.size >= charge.capacity)
+            {
+                break;
+            }
+            const auto d = ou + static_cast<std::size_t>(charge.size) * kTaillePaire;
+            if (!EsthetiqueV::Lisible(d, kTaillePaire))
+            {
+                break;
+            }
+            *reinterpret_cast<std::uint64_t*>(d) = slot;
+            *reinterpret_cast<std::uint64_t*>(d + 8) = 0ull;
+            ++charge.size;
+            ++neutralisees;
+        }
+        diagResidu += " [exhaustive : " + std::to_string(neutralisees) + " slot(s) neutralise(s) sur "
+                    + std::to_string(slotsLocaux.size()) + " locaux, total " + std::to_string(charge.size) + "]";
+    }
+
+    // ── SONDE `--tessera-aligner-sections` ──────────────────────────────────────────────────
+    //
+    // ⭐ On vient d'ecrire nos `nInj` paires A LA FILE. Or le consommateur redecoupe
+    // vraisemblablement aux bornes du joueur LOCAL (`parSection`), pas aux notres — d'ou un
+    // melange de designs entre les deux personnages, decrit par Lucas le 2026-08-29 et predit
+    // par le commentaire du diagnostic depuis le 2026-08-24.
+    //
+    // Cette sonde REECRIT le tableau en placant chaque section a l'offset LOCAL, et laisse a
+    // zero ce qui depasse. Le total occupe devient celui du joueur local, pas le notre.
+    if (AlignerSectionsDemande(GetCommandLineA()))
+    {
+        const std::uint32_t local = parSection[0] + parSection[1] + parSection[2];
+        if (local <= charge.capacity && local > 0)
+        {
+            // On repart d'un tableau propre : les positions non ecrites doivent etre NULLES,
+            // sinon on melange l'ancien desalignement au nouveau.
+            const auto total = static_cast<std::size_t>(charge.capacity) * kTaillePaire;
+            if (EsthetiqueV::Lisible(ou, total))
+            {
+                std::memset(reinterpret_cast<void*>(ou), 0, total);
+                const std::uint32_t nOtre[3] = {nHead, nBody, nArms};
+                std::uint32_t srcBase = 0, dstBase = 0;
+                for (int s = 0; s < 3; ++s)
+                {
+                    const std::uint32_t n = nOtre[s] < parSection[s] ? nOtre[s] : parSection[s];
+                    for (std::uint32_t k = 0; k < n; ++k)
+                    {
+                        const auto d = ou + static_cast<std::size_t>(dstBase + k) * kTaillePaire;
+                        *reinterpret_cast<std::uint64_t*>(d) = paires[(srcBase + k) * 2];
+                        *reinterpret_cast<std::uint64_t*>(d + 8) = paires[(srcBase + k) * 2 + 1];
+                    }
+                    srcBase += nOtre[s];
+                    dstBase += parSection[s];
+                }
+                charge.size = local;
+                diagResidu += " [sections alignees " + std::to_string(nHead) + "+"
+                            + std::to_string(nBody) + "+" + std::to_string(nArms) + " -> "
+                            + std::to_string(parSection[0]) + "+" + std::to_string(parSection[1])
+                            + "+" + std::to_string(parSection[2]) + "]";
+            }
+            else
+            {
+                diagResidu += " [alignement REFUSE — tableau illisible]";
+            }
+        }
+        else
+        {
+            diagResidu += " [alignement REFUSE — capacite " + std::to_string(charge.capacity)
+                        + " < local " + std::to_string(local) + "]";
+        }
+    }
+
+    // ── SONDE `--tessera-effacer-residu` ────────────────────────────────────────────────────
+    //
+    // ⚠️ CE QUE `size` NE GARANTIT PAS. La recolte a rempli le tableau avec l'esthetique du V
+    // LOCAL ; on n'ecrase que les `nInj` premieres entrees. Au-dela, les paires du joueur local
+    // SURVIVENT — mesure reelle : « 18 paire(s), recolte 23 » en laisse cinq derriere `size`.
+    //
+    // Poser `size` suppose que le moteur ne lit rien au-dela. F-PLY-348 a mesure qu'il reste
+    // TROIS doublons meme avec `--tessera-sans-recolte` actif : quelque chose relit ce qu'on
+    // croyait invisible. Cette sonde teste la lecture la plus simple — le residu lui-meme.
+    //
+    // ⭐ SONDE ET NON CORRECTIF, pour que l'A/B tienne dans une seule session : sans le drapeau
+    // le comportement est inchange, avec lui le residu est efface. Un correctif pose d'office
+    // rendrait la comparaison impossible.
+    if (EffacerResiduDemande(GetCommandLineA()) && charge.capacity > nInj)
+    {
+        const auto residu = static_cast<std::size_t>(charge.capacity - nInj) * kTaillePaire;
+        const auto debut = ou + static_cast<std::size_t>(nInj) * kTaillePaire;
+        if (EsthetiqueV::Lisible(debut, residu))
+        {
+            std::memset(reinterpret_cast<void*>(debut), 0, residu);
+            diagResidu = " [residu efface " + std::to_string(charge.capacity - nInj) + " paire(s)]";
+        }
+        else
+        {
+            diagResidu = " [residu NON efface — plage illisible]";
+        }
+    }
+
     // ── LA REQUETE ──────────────────────────────────────────────────────────────────────────────
     // Zeroee d'abord : les champs qu'on ne renseigne pas doivent etre nuls et non remplis de pile
     // sale — c'est ce qui rend un echec interpretable.
@@ -654,7 +815,7 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     // ── SONDE `--tessera-drapeaux=E8:1,EA:0` ────────────────────────────────────────────────
     // Ecrase des octets APRES les valeurs par defaut, pour les faire varier un par un sans
     // reconstruire. La garde de borne est ICI : le parseur ne connait pas la taille de la requete.
-    std::string diagDrapeaux;
+    std::string diagDrapeaux = diagResidu;
     for (const auto& [offset, valeur] : DrapeauxRequete(GetCommandLineA()))
     {
         if (offset >= kTailleRequete)

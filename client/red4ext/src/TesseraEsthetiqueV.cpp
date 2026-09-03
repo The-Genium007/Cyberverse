@@ -95,7 +95,13 @@ constexpr Groupe kGroupes[] = {
 
 bool Lisible(std::uintptr_t aPtr, std::size_t aSize)
 {
-    if (aPtr == 0 || (aPtr & 0x7) != 0)
+    // ⚠️ L'ALIGNEMENT EXIGE SUIT LA TAILLE LUE — le figer a 8 rendait cette garde infranchissable
+    // pour tout champ etroit a un offset impair. Mesure le 2026-08-27 : la sonde anti-contamination
+    // lit un `uint32` en `desc + 0x14` ; `desc` etant 8-aligne, `& 0x7` valait 4 a tous les coups et
+    // les six groupes etaient declares « illisibles » alors que la memoire etait parfaitement saine.
+    // Les autres appelants passent des tailles >= 8 : pour eux le masque reste 0x7, a l'identique.
+    const std::uintptr_t masque = aSize >= 8 ? 0x7u : aSize >= 4 ? 0x3u : aSize >= 2 ? 0x1u : 0x0u;
+    if (aPtr == 0 || (aPtr & masque) != 0)
     {
         return false;
     }

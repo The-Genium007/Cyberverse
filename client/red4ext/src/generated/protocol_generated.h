@@ -58,6 +58,12 @@ struct AppearanceSyncBuilder;
 struct EquipmentReport;
 struct EquipmentReportBuilder;
 
+struct GarmentReport;
+struct GarmentReportBuilder;
+
+struct AvatarProjectionReport;
+struct AvatarProjectionReportBuilder;
+
 struct Snapshot;
 struct SnapshotBuilder;
 
@@ -243,11 +249,13 @@ enum ClientMsg : uint8_t {
   ClientMsg_RespawnRequest = 19,
   ClientMsg_HealthReport = 20,
   ClientMsg_DeviceCall = 21,
+  ClientMsg_AvatarProjectionReport = 22,
+  ClientMsg_GarmentReport = 23,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_DeviceCall
+  ClientMsg_MAX = ClientMsg_GarmentReport
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[22] {
+inline const ClientMsg (&EnumValuesClientMsg())[24] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -270,13 +278,15 @@ inline const ClientMsg (&EnumValuesClientMsg())[22] {
     ClientMsg_StaticNpcReport,
     ClientMsg_RespawnRequest,
     ClientMsg_HealthReport,
-    ClientMsg_DeviceCall
+    ClientMsg_DeviceCall,
+    ClientMsg_AvatarProjectionReport,
+    ClientMsg_GarmentReport
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[23] = {
+  static const char * const names[25] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -299,13 +309,15 @@ inline const char * const *EnumNamesClientMsg() {
     "RespawnRequest",
     "HealthReport",
     "DeviceCall",
+    "AvatarProjectionReport",
+    "GarmentReport",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_DeviceCall)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_GarmentReport)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -396,6 +408,14 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::HealthReport> {
 
 template<> struct ClientMsgTraits<cyberpunk_rp::protocol::DeviceCall> {
   static const ClientMsg enum_value = ClientMsg_DeviceCall;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::AvatarProjectionReport> {
+  static const ClientMsg enum_value = ClientMsg_AvatarProjectionReport;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::GarmentReport> {
+  static const ClientMsg enum_value = ClientMsg_GarmentReport;
 };
 
 template <bool B = false>
@@ -1830,7 +1850,9 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_APPEARANCE = 6,
     VT_GARMENTS = 8,
     VT_ESTHETIQUE = 10,
-    VT_CORPS_MASCULIN = 12
+    VT_CORPS_MASCULIN = 12,
+    VT_VERSION = 14,
+    VT_EMPREINTE = 16
   };
   uint64_t base_record() const {
     return GetField<uint64_t>(VT_BASE_RECORD, 0);
@@ -1847,6 +1869,12 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool corps_masculin() const {
     return GetField<uint8_t>(VT_CORPS_MASCULIN, 1) != 0;
   }
+  uint32_t version() const {
+    return GetField<uint32_t>(VT_VERSION, 0);
+  }
+  uint64_t empreinte() const {
+    return GetField<uint64_t>(VT_EMPREINTE, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1858,6 +1886,8 @@ struct AppearanceSpec FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_ESTHETIQUE) &&
            verifier.VerifyVector(esthetique()) &&
            VerifyField<uint8_t>(verifier, VT_CORPS_MASCULIN, 1) &&
+           VerifyField<uint32_t>(verifier, VT_VERSION, 4) &&
+           VerifyField<uint64_t>(verifier, VT_EMPREINTE, 8) &&
            verifier.EndTable();
   }
 };
@@ -1881,6 +1911,12 @@ struct AppearanceSpecBuilder {
   void add_corps_masculin(bool corps_masculin) {
     fbb_.AddElement<uint8_t>(AppearanceSpec::VT_CORPS_MASCULIN, static_cast<uint8_t>(corps_masculin), 1);
   }
+  void add_version(uint32_t version) {
+    fbb_.AddElement<uint32_t>(AppearanceSpec::VT_VERSION, version, 0);
+  }
+  void add_empreinte(uint64_t empreinte) {
+    fbb_.AddElement<uint64_t>(AppearanceSpec::VT_EMPREINTE, empreinte, 0);
+  }
   explicit AppearanceSpecBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1898,10 +1934,14 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpec(
     uint64_t appearance = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>> garments = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> esthetique = 0,
-    bool corps_masculin = true) {
+    bool corps_masculin = true,
+    uint32_t version = 0,
+    uint64_t empreinte = 0) {
   AppearanceSpecBuilder builder_(_fbb);
+  builder_.add_empreinte(empreinte);
   builder_.add_appearance(appearance);
   builder_.add_base_record(base_record);
+  builder_.add_version(version);
   builder_.add_esthetique(esthetique);
   builder_.add_garments(garments);
   builder_.add_corps_masculin(corps_masculin);
@@ -1914,7 +1954,9 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpecDirect(
     uint64_t appearance = 0,
     const std::vector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>> *garments = nullptr,
     const std::vector<uint8_t> *esthetique = nullptr,
-    bool corps_masculin = true) {
+    bool corps_masculin = true,
+    uint32_t version = 0,
+    uint64_t empreinte = 0) {
   auto garments__ = garments ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::EquippedItem>>(*garments) : 0;
   auto esthetique__ = esthetique ? _fbb.CreateVector<uint8_t>(*esthetique) : 0;
   return cyberpunk_rp::protocol::CreateAppearanceSpec(
@@ -1923,7 +1965,9 @@ inline ::flatbuffers::Offset<AppearanceSpec> CreateAppearanceSpecDirect(
       appearance,
       garments__,
       esthetique__,
-      corps_masculin);
+      corps_masculin,
+      version,
+      empreinte);
 }
 
 struct AppearanceSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2048,6 +2092,160 @@ inline ::flatbuffers::Offset<EquipmentReport> CreateEquipmentReport(
   builder_.add_item(item);
   builder_.add_equipped(equipped);
   builder_.add_drawn(drawn);
+  return builder_.Finish();
+}
+
+struct GarmentReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef GarmentReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ITEM = 4,
+    VT_SLOT = 6,
+    VT_PORTE = 8
+  };
+  uint64_t item() const {
+    return GetField<uint64_t>(VT_ITEM, 0);
+  }
+  uint64_t slot() const {
+    return GetField<uint64_t>(VT_SLOT, 0);
+  }
+  bool porte() const {
+    return GetField<uint8_t>(VT_PORTE, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ITEM, 8) &&
+           VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
+           VerifyField<uint8_t>(verifier, VT_PORTE, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct GarmentReportBuilder {
+  typedef GarmentReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_item(uint64_t item) {
+    fbb_.AddElement<uint64_t>(GarmentReport::VT_ITEM, item, 0);
+  }
+  void add_slot(uint64_t slot) {
+    fbb_.AddElement<uint64_t>(GarmentReport::VT_SLOT, slot, 0);
+  }
+  void add_porte(bool porte) {
+    fbb_.AddElement<uint8_t>(GarmentReport::VT_PORTE, static_cast<uint8_t>(porte), 0);
+  }
+  explicit GarmentReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<GarmentReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<GarmentReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<GarmentReport> CreateGarmentReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t item = 0,
+    uint64_t slot = 0,
+    bool porte = false) {
+  GarmentReportBuilder builder_(_fbb);
+  builder_.add_slot(slot);
+  builder_.add_item(item);
+  builder_.add_porte(porte);
+  return builder_.Finish();
+}
+
+struct AvatarProjectionReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef AvatarProjectionReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4,
+    VT_VERSION = 6,
+    VT_EMPREINTE = 8,
+    VT_COMPOSANTS = 10,
+    VT_APPARENCE = 12,
+    VT_PAIRES_INJECTEES = 14
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  uint32_t version() const {
+    return GetField<uint32_t>(VT_VERSION, 0);
+  }
+  uint64_t empreinte() const {
+    return GetField<uint64_t>(VT_EMPREINTE, 0);
+  }
+  uint32_t composants() const {
+    return GetField<uint32_t>(VT_COMPOSANTS, 0);
+  }
+  uint64_t apparence() const {
+    return GetField<uint64_t>(VT_APPARENCE, 0);
+  }
+  uint32_t paires_injectees() const {
+    return GetField<uint32_t>(VT_PAIRES_INJECTEES, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           VerifyField<uint32_t>(verifier, VT_VERSION, 4) &&
+           VerifyField<uint64_t>(verifier, VT_EMPREINTE, 8) &&
+           VerifyField<uint32_t>(verifier, VT_COMPOSANTS, 4) &&
+           VerifyField<uint64_t>(verifier, VT_APPARENCE, 8) &&
+           VerifyField<uint32_t>(verifier, VT_PAIRES_INJECTEES, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct AvatarProjectionReportBuilder {
+  typedef AvatarProjectionReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(AvatarProjectionReport::VT_ID, id, 0);
+  }
+  void add_version(uint32_t version) {
+    fbb_.AddElement<uint32_t>(AvatarProjectionReport::VT_VERSION, version, 0);
+  }
+  void add_empreinte(uint64_t empreinte) {
+    fbb_.AddElement<uint64_t>(AvatarProjectionReport::VT_EMPREINTE, empreinte, 0);
+  }
+  void add_composants(uint32_t composants) {
+    fbb_.AddElement<uint32_t>(AvatarProjectionReport::VT_COMPOSANTS, composants, 0);
+  }
+  void add_apparence(uint64_t apparence) {
+    fbb_.AddElement<uint64_t>(AvatarProjectionReport::VT_APPARENCE, apparence, 0);
+  }
+  void add_paires_injectees(uint32_t paires_injectees) {
+    fbb_.AddElement<uint32_t>(AvatarProjectionReport::VT_PAIRES_INJECTEES, paires_injectees, 0);
+  }
+  explicit AvatarProjectionReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<AvatarProjectionReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<AvatarProjectionReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<AvatarProjectionReport> CreateAvatarProjectionReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0,
+    uint32_t version = 0,
+    uint64_t empreinte = 0,
+    uint32_t composants = 0,
+    uint64_t apparence = 0,
+    uint32_t paires_injectees = 0) {
+  AvatarProjectionReportBuilder builder_(_fbb);
+  builder_.add_apparence(apparence);
+  builder_.add_empreinte(empreinte);
+  builder_.add_id(id);
+  builder_.add_paires_injectees(paires_injectees);
+  builder_.add_composants(composants);
+  builder_.add_version(version);
   return builder_.Finish();
 }
 
@@ -5814,6 +6012,12 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::DeviceCall *msg_as_DeviceCall() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_DeviceCall ? static_cast<const cyberpunk_rp::protocol::DeviceCall *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::AvatarProjectionReport *msg_as_AvatarProjectionReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_AvatarProjectionReport ? static_cast<const cyberpunk_rp::protocol::AvatarProjectionReport *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::GarmentReport *msg_as_GarmentReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_GarmentReport ? static_cast<const cyberpunk_rp::protocol::GarmentReport *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -5906,6 +6110,14 @@ template<> inline const cyberpunk_rp::protocol::HealthReport *ClientEnvelope::ms
 
 template<> inline const cyberpunk_rp::protocol::DeviceCall *ClientEnvelope::msg_as<cyberpunk_rp::protocol::DeviceCall>() const {
   return msg_as_DeviceCall();
+}
+
+template<> inline const cyberpunk_rp::protocol::AvatarProjectionReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::AvatarProjectionReport>() const {
+  return msg_as_AvatarProjectionReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::GarmentReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::GarmentReport>() const {
+  return msg_as_GarmentReport();
 }
 
 struct ClientEnvelopeBuilder {
@@ -6263,6 +6475,14 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ClientMsg_DeviceCall: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::DeviceCall *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_AvatarProjectionReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::AvatarProjectionReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_GarmentReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::GarmentReport *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
