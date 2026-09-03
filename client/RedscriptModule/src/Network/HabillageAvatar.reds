@@ -72,6 +72,34 @@ func TesseraCleVetement(record: TweakDBID, corpsMasculin: Bool) -> String {
     return NameToString(app) + (corpsMasculin ? "m" : "w");
 }
 
+// Vrai si ce composant est une pièce de GARDE-ROBE — donc à nous — et faux s'il appartient au CORPS.
+//
+// ⚠️ CETTE FONCTION DÉCIDE CE QU'ON A LE DROIT D'ÉTEINDRE. Se tromper ne dégrade pas : ça mutile
+// l'avatar (visage manquant, manches sur du vide — vécu le 2026-08-26 avec les wrappers d'arme).
+// Elle n'est donc pas devinée d'après la nomenclature CDPR : elle est tirée du relevé des 54
+// composants d'un avatar vivant (`avatar_corps`, 2026-09-03).
+//
+// Ce relevé donne un discriminant net, et un seul :
+//
+//     VÊTEMENTS   t1_tshirt_04_old_02_w · t2_coat_04_old_01_w__1 · l1_pants_06_old_03_w
+//                 s1_boots_05_old_02_w · t2_jacket_19_basic_02_w__3   → finissent par `_m`/`_w`
+//     CORPS       t0_000_pma_base__full_shadow · l0_000_pwa_base__cs_flat · hh_040_wa__pixie_bob
+//                 heb_000_pwa__basehead · i0_000_pwa_base__genitals_none · a0_000_pwa_base_nails_l
+//                 t1_057_pwa_tank__bra0730 · l1_047_pwa_shorts__panties7731  → AUCUN ne finit ainsi
+//
+// ⭐ Le suffixe `m`/`w` n'est pas décoratif : c'est celui que `TesseraCleVetement` AJOUTE lui-même
+// à l'`appearanceName`. On reconnaît donc exactement ce qu'on sait fabriquer — pas une famille de
+// noms qu'on espère.
+//
+// ⚠️ Un même vêtement monte PLUSIEURS meshes, suffixés `__1`, `__2`… — d'où les deux formes
+// contenant. Les sous-vêtements de l'apparence de base (`__bra`, `__panties`, `__boxers`) sont
+// exclus par construction, et c'est voulu : ils ont leur propre règle, plus bas, adossée au
+// réglage de nudité.
+func TesseraEstGardeRobe(nom: String) -> Bool {
+    return StrEndsWith(nom, "_m") || StrEndsWith(nom, "_w")
+        || StrContains(nom, "_m__") || StrContains(nom, "_w__");
+}
+
 // Appelée par `PiloterAvatar` (C++) par créneaux bornés — le seul chemin qui atteint les corps de
 // la voie enrichie (F-PLY-278). Rend `true` quand il n'y a plus rien à faire.
 func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
@@ -110,6 +138,7 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     // joueurs autour, ce parcours tourne pour chaque avatar à chaque créneau.
     let composants = corps.GetComponents();
     let allumes = 0;
+    let retires = 0;
     let j = 0;
     while j < ArraySize(composants) {
         let nom = NameToString(composants[j].GetName());
@@ -126,6 +155,23 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
         if voulu && !composants[j].IsEnabled() {
             composants[j].Toggle(true);
             allumes += 1;
+        } else {
+            // ── ⭐⭐⭐ LE RETRAIT, QUI MANQUAIT — cette passe était ADDITIVE SEULE ─────────
+            //
+            // ⚠️ MESURÉ le 2026-09-03, et ça explique le symptôme d'origine. Le fil du hot-swap
+            // marche de bout en bout — retirer un vêtement chez A arrive chez B, et cette
+            // fonction est bien rappelée (4 → 3 vêtements demandés, lu au journal). Et pourtant
+            // le vêtement RESTAIT à l'écran, parce qu'aucune ligne de ce fichier ne l'éteignait.
+            // On ne pouvait que s'habiller, jamais se déshabiller : la tenue ne faisait que
+            // s'empiler, ce que Lucas décrivait dès le premier jour.
+            //
+            // ⭐ C'est le cran d'après « accepté ≠ exécuté » : ici TOUT le fil était bien exécuté,
+            // et le dernier consommateur n'avait simplement pas la branche. Un compteur posé sur
+            // l'émetteur aurait confirmé la panne comme il aurait confirmé le bon fonctionnement.
+            if !voulu && composants[j].IsEnabled() && TesseraEstGardeRobe(nom) {
+                composants[j].Toggle(false);
+                retires += 1;
+            }
         }
         j += 1;
     }
@@ -193,7 +239,7 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     // pris — pas laissee en place « au cas ou ».
 
     TesseraJournalHabillage(
-        s"avatar \(EntityID.ToDebugString(cible)) : \(ArraySize(cles)) vetement(s) demande(s), \(allumes) composant(s) allume(s) [corps \(masculin ? "M" : "F")]");
+        s"avatar \(EntityID.ToDebugString(cible)) : \(ArraySize(cles)) vetement(s) demande(s), \(allumes) allume(s), \(retires) retire(s) [corps \(masculin ? "M" : "F")]");
 
     // ⚠️ On rend `true` dès qu'on a fait le tour : rallumer ce qui est déjà allumé ne sert à rien,
     // et laisser la boucle tourner ferait relire tous les composants de tous les avatars à chaque
