@@ -77,6 +77,21 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_NombreDeVetements(cible: EntityID) -> Int32;
     // Le sexe du corps de cet avatar — choisit quelle moitie de la garde-robe allumer.
     public native func Tessera_AvatarCorpsMasculin(cible: EntityID) -> Bool;
+
+    /// La CARNATION de cet avatar, ou `""` si on ne la connaît pas.
+    ///
+    /// ⛔ CE NATIF EXISTE PARCE QUE LE SCRIPT EST AVEUGLE À LA TEINTE. `meshAppearance` figure au
+    /// RTTI — le Lua CET le lit — mais aucune classe des scripts décompilés CDPR ne le déclare :
+    /// `MeshComponent` est `importonly` et VIDE. Le script ne peut donc pas lire la carnation du
+    /// torse, et c'est le C++ qui la lui donne.
+    ///
+    /// ⭐ La source est le RECORD que le SERVEUR a désigné — lui seul a `skin_color` en clair.
+    /// Rien n'est deviné : le C++ reconnaît un hachage parmi douze candidats connus.
+    ///
+    /// ⚠️ Une chaîne VIDE veut dire « je ne sais pas », et l'appelant doit alors NE RIEN FAIRE.
+    /// Allumer des jambes au hasard serait pire que ne pas en allumer : une mauvaise couleur a
+    /// l'air délibérée, une absence a l'air d'un bug.
+    public native func Tessera_CarnationDeLEntite(cible: EntityID) -> String;
     public native func Tessera_VetementDeLEntite(cible: EntityID, index: Int32) -> TweakDBID;
 
     // ── Coma et réapparition (chantier autorité totale, 2026-08-09) ─────────────────────────
@@ -395,6 +410,8 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_AscenseurEtageActif() -> Int32;
     public native func Tessera_AscenseurEtageCible() -> Int32;
     public native func Tessera_AscenseurDepart() -> Int32;
+    public native func Tessera_AscenseurDelaiDepartMs() -> Int32;
+    public native func Tessera_AscenseurDureeTrajetMs() -> Int32;
     public native func Tessera_AscenseurElapsedMs() -> Int32;
     public native func Tessera_AscenseurRetirer() -> Void;
 
@@ -529,6 +546,19 @@ public native class NetworkGameSystem extends IGameSystem {
     /// L'allure annoncee pour cet avatar attache.
     public native func Tessera_AllureAttachee(entiteHash: Uint32) -> Int32;
     public native func Tessera_EcrireOffsetLocal(moveComponent: ref<IScriptable>, x: Float, y: Float, z: Float) -> Bool;
+    /// Placement visuel d'un passager sans empiler d'ordre IA. `moveComponent` est opaque au
+    /// script ; le natif borne, ecrit puis relit son entree active (F-PLY-337).
+    public func TesseraEcrirePositionRepresentation(cible: EntityID, position: Vector4) -> Bool {
+        let corps = GameInstance.FindEntityByID(GetGameInstance(), cible) as GameObject;
+        if !IsDefined(corps) {
+            return false;
+        }
+        let mouvement = corps.FindComponentByName(n"moveComponent") as IScriptable;
+        if !IsDefined(mouvement) {
+            return false;
+        }
+        return this.Tessera_EcrireOffsetLocal(mouvement, position.X, position.Y, position.Z);
+    }
     /// Pose par le module ascenseurs quand le joueur LOCAL embarque ou descend.
     public native func Tessera_PoserJoueurLocalPorte(actif: Bool) -> Bool;
     public native func Tessera_JoueurLocalPorte() -> Bool;

@@ -115,6 +115,8 @@ struct EtatAscenseurRecu
     int32_t etageActif = 0;
     int32_t etageCible = -1;
     int32_t departTick = 0;
+    int32_t startDelayMs = 0;
+    int32_t travelTimeMs = 0;
     int32_t elapsedMs = 0;
 };
 extern std::deque<EtatAscenseurRecu> g_ascenseursRecus;
@@ -1556,6 +1558,59 @@ public:
         return a == nullptr ? true : a->corpsMasculin;
     }
 
+    /// ⭐⭐⭐ LA CARNATION DE CET AVATAR, ou une chaine VIDE si on ne la connait pas.
+    ///
+    /// ⛔ POURQUOI CE NATIF EXISTE. Le corps FEMININ porte un composant que le masculin n'a pas —
+    /// `l0_..._cs_flat`, les jambes et les pieds — et il ne vient PAS de la charge : le retirer
+    /// rend les pieds INVISIBLES (mesure du 2026-09-04). Il faut donc que NOUS le fournissions,
+    /// avec la bonne teinte. Les douze variantes sont cuites dans l'entite, eteintes ; le script
+    /// en allume UNE. Il lui faut donc savoir laquelle.
+    ///
+    /// ⚠️ ET IL NE PEUT PAS LA LIRE LUI-MEME. `meshAppearance` existe au RTTI — le Lua CET le lit —
+    /// mais AUCUNE classe des scripts decompiles CDPR ne le declare : `MeshComponent` est
+    /// `importonly` et VIDE. Le script est donc aveugle a la teinte du torse, et c'est ce natif qui
+    /// la lui donne.
+    ///
+    /// ⭐ LA SOURCE EST LE RECORD QUE LE SERVEUR A DESIGNE. Lui seul a `skin_color` en clair
+    /// (`options_apparence`) ; le client n'a que des paires opaques. On ne DEVINE donc rien : on
+    /// reconnait le hachage parmi douze candidats connus, et zero correspondance rend une chaine
+    /// vide — ce qui fait que le script NE TOUCHE A RIEN plutot que d'allumer au hasard.
+    ///
+    /// ⚠️ Allumer au hasard serait pire que ne rien allumer : des jambes d'une autre couleur ont
+    /// l'air deliberees, une absence de jambes a l'air d'un bug. C'est la lecon de `06_bl_dark`
+    /// pose sur une peau ambree.
+    Red::CString Tessera_CarnationDeLEntite(RED4ext::ent::EntityID cible)
+    {
+        const auto* a = ApparencePourEntite(cible);
+        if (a == nullptr || a->baseRecord == 0)
+        {
+            return Red::CString("");
+        }
+        // ⚠️ L'ORDRE N'A AUCUNE IMPORTANCE ICI : on compare des HACHAGES, pas des indices. C'est
+        // exactement ce qui rend cette voie robuste — contrairement a l'indexation par
+        // `skin_color`, qui exige que serveur et client partagent le meme ordre.
+        static constexpr const char* kTeintes[] = {
+            "01_ca_pale", "01_ca_pale_00_warm_ivory",
+            "02_ca_limestone", "02_ca_limestone_00_beige",
+            "03_ca_senna", "03_ca_senna_00_amber",
+            "03_ca_senna_01_honey", "03_ca_senna_02_band",
+            "04_ca_almond", "04_ca_almond_00_umber",
+            "05_bl_espresso", "06_bl_dark",
+        };
+        for (const char* base : {"Character.Tessera_Avatar_Marche_Male_",
+                                 "Character.Tessera_Avatar_Marche_Female_"})
+        {
+            for (const char* t : kTeintes)
+            {
+                if (RED4ext::TweakDBID((std::string(base) + t).c_str()).value == a->baseRecord)
+                {
+                    return Red::CString(t);
+                }
+            }
+        }
+        return Red::CString("");
+    }
+
     // Le n-ieme vetement, dans l'ORDRE DE POSE decide par le serveur.
     //
     // ⚠️ RENVOIE UN `TweakDBID`, PAS UN `uint64_t`, pour exactement la raison ecrite au-dessus de
@@ -2111,7 +2166,7 @@ public:
     }
 
     bool Tessera_EcrireOffsetLocal(const Red::Handle<RED4ext::IScriptable>& moveComponent,
-                                   float x, float y, float z);
+                                                  float x, float y, float z);
     bool Tessera_PoserJoueurLocalPorte(bool actif);
     bool Tessera_JoueurLocalPorte();
     bool Tessera_AvatarPorteParPlateforme(uint32_t entiteHash, bool actif);
@@ -2472,6 +2527,14 @@ public:
     {
         return g_ascenseursRecus.empty() ? 0 : g_ascenseursRecus.front().departTick;
     }
+    int32_t Tessera_AscenseurDelaiDepartMs()
+    {
+        return g_ascenseursRecus.empty() ? 0 : g_ascenseursRecus.front().startDelayMs;
+    }
+    int32_t Tessera_AscenseurDureeTrajetMs()
+    {
+        return g_ascenseursRecus.empty() ? 0 : g_ascenseursRecus.front().travelTimeMs;
+    }
     int32_t Tessera_AscenseurElapsedMs()
     {
         return g_ascenseursRecus.empty() ? 0 : g_ascenseursRecus.front().elapsedMs;
@@ -2686,15 +2749,7 @@ public:
     }
 
     /// ASCENSEURS — le joueur vient d'entrer (monte=true) ou de sortir d'une cabine.
-    bool Tessera_MonterAscenseur(RED4ext::ent::EntityID cabine, bool monte)
-    {
-        if (!cabine.IsDefined())
-        {
-            return false;
-        }
-        SendElevatorMount(cabine.hash, monte);
-        return true;
-    }
+    bool Tessera_MonterAscenseur(RED4ext::ent::EntityID cabine, bool monte);
 
     /// ASCENSEURS — un joueur DISTANT est-il dans cette cabine ?
     ///
@@ -2868,6 +2923,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_ArmeDeLEntite);
     RTTI_METHOD(Tessera_NombreDeVetements);
     RTTI_METHOD(Tessera_AvatarCorpsMasculin);
+    RTTI_METHOD(Tessera_CarnationDeLEntite);
     RTTI_METHOD(Tessera_VetementDeLEntite);
     RTTI_METHOD(Tessera_DemanderReapparition);
     RTTI_METHOD(Tessera_RapporterVariation);
@@ -2962,6 +3018,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AscenseurEtageActif);
     RTTI_METHOD(Tessera_AscenseurEtageCible);
     RTTI_METHOD(Tessera_AscenseurDepart);
+    RTTI_METHOD(Tessera_AscenseurDelaiDepartMs);
+    RTTI_METHOD(Tessera_AscenseurDureeTrajetMs);
     RTTI_METHOD(Tessera_AscenseurElapsedMs);
     RTTI_METHOD(Tessera_AscenseurRetirer);
     RTTI_METHOD(Tessera_AppelerAscenseur);
