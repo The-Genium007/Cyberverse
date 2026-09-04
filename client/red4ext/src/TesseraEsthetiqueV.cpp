@@ -54,6 +54,33 @@ constexpr Groupe kGroupes[] = {
     {0x80, 0xB85240ull, "TPP_Body", 1},                  // Body — ce que voient les AUTRES
     {0x80, 0xB85240ull, "genitals", 1},
     {0x80, 0xB85240ull, "breast", 1},                    // rend 0 sur un V masculin : inoffensif
+    // ⭐⭐⭐ DEFAUT 3, TROUVE LE 2026-09-04 — LES PIEDS NE TRAVERSAIENT PAS.
+    //
+    // Symptome de Lucas : sur l'avatar FEMININ, les jambes et les pieds n'ont pas la carnation du
+    // reste du corps. Torse et bras sont justes — ils viennent de la charge ; le bas ne l'est pas.
+    //
+    // ⚠️ ET CE N'EST PAS UNE OMISSION DU CONSTRUCTEUR — c'est la question que Lucas a posee en
+    // premier, et la reponse est NON. Les options enregistrees a la creation le disent :
+    //
+    //     body_color=6  body_color_censored=6  lifted_feet=6
+    //     h_default_arms_colors_tpp=6  genitals_04=6  nipples_03=6  ear=6
+    //
+    // TOUTES les parties porteuses de peau partagent le meme index. Le createur enregistre donc
+    // bien les pieds, avec la meme teinte que le reste. Le trou etait ICI : cette table lisait
+    // TROIS groupes de corps sur les HUIT que le createur remplit. La charge de REDDA transportait
+    // bien 3 paires de corps — le compte collait, et personne ne s'etait demande a quoi elles
+    // correspondaient.
+    //
+    // ⚠️ AJOUTER UN GROUPE EST SANS RISQUE PAR CONSTRUCTION : la fonction de recolte rend 1 quand
+    // le groupe est ABSENT, et n'ajoute alors rien. Un nom qui n'existe pas ne casse pas la charge,
+    // il ne la remplit simplement pas — et le compte par section le dira. C'est pour ca que deux
+    // variantes de nom sont essayees plutot qu'une supposition tranchee.
+    //
+    // ⚠️ Les doublons eventuels sont deja traites au DECODAGE (premiere occurrence gardee) : ajouter
+    // ici ne peut pas reproduire le composant duplique de F-PLY-292.
+    {0x80, 0xB85240ull, "lifted_feet", 1},               // les PIEDS — nom tire des options creees
+    {0x80, 0xB85240ull, "feet", 1},                      // variante, inoffensive si absente
+    {0x80, 0xB85240ull, "body_color_censored", 1},       // la zone `cs_flat` du corps feminin
     {0x90, 0x1192F2Cull, "character_customization", 2},  // Arms
     {0x90, 0x1192F2Cull, "holstered_default", 2},        // bras au repos, sans cyberware degaine
     // ⚠️⚠️ `holstered_default` A ETE RETIRE PUIS REMIS, le 2026-08-24, et les deux gestes sont
