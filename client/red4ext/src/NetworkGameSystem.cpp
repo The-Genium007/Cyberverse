@@ -7475,8 +7475,26 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // regime qui a fait tomber le jeu deux fois le 2026-08-06.
         {
             const auto apparence = m_appearances.find(networkId);
+            // ⭐ « LE SERVEUR A PARLE » — a ne pas confondre avec « il a annonce des vetements ».
+            //
+            // ⛔ CE BOOLEEN CORRIGE UN DEFAUT MESURE LE 2026-09-03, et il est de la famille la plus
+            // couteuse : UNE LISTE VIDE ET UNE LISTE ABSENTE NE SONT PAS LA MEME CHOSE.
+            //
+            // La garde d'origine etait `signature != 0`. Or la signature est un hachage de la liste
+            // des vetements portes : une liste VIDE donne 0. Consequence — des qu'un joueur retire
+            // TOUT, le client cesse de rhabiller son avatar, qui reste habille pour toujours.
+            //
+            // Verdict de Lucas, mot pour mot : « je peux pas voir la peau car enlever les vetements
+            // n'est pas rendu en multi ». Il s'etait deshabille pour regarder la carnation, et
+            // c'est precisement ce geste que la garde rendait invisible.
+            //
+            // ⚠️ Les trois premiers maillons etaient PARFAITS — le sondeur voyait les slots se
+            // vider, le client emettait, le serveur ecrivait `porte=false` et re-annoncait. Seul le
+            // dernier consommateur ne repassait pas. Un compteur pose n'importe ou en amont aurait
+            // confirme que « tout marche ».
+            const bool tenueConnue = (apparence != m_appearances.end());
             std::uint64_t signature = 0;
-            if (apparence != m_appearances.end())
+            if (tenueConnue)
             {
                 for (const auto v : apparence->second.vetements)
                 {
@@ -7493,7 +7511,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 suiviPosture.passesHabillage = 0;
                 suiviPosture.prochainePasseHabillage = maintenantHab + kDelaiAvantHabillage;
             }
-            if (signature != 0 && suiviPosture.passesHabillage < kPassesHabillage)
+            if (tenueConnue && suiviPosture.passesHabillage < kPassesHabillage)
             {
                 if (maintenantHab >= suiviPosture.prochainePasseHabillage)
                 {
