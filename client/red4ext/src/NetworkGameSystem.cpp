@@ -770,6 +770,11 @@ std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 constexpr std::uint32_t kPassesHabillage = 10;
 constexpr auto kDelaiAvantHabillage = std::chrono::milliseconds(2000);
 constexpr auto kIntervallePasseHabillage = std::chrono::milliseconds(1000);
+// ⭐ LE RHABILLAGE N'EST PAS UNE NAISSANCE. `kDelaiAvantHabillage` protege un corps qui vient de
+// naitre ; un avatar qui change de veste est monte depuis longtemps. Lui faire payer la meme
+// attente ajoutait ~2 s a chaque geste, sur un budget que Lucas a mesure a l'oeil : « quatre a cinq
+// secondes pour que le serveur percute et renvoie aux autres joueurs ».
+constexpr auto kDelaiAvantRhabillage = std::chrono::milliseconds(150);
 bool g_localEtaitEnLair = false;
 
 /// Dernier masque d'etats de locomotion releve sur la population NATIVE autour du
@@ -7507,9 +7512,27 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // Tenue neuve (ou premiere) : on repart a zero. ⚠️ ET ON LAISSE LE CORPS FINIR DE
                 // SE MONTER avant la premiere passe — tenter tout de suite, c'est tenter dans la
                 // fenetre ou tout est accepte et rien n'est execute.
+                //
+                // ⭐ MAIS SEULEMENT A LA PREMIERE TENUE. Verdict de Lucas, 2026-09-04 : « une
+                // latence assez importante de quatre a cinq secondes pour que le serveur percute et
+                // renvoie aux autres joueurs que les gens sont deshabilles, ce qui n'est pas tres
+                // agreable ». Le budget se decompose : 0,5 s de sondage cote emetteur, PUIS ces
+                // 2 s d'attente, PUIS jusqu'a 1 s d'intervalle de passe.
+                //
+                // Or ces 2 s existent pour un corps QUI VIENT DE NAITRE et n'a pas fini de monter
+                // ses composants. Un avatar qui change de veste, lui, est monte depuis longtemps :
+                // lui appliquer la meme attente, c'est payer a chaque geste le prix d'un probleme
+                // qui n'existe qu'une fois.
+                //
+                // ⚠️ LA DISTINCTION EST « DEJA HABILLE UNE FOIS », pas « signature non nulle » —
+                // une tenue VIDE est une tenue legitime (c'est tout l'objet de `tenueConnue`), et
+                // s'en servir comme marqueur de premiere fois reintroduirait le defaut d'a cote.
+                const bool premiereTenue = !suiviPosture.habilleAuMoinsUneFois;
                 suiviPosture.signatureVetements = signature;
                 suiviPosture.passesHabillage = 0;
-                suiviPosture.prochainePasseHabillage = maintenantHab + kDelaiAvantHabillage;
+                suiviPosture.prochainePasseHabillage =
+                    maintenantHab + (premiereTenue ? kDelaiAvantHabillage
+                                                   : kDelaiAvantRhabillage);
             }
             if (tenueConnue && suiviPosture.passesHabillage < kPassesHabillage)
             {
@@ -7522,6 +7545,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                      suiviPosture.passesHabillage);
                     if (habille)
                     {
+                        // ⭐ Le corps a ete habille au moins une fois : les prochains changements
+                        // n'ont plus a attendre qu'il finisse de se monter.
+                        suiviPosture.habilleAuMoinsUneFois = true;
                         // Convergé : on arrete. Un changement de tenue relancera les passes par la
                         // signature ci-dessus — il n'y a donc rien a re-armer.
                         suiviPosture.passesHabillage = kPassesHabillage;

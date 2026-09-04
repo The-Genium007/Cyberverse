@@ -91,6 +91,62 @@ inline std::uint64_t recordAttendu()
     return RED4ext::TweakDBID(kRecordEnrichi).value;
 }
 
+/// Les six carnations du jeu, DANS L'ORDRE DE LEUR NOM — c'est cet ordre que `body_color` indexe.
+///
+/// ⛔ POURQUOI CETTE TABLE EXISTE. Notre `.app` figeait la couleur de peau du CORPS :
+/// `02_ca_limestone` pour tout joueur masculin, `06_bl_dark` pour toute joueuse. Le VISAGE, lui,
+/// est bati depuis la charge d'esthetique et etait donc juste — d'ou le symptome exact rapporte par
+/// Lucas le 2026-09-03 : « la couleur des jambes et du tronc ne correspond pas ».
+///
+/// ⛔⛔ ET LA VOIE FACILE EST FERMEE, PAR MESURE (F-PLY-379). Ecrire `meshAppearance` a l'execution
+/// sur les composants du corps est accepte, RELU, et sans aucun effet visuel — y compris sur notre
+/// entite derivee, alors meme que `Toggle` y marche (F-PLY-377). La frontiere n'est pas « script
+/// contre natif », elle est PRESENCE contre APPARENCE.
+constexpr const char* kCarnations[] = {
+    "01_ca_pale", "02_ca_limestone", "03_ca_senna",
+    "04_ca_almond", "05_bl_espresso", "06_bl_dark",
+};
+constexpr std::size_t kNbCarnations = sizeof(kCarnations) / sizeof(kCarnations[0]);
+
+/// Le record a spawner : la morphologie, et la CARNATION LUE DANS LA CHARGE.
+///
+/// ⭐⭐ ON NE DEVINE AUCUN INDEX, ON RECONNAIT UN NOM. Une premiere version cherchait une paire
+/// `body_color` et prenait sa valeur pour un indice dans la table — c'etait faux sur les deux
+/// points, et le resultat le disait : les DEUX avatars recevaient l'index 0, y compris REDDA dont
+/// `body_color` vaut 6.
+///
+/// La vraie disposition est au registre, mesuree sur donnee vivante (F-PLY-196) : le second champ
+/// d'une paire resout en `CName` et porte `<composant>__<meshAppearance>`. La carnation est donc
+/// dans la charge SOUS SON NOM — `t0_000_pma_base__full__02_ca_limestone` — et pas sous un indice.
+///
+/// ⭐ Un `CName` ne se remonte pas, mais il se COMPARE : on hache les six candidats et on cherche
+/// celui qui figure. C'est exact par construction, et ca supprime la seule inconnue qui restait
+/// (« `body_color` est-il 0-base ? » n'a plus de raison d'etre posee).
+///
+/// ⚠️ Le defaut est la PREMIERE teinte, jamais un record inexistant : un record absent ferait
+/// echouer le spawn en silence, et l'avatar retomberait sur un passant generique — ce qui se lit
+/// comme une panne de reseau.
+inline std::string RecordPourCarnation(bool aCorpsMasculin,
+                                       const std::vector<std::uint64_t>& aPaires)
+{
+    const char* const corps = aCorpsMasculin ? "t0_000_pma_base__full__" : "t0_000_pwa_base__full__";
+    for (std::size_t c = 0; c < kNbCarnations; ++c)
+    {
+        const std::uint64_t attendu = RED4ext::CName(
+            (std::string(corps) + kCarnations[c]).c_str()).hash;
+        for (std::size_t i = 0; i * 2 + 1 < aPaires.size(); ++i)
+        {
+            if (aPaires[i * 2 + 1] == attendu)
+            {
+                return std::string(aCorpsMasculin ? kRecordEnrichi : kRecordEnrichiFeminin) + "_"
+                       + kCarnations[c];
+            }
+        }
+    }
+    return std::string(aCorpsMasculin ? kRecordEnrichi : kRecordEnrichiFeminin) + "_"
+           + kCarnations[0];
+}
+
 /// Parmi `aNeufs`, celui qui est le plus proche de `aCible`. `0` si aucun n'est lisible.
 ///
 /// Le discriminant est la POSITION VISEE : on vient de demander un corps la, le bon candidat est
@@ -533,7 +589,24 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
 
     // Le record est le NOTRE, jamais celui du serveur (voir `kRecordEnrichi`). Hache une seule fois
     // par appel : `TweakDBID` est un CRC32 du nom, plus la longueur dans les 32 bits hauts.
-    const RED4ext::TweakDBID recordId(aCorpsMasculin ? kRecordEnrichi : kRecordEnrichiFeminin);
+    //
+    // ⭐ ET IL PORTE DESORMAIS LA CARNATION — voir `kCarnations` en tete de fichier.
+    // ⛔⛔ SELECTION PAR CARNATION DESACTIVEE — 2026-09-03, apres mesure a l'ecran.
+    //
+    // Verdict de Lucas : « on a les deux textures qui cohabitent en parallele, ca fait un
+    // clignotement — la texture foncee et la texture plus claire qui s'alternent tres rapidement ».
+    // Un clignotement entre deux teintes, c'est DEUX CORPS AU MEME ENDROIT : notre `.app` impose
+    // une carnation pendant que la charge d'esthetique en applique une autre. Les deux existent.
+    //
+    // ⭐ CE QUE CA APPREND, ET C'EST LE POINT IMPORTANT : la charge porte DEJA la carnation, sous
+    // la forme `<composant>__<meshAppearance>` (F-PLY-196). Le `.app` n'avait donc pas a la
+    // decider — il fallait le laisser NEUTRE et laisser la charge parler. C'est l'inverse de ce
+    // que ce code faisait.
+    //
+    // Le record redevient celui de la morphologie seule, le temps de reprendre proprement.
+    const std::string record = std::string(aCorpsMasculin ? kRecordEnrichi : kRecordEnrichiFeminin);
+    (void)&RecordPourCarnation;
+    const RED4ext::TweakDBID recordId(record.c_str());
     const std::uint64_t aRecord = recordId.value;
 
     // ── LES DEUX OBJETS DU JEU ──────────────────────────────────────────────────────────────────

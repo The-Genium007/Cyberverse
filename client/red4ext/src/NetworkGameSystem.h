@@ -325,6 +325,10 @@ struct SuiviAvatar
     /// `TransactionSystem` a chaque instantane est le regime qui a fait tomber le jeu deux fois
     /// le 2026-08-06. `kPassesHabillage` = plus aucune tentative.
     std::uint32_t passesHabillage = 0;
+    /// A-t-on deja habille ce corps une fois ? Distingue la NAISSANCE (ou il faut laisser les
+    /// composants se monter) du simple changement de tenue (ou l'attente est du delai pur).
+    /// ⚠️ Pas deductible de la signature : une tenue VIDE est legitime.
+    bool habilleAuMoinsUneFois = false;
     /// Quand tenter la prochaine passe. ⚠️ UNE HORLOGE, PAS UN COMPTEUR D'APPELS — et ça a
     /// coûté un aller-retour en jeu. La première version comptait « 20 instantanés » en supposant
     /// que `PiloterAvatar` tournait à 20 Hz ; il tourne beaucoup plus vite, et les dix passes
