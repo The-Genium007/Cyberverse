@@ -88,6 +88,16 @@ struct Resultat
 /// signifie « l'appelant doit reprendre la voie sure », quelle qu'en soit la raison.
 /// ⚠️ `aCorpsMasculin` choisit l'ENTITE, donc la TENUE — jamais le corps, qui suit la charge
 /// (F-PLY-267). Deux records derivés existent, un par sexe ; voir `kRecordEnrichi*`.
+/// ⭐⭐⭐ `aRecordServeur` — LE RECORD QUE LE SERVEUR DESIGNE, `0` s'il n'en designe aucun.
+///
+/// Il porte la CARNATION : le serveur le construit depuis `skin_color`, qu'il lit dans la forme
+/// TRANSPARENTE de l'esthetique (`options_apparence`). Le client, lui, n'a que des paires opaques
+/// et ne peut donc pas le calculer — c'est pour ca que la decision remonte au serveur.
+///
+/// ⚠️ `0` retombe sur le record de la morphologie, jamais sur un record inexistant : celui-la
+/// ferait echouer le spawn EN SILENCE, et l'avatar se rendrait en passant generique — ce qui se
+/// lit comme une panne de reseau, pas comme une carnation manquante.
 Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob,
-                const RED4ext::Vector4& aPosition, bool aCorpsMasculin = true);
+                const RED4ext::Vector4& aPosition, bool aCorpsMasculin = true,
+                std::uint64_t aRecordServeur = 0);
 }  // namespace Tessera::SpawnEnrichi

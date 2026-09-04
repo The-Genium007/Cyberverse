@@ -1122,6 +1122,11 @@ static std::map<uint32_t, uint8_t> g_allureAttachee;
 /// ⚠️ LE SENS DE LA DEPENDANCE EST DELIBERE : le mod ascenseurs PREVIENT le netcode, le netcode ne
 /// connait pas le mod. L'inverse ferait dependre le coeur reseau d'un module optionnel.
 static bool g_joueurLocalPorte = false;
+/// Cabine qui porte le joueur local. Contrairement au simple booleen ci-dessus, cette cle permet
+/// de n'utiliser sa transformee comme base que pour un avatar qui partage REELLEMENT sa cabine.
+static uint64_t g_cabineJoueurLocal = 0;
+static double g_tempsLocalS = 0.0;
+bool HauteurCabineA(uint64_t cabineHash, double instant, float& sortie, bool& enMouvement);
 
 uint8_t AllureAttachee(uint32_t cle)
 {
@@ -1166,7 +1171,9 @@ bool NetworkGameSystem::Tessera_EcrireOffsetLocal(const Red::Handle<RED4ext::ISc
     {
         return false;
     }
-    constexpr float kBorne = 1000.0f;
+    // Cette primitive sert aussi au placement MONDE non parenté des passagers. Night City dépasse
+    // couramment ±1000 m en X/Y ; cette ancienne borne faisait refuser toutes ces écritures.
+    constexpr float kBorne = 10000.0f;
     if (!(x > -kBorne && x < kBorne && y > -kBorne && y < kBorne && z > -kBorne && z < kBorne))
     {
         return false;   // hors de toute cabine plausible : c'est une faute de calcul, pas une cible.
@@ -1216,6 +1223,24 @@ bool NetworkGameSystem::Tessera_PoserJoueurLocalPorte(bool actif)
 bool NetworkGameSystem::Tessera_JoueurLocalPorte()
 {
     return g_joueurLocalPorte;
+}
+
+bool NetworkGameSystem::Tessera_MonterAscenseur(RED4ext::ent::EntityID cabine, bool monte)
+{
+    if (!cabine.IsDefined())
+    {
+        return false;
+    }
+    if (monte)
+    {
+        g_cabineJoueurLocal = cabine.hash;
+    }
+    else if (g_cabineJoueurLocal == cabine.hash)
+    {
+        g_cabineJoueurLocal = 0;
+    }
+    SendElevatorMount(cabine.hash, monte);
+    return true;
 }
 
 bool NetworkGameSystem::Tessera_AvatarPorteParPlateforme(uint32_t entiteHash, bool actif)
@@ -1917,9 +1942,26 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
     g_localEtaitEnLair = enLairMaintenant;
 
     const cyberpunk_rp::protocol::QVec3 pos(QuantPos(x), QuantPos(y), QuantPos(z));
+    cyberpunk_rp::protocol::QVec3 framePos;
+    bool framePosValide = false;
+    if (g_joueurLocalPorte && g_cabineJoueurLocal != 0)
+    {
+        const RED4ext::ent::EntityID cabine{g_cabineJoueurLocal};
+        if (const auto entiteCabine = Cyberverse::Utils::GetDynamicEntity(cabine))
+        {
+            const auto base = Cyberverse::Utils::Entity_GetWorldPosition(entiteCabine.value());
+            float plancher = base.Z;
+            bool bouge = false;
+            HauteurCabineA(g_cabineJoueurLocal, g_tempsLocalS, plancher, bouge);
+            framePos = cyberpunk_rp::protocol::QVec3(
+                QuantPos(x - base.X), QuantPos(y - base.Y), QuantPos(z - plancher));
+            framePosValide = true;
+        }
+    }
     const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
         builder, &pos, QuantYaw(yaw), locomotion, moveDir, /*flags=*/0,
-        /*frame=*/0, /*slot=*/0, QuantYaw(lookYawDeg), QuantPitch(lookPitchDeg));
+        /*frame ignoré par le serveur=*/0, /*slot=*/0, QuantYaw(lookYawDeg),
+        QuantPitch(lookPitchDeg), framePosValide ? &framePos : nullptr, framePosValide);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_PositionUpdate, pu.Union());
     builder.Finish(env);
@@ -2202,6 +2244,8 @@ struct AncrageCabine
     /// l'arret, fige pendant le trajet — c'est la grandeur « quasi constante » du patron relatif.
     float dz = 0.0f;
     bool ecartConnu = false;
+    float frameZReference = 0.0f;
+    bool frameZReferenceConnue = false;
 };
 
 /// Avatars distants portes par une cabine, et leur ancrage. Repond aussi a « cette cabine est-elle
@@ -2269,8 +2313,6 @@ static std::map<uint64_t, HauteurCabineSuivie> g_hauteurCabine;
 /// Volontairement distincte de `g_horlogeRendu` : celle-la vit sur la timeline SERVEUR et n'avance
 /// qu'au rythme des snapshots. La hauteur d'une cabine, elle, est une grandeur purement locale —
 /// la melanger a une horloge reseau reintroduirait le retard qu'on cherche precisement a supprimer.
-static double g_tempsLocalS = 0.0;
-
 void PoserHauteurCabine(uint64_t cabineHash, float z, double instant)
 {
     if (cabineHash == 0)
@@ -3087,6 +3129,13 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // le consommateur retombe alors sur le yaw du corps.
             pose.lookYaw = DequantYaw(ps->look_yaw());
             pose.lookPitch = static_cast<float>(ps->look_pitch()) * (360.0f / 65536.0f);
+            if (ps->frame_position_valid() && ps->frame_position() != nullptr)
+            {
+                pose.frameX = DequantPos(ps->frame_position()->x());
+                pose.frameY = DequantPos(ps->frame_position()->y());
+                pose.frameZ = DequantPos(ps->frame_position()->z());
+                pose.framePositionValid = true;
+            }
             // `move_dir` voyage depuis le gel du palier 2 et n'etait lu nulle part : un joueur qui
             // marche en crabe ou a reculons etait rendu de face. On le RANGE des maintenant ; ce
             // qu'on saura en faire depend du backlog Q7.
@@ -3116,7 +3165,18 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 const auto porte = g_porteurParAvatar.find(ps->id());
                 if (porte != g_porteurParAvatar.end())
                 {
-                    if (porte->second.monte)
+                    // Le serveur peut perdre `frame` au milieu d'un trajet lorsque sa detection
+                    // d'occupation scintille. Detruire l'ancre ici recapture alors `dz` depuis une
+                    // pose reseau retardee : mesure du 2026-09-04, 0.18 -> 2.09 -> -0.16 -> 1.20 m
+                    // pendant UNE montee. Les portes etant fermees pendant le mouvement, un joueur
+                    // ne peut pas legitimement quitter la cabine : la hauteur locale fait foi.
+                    float plancherIgnore = 0.0f;
+                    bool cabineEnMouvement = false;
+                    const bool frameZeroTransitoire =
+                        HauteurCabineA(porte->second.cabine, g_tempsLocalS, plancherIgnore,
+                                        cabineEnMouvement)
+                        && cabineEnMouvement;
+                    if (!frameZeroTransitoire && porte->second.monte)
                     {
                         const auto corps = m_networkedEntitiesLookup.find(ps->id());
                         if (corps != m_networkedEntitiesLookup.end())
@@ -3125,7 +3185,10 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                                               porte->second.emplacement);
                         }
                     }
-                    g_porteurParAvatar.erase(porte);
+                    if (!frameZeroTransitoire)
+                    {
+                        g_porteurParAvatar.erase(porte);
+                    }
                 }
             }
             g_tamponsJoueurs[ps->id()].Pousser(snapshot->tick(), pose);
@@ -4640,10 +4703,9 @@ void NetworkGameSystem::HandleElevatorState(const cyberpunk_rp::protocol::Elevat
     {
         return;
     }
-    // CINQ arguments, pas neuf. `Red::CallVirtual` a une arite bornee, et surtout : le client n'a
-    // PAS besoin des durees. Il ne calcule aucune trajectoire — c'est le moteur du jeu qui deplace
-    // la cabine, avec ses propres constantes. `start_delay_ms`/`travel_time_ms`/`movement_state`
-    // restent sur le fil pour le serveur et pour un futur affichage, pas pour ce pont.
+    // Le moteur garde la courbe native, mais le serveur impose les deux paramètres temporels du
+    // trajet. Les jeter ici faisait repartir chaque client avec ses constantes locales et rendait
+    // toute vitesse configurée côté serveur purement théorique.
     // int32 pour le tick et l'elapsed : redscript n'a d'operateur de comparaison ni pour `Uint64`
     // ni pour `Uint32`. `depart_tick` n'est pas une date pour le client, c'est un IDENTIFIANT DE
     // TRAJET (« ai-je deja rejoue celui-ci ? ») — le tronquer garde deux departs consecutifs
@@ -4653,6 +4715,8 @@ void NetworkGameSystem::HandleElevatorState(const cyberpunk_rp::protocol::Elevat
     etat.etageActif = static_cast<int32_t>(msg->active_floor());
     etat.etageCible = static_cast<int32_t>(msg->target_floor());
     etat.departTick = static_cast<int32_t>(msg->depart_tick() & 0x7FFFFFFF);
+    etat.startDelayMs = static_cast<int32_t>(msg->start_delay_ms());
+    etat.travelTimeMs = static_cast<int32_t>(msg->travel_time_ms());
     etat.elapsedMs = static_cast<int32_t>(msg->elapsed_ms() & 0x7FFFFFFF);
 
     // BORNE DE FILE. Sans mod ascenseur installe, personne ne draine : la file grossirait d'un
@@ -6418,7 +6482,8 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
     if (it != m_appearances.end() && !it->second.esthetique.empty())
     {
         const auto essai = Tessera::SpawnEnrichi::Tenter(networkId, it->second.esthetique,
-                                                         worldPosition, it->second.corpsMasculin);
+                                                         worldPosition, it->second.corpsMasculin,
+                                                         it->second.baseRecord);
         if (essai.tente && !essai.diag.empty())
         {
             // Journalise MEME en cas de succes : c'est ce qui distingue « la voie enrichie a
@@ -7300,6 +7365,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ⭐ L'ancrage a-t-il fourni le Z ? Si oui, cette composante n'a AUCUN retard (lecture
     // locale du plancher), et l'extrapolation plus bas ne doit surtout pas s'y appliquer.
     bool ancrageAFourniZ = false;
+    bool ancrageBaseLocale = false;
     if constexpr (Tessera::kAncrageVerticalActif)
     {
         const auto ancre = g_porteurParAvatar.find(networkId);
@@ -7307,8 +7373,29 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         {
             float plancher = 0.0f;
             bool cabineEnMouvement = false;
-            bool planchierLu = HauteurCabineA(ancre->second.cabine, g_tempsLocalS, plancher,
+            bool planchierLu = false;
+
+            // Deux joueurs dans la MEME cabine partagent deja une base mobile parfaite : le
+            // PlayerPuppet local, porte par le moteur a la cadence de rendu. Le `dz` capture plus
+            // bas est precisement l'ecart d'origine NPCPuppet - PlayerPuppet ; on conserve donc cet
+            // ecart au lieu d'aligner leurs origines (erreur de F-ASC-079). Cela supprime la pente
+            // estimee a 20 Hz, donc le glissement aux rampes et le saut au passage en vitesse max.
+            if (g_joueurLocalPorte && g_cabineJoueurLocal == ancre->second.cabine)
+            {
+                const auto joueur = Cyberverse::Utils::GetPlayer();
+                if (joueur)
+                {
+                    plancher = Cyberverse::Utils::Entity_GetWorldPosition(joueur).Z;
+                    cabineEnMouvement = true; // ne jamais recapturer dz pendant un trajet partage
+                    planchierLu = true;
+                    ancrageBaseLocale = true;
+                }
+            }
+            if (!planchierLu)
+            {
+                planchierLu = HauteurCabineA(ancre->second.cabine, g_tempsLocalS, plancher,
                                               cabineEnMouvement);
+            }
             if (!planchierLu && ancre->second.plancherVu)
             {
                 // ⭐ REPLI SUR LE DERNIER PLANCHER CONNU, jamais sur la position du fil (voir
@@ -7322,7 +7409,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             {
                 ancre->second.plancherConnu = plancher;
                 ancre->second.plancherVu = true;
-                if (!ancre->second.ecartConnu || !cabineEnMouvement)
+                if (!ancre->second.ecartConnu)
                 {
                     // ⚠️ BORNE DE PLAUSIBILITE — cas C12 de la spec du 2026-09-01.
                     //
@@ -7340,7 +7427,16 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                     ancre->second.dz = (dzBrut > -1.0f && dzBrut < 3.0f) ? dzBrut : 0.0f;
                     ancre->second.ecartConnu = true;
                 }
-                positionVoulue.Z = plancher + ancre->second.dz;
+                if (pose.framePositionValid && !ancre->second.frameZReferenceConnue)
+                {
+                    ancre->second.frameZReference = pose.frameZ;
+                    ancre->second.frameZReferenceConnue = true;
+                }
+                const float mouvementRelatif = pose.framePositionValid
+                    && ancre->second.frameZReferenceConnue
+                    ? pose.frameZ - ancre->second.frameZReference
+                    : 0.0f;
+                positionVoulue.Z = plancher + ancre->second.dz + mouvementRelatif;
                 ancrageAFourniZ = true;
             }
         }
@@ -8102,62 +8198,19 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // A 9 m/s et 0,15 s de delai, le depassement vaut 1,35 m : la moitie de la hauteur
             // d'une cabine.
             //
-            // ⚠️ Et il est MASQUE quand l'observateur partage la cabine — le calage sur le joueur
-            // local, quelques lignes plus bas, ecrase Z juste apres. Il ne se voit donc QUE depuis
-            // le palier, c'est-a-dire le cas le moins teste. C'est exactement le genre de defaut
-            // qu'on ne trouve qu'en le cherchant.
+            // L'ancien calage sur l'origine du joueur local masquait ce depassement, mais il a ete
+            // retire : PlayerPuppet et NPCPuppet n'ont pas la meme origine verticale.
             if (!ancrageAFourniZ)
             {
                 positionVoulue.Z += vz * delaiBorne;
             }
 
-            // ── ⭐⭐⭐ LA CORRECTION COSMETIQUE : ON S'ALIGNE SUR LE JOUEUR LOCAL ────────────
-            //
-            // Demande de Lucas, 2026-08-27 : « la hauteur, ce n'est pas grave dans les ascenseurs,
-            // on peut tolerer quelques dizaines de centimetres de correction pour avoir quelque
-            // chose de propre — que chaque client corrige ca de maniere esthetique. »
-            //
-            // C'est la bonne idee, et c'est la pratique standard : la position AUTORITAIRE et la
-            // position AFFICHEE n'ont aucune raison d'etre la meme. Le serveur garde la verite ;
-            // le rendu montre ce qui est juste a l'oeil.
-            //
-            // ⭐ Le point cle : il existe une reference locale, rendue MAINTENANT, exempte de tout
-            // retard reseau — LE JOUEUR LOCAL. S'il est dans la meme cabine, les deux corps sont
-            // sur le MEME plancher, donc a la MEME altitude. On n'a besoin de connaitre ni la
-            // cabine, ni sa geometrie, ni sa courbe : juste ou sont nos propres pieds.
-            //
-            // ⚠️ C'est aussi la seule voie qui ne depend d'AUCUN des accesseurs qui ont echoue
-            // cette session (F-ASC-041, hauteur de composant ; la geometrie d'etage ; la courbe de
-            // trajet). `Entity_GetWorldPosition` sur le joueur local est le chemin le plus eprouve
-            // de tout le mod.
-            //
-            // ── LES DEUX GARDES, ET POURQUOI ELLES SONT ETROITES ──────────────────────────────
-            //
-            // 1. PROXIMITE HORIZONTALE. Une cabine fait quelques metres ; au-dela, les deux corps
-            //    ne sont pas sur le meme plancher et aligner serait FAUX. 3 m couvre une cabine
-            //    d'ascenseur et exclut a peu pres tout le reste.
-            // 2. ECART VERTICAL BORNE. Si l'ecart depasse 2 m, ce n'est pas un retard de tampon :
-            //    c'est un autre etage, une autre cabine, ou une erreur. On ne corrige alors PAS —
-            //    mieux vaut un avatar visiblement mal place qu'un avatar teleporte par surprise.
-            //
-            // ⚠️ ET C'EST BIEN COSMETIQUE : on ne touche qu'a `positionVoulue`, c'est-a-dire a ce
-            // qu'on AFFICHE. Rien ne remonte au serveur, aucune pose n'est reecrite, et la position
-            // autoritaire de l'autre joueur reste la sienne. Si le serveur et l'ecran divergent de
-            // 30 cm dans une cabine, personne ne peut le voir et rien n'en depend.
-            static constexpr float kRayonMemePlancherM = 3.0f;
-            static constexpr float kEcartVerticalMaxM = 2.0f;
-            if (const auto joueurLocal = Cyberverse::Utils::GetPlayer())
-            {
-                const auto posLocale = Cyberverse::Utils::Entity_GetWorldPosition(joueurLocal);
-                const float dxl = positionVoulue.X - posLocale.X;
-                const float dyl = positionVoulue.Y - posLocale.Y;
-                const float distanceHorizontale = std::sqrt(dxl * dxl + dyl * dyl);
-                const float ecartVertical = std::fabs(positionVoulue.Z - posLocale.Z);
-                if (distanceHorizontale < kRayonMemePlancherM && ecartVertical < kEcartVerticalMaxM)
-                {
-                    positionVoulue.Z = posLocale.Z;
-                }
-            }
+            // ── ⛔ NE PAS ALIGNER DEUX ORIGINES D'ENTITE DIFFERENTES ───────────────────────
+            // Mesure du 2026-09-04 : pendant un meme trajet, `plancher + dz` etait juste, puis ce
+            // bloc le remplacait par l'origine du PlayerPuppet local. L'avatar distant est un
+            // NPCPuppet : leurs origines ne representent pas la meme hauteur de pieds. La cible
+            // publiee s'ecartait ainsi du plancher de 0,5 a 1,8 m et le corps le suivait fidèlement.
+            // Le plancher local est deja la reference commune ; `plancher + dz` est la seule cible.
         }
 
         // Une cible qui defile se suit a la CADENCE DES SNAPSHOTS, pas plus vite : corriger a
@@ -8168,9 +8221,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
 
         // ⚠️ L'ERREUR SE RECALCULE ICI, CONTRE LA CIBLE FINALE — et pas avant.
         //
-        // `deriveImmobile` a ete calcule bien plus haut, AVANT l'extrapolation et AVANT le calage
-        // vertical sur le joueur local. Or ces deux etapes deplacent `positionVoulue`, parfois de
-        // plusieurs metres. Tester la bande morte sur l'ancienne valeur, c'est decider d'un
+        // `deriveImmobile` a ete calcule bien plus haut, AVANT l'extrapolation et AVANT l'ancrage
+        // vertical. Or ces etapes deplacent `positionVoulue`, parfois de plusieurs metres. Tester
+        // la bande morte sur l'ancienne valeur, c'est decider d'un
         // placement d'apres une erreur qui n'existe plus.
         //
         // ⚠️ Et le defaut ne se voit PAS pendant un trajet — l'erreur y est grande dans les deux
@@ -8182,9 +8235,23 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const float efz = positionVoulue.Z - placeActuelle.Z;
         const float deriveFinale = std::sqrt(efx * efx + efy * efy + efz * efz);
 
+        // Un passager doit suivre le plancher a la cadence de rendu. `SetEntityPosition` empile
+        // un AITeleportCommand a 20 Hz : mesure du 2026-09-04, cible correcte mais corps jusqu'a
+        // 0,67 m au-dessus pendant une descente. L'entree active du moveComponent est la seule
+        // ecriture directe deja prouvee (F-PLY-337) et ne remplace aucune commande d'animation.
+        bool placementDirectPassager = false;
+        if (passager && !g_suspendreCorrections)
+        {
+            bool ecrit = false;
+            placementDirectPassager =
+                Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", ecrit,
+                                 entityId, positionVoulue)
+                && ecrit;
+        }
+
         // ⭐ PLUS DE `!passager` ICI : un passager passe desormais par ce regime, comme tout
         // avatar dont la cible defile. Voir le pave ci-dessus.
-        if (!g_suspendreCorrections
+        if (!placementDirectPassager && !g_suspendreCorrections
             && (deriveFinale > bandeMorte || deriveYaw > kBandeMorteYawDeg)
             && suiviImmobile.depuisPlacementImmobileS >= periode)
         {
@@ -8258,11 +8325,12 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                                plancherTrace, bougeTrace);
                 SDK->logger->InfoF(PLUGIN,
                     "[passager %llu] plancher=%.3f (lu=%d bouge=%d) dz=%.3f cible=%.3f reel=%.3f "
-                    "ecart=%.3f regime=%s ancreZ=%d defile=%.3f",
+                    "ecart=%.3f regime=%s ancreZ=%d baseLocale=%d direct=%d defile=%.3f",
                     networkId, plancherTrace, lu ? 1 : 0, bougeTrace ? 1 : 0,
                     g_porteurParAvatar[networkId].dz, positionVoulue.Z, placeActuelle.Z,
                     placeActuelle.Z - positionVoulue.Z, ciblePortee ? "portee" : "immobile",
-                    ancrageAFourniZ ? 1 : 0, defilementCible);
+                    ancrageAFourniZ ? 1 : 0, ancrageBaseLocale ? 1 : 0,
+                    placementDirectPassager ? 1 : 0, defilementCible);
             }
         }
 

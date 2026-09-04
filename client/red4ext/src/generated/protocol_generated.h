@@ -849,7 +849,9 @@ struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_FRAME = 14,
     VT_SLOT = 16,
     VT_LOOK_YAW = 18,
-    VT_LOOK_PITCH = 20
+    VT_LOOK_PITCH = 20,
+    VT_FRAME_POSITION = 22,
+    VT_FRAME_POSITION_VALID = 24
   };
   const cyberpunk_rp::protocol::QVec3 *position() const {
     return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_POSITION);
@@ -878,6 +880,12 @@ struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   int16_t look_pitch() const {
     return GetField<int16_t>(VT_LOOK_PITCH, 0);
   }
+  const cyberpunk_rp::protocol::QVec3 *frame_position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_FRAME_POSITION);
+  }
+  bool frame_position_valid() const {
+    return GetField<uint8_t>(VT_FRAME_POSITION_VALID, 0) != 0;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -890,6 +898,8 @@ struct PositionUpdate FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
            VerifyField<uint16_t>(verifier, VT_LOOK_YAW, 2) &&
            VerifyField<int16_t>(verifier, VT_LOOK_PITCH, 2) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_FRAME_POSITION, 4) &&
+           VerifyField<uint8_t>(verifier, VT_FRAME_POSITION_VALID, 1) &&
            verifier.EndTable();
   }
 };
@@ -925,6 +935,12 @@ struct PositionUpdateBuilder {
   void add_look_pitch(int16_t look_pitch) {
     fbb_.AddElement<int16_t>(PositionUpdate::VT_LOOK_PITCH, look_pitch, 0);
   }
+  void add_frame_position(const cyberpunk_rp::protocol::QVec3 *frame_position) {
+    fbb_.AddStruct(PositionUpdate::VT_FRAME_POSITION, frame_position);
+  }
+  void add_frame_position_valid(bool frame_position_valid) {
+    fbb_.AddElement<uint8_t>(PositionUpdate::VT_FRAME_POSITION_VALID, static_cast<uint8_t>(frame_position_valid), 0);
+  }
   explicit PositionUpdateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -946,14 +962,18 @@ inline ::flatbuffers::Offset<PositionUpdate> CreatePositionUpdate(
     uint64_t frame = 0,
     uint64_t slot = 0,
     uint16_t look_yaw = 0,
-    int16_t look_pitch = 0) {
+    int16_t look_pitch = 0,
+    const cyberpunk_rp::protocol::QVec3 *frame_position = nullptr,
+    bool frame_position_valid = false) {
   PositionUpdateBuilder builder_(_fbb);
   builder_.add_slot(slot);
   builder_.add_frame(frame);
+  builder_.add_frame_position(frame_position);
   builder_.add_position(position);
   builder_.add_look_pitch(look_pitch);
   builder_.add_look_yaw(look_yaw);
   builder_.add_yaw(yaw);
+  builder_.add_frame_position_valid(frame_position_valid);
   builder_.add_flags(flags);
   builder_.add_move_dir(move_dir);
   builder_.add_locomotion(locomotion);
@@ -974,7 +994,9 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_FRAME = 20,
     VT_SLOT = 22,
     VT_LOOK_YAW = 24,
-    VT_LOOK_PITCH = 26
+    VT_LOOK_PITCH = 26,
+    VT_FRAME_POSITION = 28,
+    VT_FRAME_POSITION_VALID = 30
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -1012,6 +1034,12 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   int16_t look_pitch() const {
     return GetField<int16_t>(VT_LOOK_PITCH, 0);
   }
+  const cyberpunk_rp::protocol::QVec3 *frame_position() const {
+    return GetStruct<const cyberpunk_rp::protocol::QVec3 *>(VT_FRAME_POSITION);
+  }
+  bool frame_position_valid() const {
+    return GetField<uint8_t>(VT_FRAME_POSITION_VALID, 0) != 0;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1027,6 +1055,8 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_SLOT, 8) &&
            VerifyField<uint16_t>(verifier, VT_LOOK_YAW, 2) &&
            VerifyField<int16_t>(verifier, VT_LOOK_PITCH, 2) &&
+           VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_FRAME_POSITION, 4) &&
+           VerifyField<uint8_t>(verifier, VT_FRAME_POSITION_VALID, 1) &&
            verifier.EndTable();
   }
 };
@@ -1071,6 +1101,12 @@ struct PlayerStateBuilder {
   void add_look_pitch(int16_t look_pitch) {
     fbb_.AddElement<int16_t>(PlayerState::VT_LOOK_PITCH, look_pitch, 0);
   }
+  void add_frame_position(const cyberpunk_rp::protocol::QVec3 *frame_position) {
+    fbb_.AddStruct(PlayerState::VT_FRAME_POSITION, frame_position);
+  }
+  void add_frame_position_valid(bool frame_position_valid) {
+    fbb_.AddElement<uint8_t>(PlayerState::VT_FRAME_POSITION_VALID, static_cast<uint8_t>(frame_position_valid), 0);
+  }
   explicit PlayerStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1095,17 +1131,21 @@ inline ::flatbuffers::Offset<PlayerState> CreatePlayerState(
     uint64_t frame = 0,
     uint64_t slot = 0,
     uint16_t look_yaw = 0,
-    int16_t look_pitch = 0) {
+    int16_t look_pitch = 0,
+    const cyberpunk_rp::protocol::QVec3 *frame_position = nullptr,
+    bool frame_position_valid = false) {
   PlayerStateBuilder builder_(_fbb);
   builder_.add_slot(slot);
   builder_.add_frame(frame);
   builder_.add_id(id);
+  builder_.add_frame_position(frame_position);
   builder_.add_space_id(space_id);
   builder_.add_sustained(sustained);
   builder_.add_position(position);
   builder_.add_look_pitch(look_pitch);
   builder_.add_look_yaw(look_yaw);
   builder_.add_yaw(yaw);
+  builder_.add_frame_position_valid(frame_position_valid);
   builder_.add_flags(flags);
   builder_.add_move_dir(move_dir);
   builder_.add_locomotion(locomotion);

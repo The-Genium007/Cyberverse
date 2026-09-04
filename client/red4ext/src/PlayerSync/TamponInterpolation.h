@@ -132,6 +132,10 @@ struct Pose
     /// C'est `lookState.lookDir` de gameMuppetState (spec 2026-08-15). (0,0) = non rapporte.
     float lookYaw = 0.0f;
     float lookPitch = 0.0f;
+    float frameX = 0.0f;
+    float frameY = 0.0f;
+    float frameZ = 0.0f;
+    bool framePositionValid = false;
 };
 
 /// Ce que le tampon rend pour un instant donné.
@@ -146,6 +150,10 @@ struct PoseRendue
     /// saute. Non interpole = pas la peine de le repliquer finement.
     float lookYaw = 0.0f;
     float lookPitch = 0.0f;
+    float frameX = 0.0f;
+    float frameY = 0.0f;
+    float frameZ = 0.0f;
+    bool framePositionValid = false;
     /// Vitesse monde en m/s, dérivée de deux échantillons consécutifs. C'est elle qui
     /// donne gratuitement l'extrapolation bornée ET le point de visée devant l'avatar —
     /// l'équivalent joueur de `NpcState.move_target`, sans nouveau champ de protocole
@@ -520,6 +528,10 @@ private:
         r.yaw = NormaliserDegres(p.yaw);
         r.lookYaw = NormaliserDegres(p.lookYaw);
         r.lookPitch = p.lookPitch;
+        r.frameX = p.frameX;
+        r.frameY = p.frameY;
+        r.frameZ = p.frameZ;
+        r.framePositionValid = p.framePositionValid;
         r.locomotion = p.locomotion;
         r.moveDir = p.moveDir;
         r.sustained = p.sustained;
@@ -540,6 +552,13 @@ private:
         // d'un snapshot a l'autre se verrait autant qu'un corps qui saute.
         r.lookYaw = LerpAngle(a.pose.lookYaw, b.pose.lookYaw, t);
         r.lookPitch = a.pose.lookPitch + (b.pose.lookPitch - a.pose.lookPitch) * t;
+        if (a.pose.framePositionValid && b.pose.framePositionValid)
+        {
+            r.frameX = a.pose.frameX + (b.pose.frameX - a.pose.frameX) * t;
+            r.frameY = a.pose.frameY + (b.pose.frameY - a.pose.frameY) * t;
+            r.frameZ = a.pose.frameZ + (b.pose.frameZ - a.pose.frameZ) * t;
+            r.framePositionValid = true;
+        }
         r.locomotion = a.pose.locomotion;
         r.moveDir = a.pose.moveDir;
         r.sustained = a.pose.sustained;

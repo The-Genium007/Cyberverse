@@ -427,7 +427,8 @@ constexpr std::uint32_t kPassagesMax = 250;   // ~10 s : 30 passages ne faisaien
 static std::map<std::uint64_t, EnAttente> g_enAttente;
 
 Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob,
-                const RED4ext::Vector4& aPosition, bool aCorpsMasculin)
+                const RED4ext::Vector4& aPosition, bool aCorpsMasculin,
+                std::uint64_t aRecordServeur)
 {
     Resultat r;
 
@@ -604,10 +605,19 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     // que ce code faisait.
     //
     // Le record redevient celui de la morphologie seule, le temps de reprendre proprement.
+    // ⭐⭐⭐ ON PREND LE RECORD DU SERVEUR QUAND IL EN DESIGNE UN — il porte la CARNATION.
+    //
+    // Une tentative precedente calculait la teinte ICI, en reconnaissant un nom dans la charge :
+    // elle a echoue, parce que le second champ d'une paire ne se decode pas comme on le croyait.
+    // Le serveur, lui, a `skin_color` EN CLAIR dans `options_apparence` — la forme transparente de
+    // la meme esthetique. La decision lui revient donc, et ce code ne fait que l'appliquer.
+    //
+    // ⚠️ `0` retombe sur le record de la morphologie. Un record inexistant ferait echouer le spawn
+    // EN SILENCE, et l'avatar se rendrait en passant generique — indiscernable d'une panne reseau.
     const std::string record = std::string(aCorpsMasculin ? kRecordEnrichi : kRecordEnrichiFeminin);
     (void)&RecordPourCarnation;
-    const RED4ext::TweakDBID recordId(record.c_str());
-    const std::uint64_t aRecord = recordId.value;
+    const std::uint64_t aRecord =
+        aRecordServeur != 0 ? aRecordServeur : RED4ext::TweakDBID(record.c_str()).value;
 
     // ── LES DEUX OBJETS DU JEU ──────────────────────────────────────────────────────────────────
     auto* pms = SystemeParNom("gamePhotoModeSystem");
