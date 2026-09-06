@@ -294,9 +294,6 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     let brasBascules = 0;
     let brasNommes = "";
     let peauVue = 0;
-    // ⚠️ Vrai dès qu'UNE peau de bras a été allumée : les suivantes seront éteintes. Voir le
-    // commentaire dans la boucle — le natif en monte deux, et deux, ça fait quatre bras.
-    let peauDejaAllumee = false;
     let j = 0;
     while j < ArraySize(composants) {
         let nom = NameToString(composants[j].GetName());
@@ -308,26 +305,31 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
         // transposé.
         if TesseraEstPeauDeBras(nom) {
             peauVue += 1;
-            // ── ⛔ UNE SEULE PEAU DE BRAS ALLUMÉE, JAMAIS DEUX ──────────────────────────────
+            // ── ⛔⛔ J'AI ESSAYÉ DE N'EN ALLUMER QU'UNE, ET ÇA A ARRACHÉ UN BRAS ────────────
             //
-            // Défaut rapporté par Lucas le 2026-09-06 : « LUCAS1 a un bug, il a deux paires de
-            // bras — il a été créé comme ça ». Mesuré : le spawner natif monte DEUX meshes de
-            // peau de bras, au même nom de base et à suffixe numérique différent —
-            // `a0_000_ma_base__full_ag_hq1491` et `…hq6168` au masculin,
-            // `a0_001_pwa_base_hq__full` et `…full8640` au féminin.
+            // Le raisonnement était : le spawner monte deux meshes de peau de bras au même nom
+            // de base et à suffixe numérique différent (`…_ag_hq1491` / `…hq6168` au masculin,
+            // `…_hq__full` / `…full8640` au féminin), donc ce sont des copies, donc on n'en
+            // allume qu'une — le patron des jambes (`TesseraJambes`).
             //
-            // ⚠️ `PurgerDoublons` ne peut PAS les voir : il compare des noms IDENTIQUES, et
-            // ceux-là diffèrent par leur suffixe. Le défaut était invisible chez KIMY tant que
-            // ses bras gorille recouvraient les deux copies — il ne se voyait que sur un
-            // personnage SANS cyberware de bras.
+            // ⛔ RÉFUTÉ PAR LA MESURE, le 2026-09-06. Verdict de Lucas : « pas de bras droit,
+            // invisible, alors que le bras gauche est là ». Le journal disait exactement ce que
+            // j'avais fait : `1 composant de peau bascule — a0_001_pwa_base_hq__full8640[off]`.
+            // Les deux composants ne sont pas des copies : ce sont **les deux bras**.
             //
-            // ⭐ On applique donc le patron déjà en place pour les jambes (`TesseraJambes`) :
-            // une seule variante allumée, toutes les autres éteintes. La première rencontrée
-            // fait l'affaire — ce sont des copies du même mesh.
-            let peauVoulue = !remplaceAvantBras && !peauDejaAllumee;
-            if peauVoulue {
-                peauDejaAllumee = true;
-            }
+            // ⚠️ LA FAUTE DE MÉTHODE, et elle vaut d'être écrite : j'ai déduit « doublon » d'un
+            // MOTIF DE NOMMAGE, puis j'ai agi dessus. Un suffixe numérique ne dit pas qu'un mesh
+            // est redondant — il ne dit rien du tout. L'inventaire complet était déjà là pour
+            // trancher, et je ne l'ai pas lu avant d'écrire la règle.
+            //
+            // ⭐ On rallume donc TOUS les composants de peau de bras. C'est l'état natif, celui
+            // qui n'a jamais fait perdre un membre à personne. Les « trois bras » signalés sur
+            // l'avatar masculin restent à expliquer — probablement ses lames mantis, montées
+            // par-dessus — et ça se tranchera sur l'inventaire, pas sur une intuition.
+            //
+            // ⚠️ Perdre un bras est strictement pire qu'un doublon : l'un se remarque comme un
+            // défaut de rendu, l'autre comme une mutilation.
+            let peauVoulue = !remplaceAvantBras;
             if !Equals(composants[j].IsEnabled(), peauVoulue) {
                 composants[j].Toggle(peauVoulue);
                 brasBascules += 1;
