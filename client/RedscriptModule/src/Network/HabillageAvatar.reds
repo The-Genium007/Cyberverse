@@ -137,7 +137,79 @@ func TesseraEffetsPilotes() -> array<CName> {
 // réglage de nudité.
 func TesseraEstGardeRobe(nom: String) -> Bool {
     return StrEndsWith(nom, "_m") || StrEndsWith(nom, "_w")
-        || StrContains(nom, "_m__") || StrContains(nom, "_w__");
+        || StrContains(nom, "_m__") || StrContains(nom, "_w__")
+        || TesseraEstCyberwareCuit(nom);
+}
+
+// ⛔⛔ LE CYBERWARE S'ALLUMAIT ET NE S'ETEIGNAIT JAMAIS — mesuré le 2026-09-06.
+//
+// Symptôme : `porte` passé à `false` côté serveur, la clé disparaît bien de la liste demandée…
+// et le journal dit `2 vetement(s) demande(s), 0 allume(s), **0 retire(s)**`. Les avant-bras
+// gorille restaient montés indéfiniment. Verdict de Lucas : « je n'ai pas pu voir de changement
+// physique majeur ».
+//
+// ⭐ LA CAUSE TIENT DANS UN UNDERSCORE. La règle ci-dessus reconnaît une pièce à nous par son
+// suffixe de morphologie — `_m` / `_w`. Elle marche pour les vêtements parce que leur
+// `appearanceName` CDPR finit déjà par un underscore (`t1_tshirt_04_old_02_` + `w`). Le
+// cyberware, lui, n'en a pas : `holstered_strong` + `w` donne **`holstered_strongw`**, qui ne
+// finit pas par `_w`. Le composant n'était donc reconnu comme nôtre par personne, et la branche
+// de retrait ne le voyait pas.
+//
+// ⚠️ C'est le MEME défaut que celui du 2026-09-03 — « la passe était ADDITIVE SEULE » — mais
+// déplacé d'un cran : la branche de retrait existe désormais, c'est son GARDE qui aveuglait.
+// Un correctif qui ajoute une branche doit vérifier que sa condition d'entrée couvre tous les
+// cas qu'il prétend traiter, sinon il corrige la moitié du problème et ferme le dossier.
+//
+// ⚠️⚠️ ET `stage_1_` PASSAIT PAR ACCIDENT : il finit par `_` , donc `stage_1_w` finit par `_w`.
+// Une famille sur neuf marchait, pour une raison qui n'a rien à voir avec le mécanisme. C'est
+// exactement le genre de coïncidence qui fait conclure « ça marche » sur un échantillon.
+//
+// ⭐ LA LISTE EST FERMEE, ET C'EST DELIBERE — même raison que `TesseraEffetsPilotes`. On
+// n'éteint que ce qu'on sait avoir posé soi-même. Elle doit suivre les groupes de
+// `tools/re-probe/entites/cuire-cyberware.py` ; les trois tatouages n'y figurent pas parce que
+// leur nom finit déjà par `_m`/`_w` et que la règle générale les couvre.
+//
+// ⚠️ `StrBeginsWith`, jamais `StrContains` : le CORPS porte `a0_001__personal_link_tpp4537` et
+// `a0_001__personal_link_default_holstered`, qui contiennent nos mots-clés sans être à nous.
+// Les éteindre arracherait le connecteur de poignet du joueur.
+// Vrai si ce composant est la PEAU d'un bras du corps — celle qu'un bras gorille recouvre.
+//
+// ⛔ MA PREMIÈRE VERSION ÉTAIT FAUSSE et trouvait exactement ZÉRO peau sur un corps féminin, ce
+// qui se lisait comme « rien à faire ». Elle exigeait `a0_000_` puis `_base__`, noms tirés d'un
+// `grep` qui recollait le nom du composant à son `meshAppearance` : dans
+// `a0_000_pwa_base__03_ca_senna`, seul `a0_…_base` est le composant, `03_ca_senna` est la
+// carnation qui suit. Un artefact d'outil lu comme une mesure.
+//
+// ⭐ LES VRAIS NOMS, relevés sur deux avatars vivants simultanés le 2026-09-06 :
+//
+//     PEAU     a0_001_pwa_base_hq__full · a0_001_pwa_base_hq__full8640      (féminin)
+//              a0_000_ma_base__full_ag_hq1491 · …hq6168                     (masculin)
+//     ONGLES   a0_000_pwa_base_nails_l/_r · a0_000_pma_base__nails_l/_r
+//     TATOUAGE a0_000__tattoo_yakuza_r_tattoo_yakuza_w
+//     POIGNET  a0_001__personal_link_tpp4537
+//
+// ⚠️ Trois pièges qu'aucune nomenclature ne laisse deviner : le numéro varie (`a0_000_` ET
+// `a0_001_`), le féminin n'écrit pas le même motif que le masculin (`base_hq__full` contre
+// `base__full_ag_hq`), et les ongles portent `base_nails` avec UN underscore au féminin, DEUX au
+// masculin. Le seul discriminant qui tient sur les quatre peaux et sur aucune autre famille est
+// le mot `full`. Les exclusions nominales qui suivent sont gratuites et disent ce qu'on refuse
+// d'éteindre.
+func TesseraEstPeauDeBras(nom: String) -> Bool {
+    return StrBeginsWith(nom, "a0_")
+        && StrContains(nom, "_base")
+        && StrContains(nom, "full")
+        && !StrContains(nom, "nails")
+        && !StrContains(nom, "tattoo")
+        && !StrContains(nom, "personal_link");
+}
+
+func TesseraEstCyberwareCuit(nom: String) -> Bool {
+    return StrBeginsWith(nom, "holstered_strong")
+        || StrBeginsWith(nom, "holstered_mantis")
+        || StrBeginsWith(nom, "holstered_nanowire")
+        || StrBeginsWith(nom, "holstered_launcher")
+        || StrBeginsWith(nom, "personal_link_advanced")
+        || StrBeginsWith(nom, "stage_1_");
 }
 
 // Appelée par `PiloterAvatar` (C++) par créneaux bornés — le seul chemin qui atteint les corps de
@@ -186,6 +258,31 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
         i += 1;
     }
 
+    // ── ⭐⭐⭐ LE CYBERWARE QUI REMPLACE L'AVANT-BRAS, DÉCIDÉ ICI ET PAS AILLEURS ───────────
+    //
+    // ⛔ POURQUOI CETTE RÈGLE A DÉMÉNAGÉ. Elle vivait dans la boucle de purge, cadencée à 2 s,
+    // pendant que l'habillage est cadencé par le C++. Deux horloges, donc un décalage — mesuré le
+    // 2026-09-06 : les meshes gorille s'éteignent à T+2,2 s, la peau du bras ne revient qu'à
+    // T+3,7 s. **Pendant 1,5 s le personnage n'a NI bras gorille NI peau de bras.** Verdict de
+    // Lucas : « on a vu l'allumage et l'extinction de ses anciens et l'allumage de ses nouveaux ».
+    // Ce n'était pas une impression : c'était deux horloges.
+    //
+    // ⭐ Et le déménagement corrige plus que le décalage. Ici on lit l'INTENTION DU SERVEUR — les
+    // clés demandées — au lieu de déduire l'état depuis les composants allumés. C'est une source
+    // plus directe : elle est juste dès la première passe, même avant que le mesh soit monté.
+    let remplaceAvantBras = false;
+    let ka = 0;
+    while ka < ArraySize(cles) {
+        // ⚠️ UNE SEULE FAMILLE SUR QUATRE, et c'est délibéré. Mantis, monofil et lance-projectiles
+        // se replient DANS l'avant-bras en vanilla : la peau reste visible autour d'eux. Les
+        // masquer donnerait des bras manquants — on échangerait un défaut contre un pire.
+        // Non mesuré pour ces trois-là, et un non mesuré ne s'applique pas.
+        if StrBeginsWith(cles[ka], "holstered_strong") {
+            remplaceAvantBras = true;
+        }
+        ka += 1;
+    }
+
     // ── LA POSE ────────────────────────────────────────────────────────────────────────────
     //
     // ⚠️ On parcourt les composants UNE fois et on décide pour chacun, plutôt que de chercher
@@ -194,9 +291,28 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     let composants = corps.GetComponents();
     let allumes = 0;
     let retires = 0;
+    let brasBascules = 0;
+    let brasNommes = "";
+    let peauVue = 0;
     let j = 0;
     while j < ArraySize(composants) {
         let nom = NameToString(composants[j].GetName());
+
+        // La peau du bras suit le cyberware, DANS LA MÊME PASSE que lui.
+        //
+        // ⚠️ C'est une PROJECTION, pas une bascule : retirer le cyberware rend le membre. Sans
+        // cette symétrie on ne saurait que masquer, jamais revenir — le défaut du 2026-09-03,
+        // transposé.
+        if TesseraEstPeauDeBras(nom) {
+            peauVue += 1;
+            let peauVoulue = !remplaceAvantBras;
+            if !Equals(composants[j].IsEnabled(), peauVoulue) {
+                composants[j].Toggle(peauVoulue);
+                brasBascules += 1;
+                brasNommes += (Equals(brasNommes, "") ? "" : ", ") + nom;
+            }
+        }
+
         let k = 0;
         let voulu = false;
         while k < ArraySize(cles) {
@@ -296,6 +412,28 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
 
     TesseraJournalHabillage(
         s"avatar \(EntityID.ToDebugString(cible)) : \(ArraySize(cles)) vetement(s) demande(s), \(allumes) allume(s), \(retires) retire(s) [corps \(masculin ? "M" : "F")]");
+
+    // ── LE VERDICT DES BRAS, DANS LA MÊME LIGNE DE TEMPS QUE L'HABILLAGE ────────────────────
+    if brasBascules > 0 {
+        TesseraJournalHabillage(
+            s"  bras remplaces : \(brasBascules) composant(s) de peau \(remplaceAvantBras ? "eteint" : "rallume")(s) — \(brasNommes)");
+    } else {
+        // ── ⭐⭐⭐ LE SEUL SILENCE QU'ON REFUSE ────────────────────────────────────────────
+        //
+        // « 0 basculé » a deux causes opposées : rien à faire (cas nominal), ou le cyberware est
+        // demandé ET la peau ne se reconnaît plus. Le second est ce qui arrivera à la prochaine
+        // montée de version du jeu — ces noms viennent de la charge d'esthétique, donc de CDPR —
+        // et la règle deviendrait alors **inerte en silence**, bras dupliqués à nouveau, sans une
+        // ligne d'erreur.
+        //
+        // ⚠️ CE N'EST PAS THÉORIQUE : ma première version de `TesseraEstPeauDeBras` était fausse
+        // et trouvait zéro peau sur le corps féminin. Sans ce test elle serait passée pour
+        // « rien à faire ». C'est cette ligne qui l'a nommée en une lecture.
+        if remplaceAvantBras && peauVue == 0 {
+            TesseraJournalHabillage(
+                "  ⚠ bras gorille demandes mais AUCUNE peau de bras reconnue — la regle est inerte");
+        }
+    }
 
     // ── ⚠️ LE PLAFOND DEVIENT MESURÉ, AU LIEU DE RESTER INDISCERNABLE D'UNE PANNE ──────────────
     //
