@@ -7944,13 +7944,40 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                         if (const auto renaissance = g_visageEnReconstruction.find(networkId);
                             renaissance != g_visageEnReconstruction.end())
                         {
+                            // ── ⚠️ DEUX EFFETS, PARCE QU'UN SEUL N'A RIEN DONNE A L'ECRAN ──────
+                            //
+                            // `johnny_appear_glitch` rend `OK` a chaque fois — l'effet PART. Mais
+                            // Lucas ne l'a jamais vu, sur trois reconstructions : « on n'a toujours
+                            // pas le flou quand on a le changement physique ».
+                            //
+                            // ⛔ « L'appel a reussi » et « l'effet est visible » sont deux choses
+                            // differentes, et c'est le meme piege que « accepte ≠ execute » — sauf
+                            // qu'ici l'ecart est entre le moteur et l'oeil. Il est possible que cet
+                            // effet-la soit lie au mesh de Johnny et ne rende rien sur un autre
+                            // corps.
+                            //
+                            // ⭐ On en joue donc DEUX parmi les cinq reellement declares sur
+                            // l'entite (`camo_intro_vfx`, `hacks_system_collapse`,
+                            // `johnny_appear_glitch`, `paperdoll_item_switch_glitch`,
+                            // `yellow_camo`). `hacks_system_collapse` est le glitch plein-corps des
+                            // quickhacks : s'il ne se voit pas non plus, c'est la VOIE des effets
+                            // qui est en cause, pas le choix du nom — et ca, une seule observation
+                            // le dira, au lieu de cinq.
+                            //
+                            // ⚠️ Chaque retour est journalise separement : « les deux ont echoue »
+                            // et « les deux ont reussi sans rien montrer » sont deux diagnostics
+                            // opposes, et un seul booleen les confondrait.
                             bool joue = false;
                             Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue, entityId,
                                              RED4ext::CName("johnny_appear_glitch"));
+                            bool joue2 = false;
+                            Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue2, entityId,
+                                             RED4ext::CName("hacks_system_collapse"));
                             g_visageEnReconstruction.erase(renaissance);
                             SDK->logger->InfoF(PLUGIN,
-                                "[visage %llu] renaissance masquee par johnny_appear_glitch : %s",
-                                networkId, joue ? "OK" : "ECHEC (entite non resolue)");
+                                "[visage %llu] renaissance : johnny_appear_glitch=%s "
+                                "hacks_system_collapse=%s",
+                                networkId, joue ? "OK" : "ECHEC", joue2 ? "OK" : "ECHEC");
 
                             // ── ⭐⭐⭐ LE NEUF EST PROUVE VIVANT : ON PEUT ETEINDRE L'ANCIEN ──
                             //
