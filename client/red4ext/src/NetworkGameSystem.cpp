@@ -841,7 +841,24 @@ std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 // l'horloge — une cadence ne se deduit pas d'un compteur dont on ne connait pas la frequence.
 constexpr std::uint32_t kPassesHabillage = 10;
 constexpr auto kDelaiAvantHabillage = std::chrono::milliseconds(2000);
-constexpr auto kIntervallePasseHabillage = std::chrono::milliseconds(1000);
+// ── ⭐ RAMENE DE 1000 A 250 ms LE 2026-09-06 ────────────────────────────────────────────────
+//
+// Verdict de Lucas apres une reconstruction de visage : « ca met un peu de temps pour se
+// rhabiller », puis « le rehabillage prend enormement de temps ». Mesure : corps neuf a
+// 17:36:44,784, habille a 17:36:49,012 — 4,2 s.
+//
+// ⚠️ CE N'EST PAS CET INTERVALLE QUI PORTE L'ESSENTIEL, et il faut le dire pour ne pas le
+// recouper deux fois. Le budget se decompose en ~2,2 s de naissance d'entite + les 2 s de
+// `kDelaiAvantHabillage`. Cette garde-la protege un corps qui n'a pas fini de monter ses
+// composants, et l'habiller trop tot produit le pire defaut du domaine : un ordre ACCEPTE SANS
+// EFFET, donc un vetement qui n'apparaitra jamais et rien pour le dire. On n'y touche pas sans
+// mesurer quand les composants sont reellement prets.
+//
+// ⭐ En revanche l'intervalle entre PASSES est une pure queue : quand la premiere passe tombe sur
+// un corps encore incomplet, la reprise attendait une seconde pleine. A 250 ms elle revient
+// quatre fois plus vite, et les dix passes tiennent en 2,5 s au lieu de 10 s. Le risque est nul
+// dans ce sens : on ESSAIE plus souvent, on n'essaie pas plus tot.
+constexpr auto kIntervallePasseHabillage = std::chrono::milliseconds(250);
 // ⭐ LE RHABILLAGE N'EST PAS UNE NAISSANCE. `kDelaiAvantHabillage` protege un corps qui vient de
 // naitre ; un avatar qui change de veste est monte depuis longtemps. Lui faire payer la meme
 // attente ajoutait ~2 s a chaque geste, sur un budget que Lucas a mesure a l'oeil : « quatre a cinq
