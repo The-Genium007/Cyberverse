@@ -665,6 +665,17 @@ constexpr auto kIntervalleStimMin = std::chrono::milliseconds(250);
 /// A borner si une session longue le montre.
 std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 
+/// Avatars detruits parce que leur VISAGE a change, et qui attendent de renaitre.
+///
+/// ⭐ POURQUOI CET ENSEMBLE EXISTE. Demande de Lucas, 2026-09-06 : masquer la disparition et le
+/// retour de l'avatar quand son esthetique change, « avec le flou d'apparition, la bouillie de
+/// pixels ». L'effet doit se jouer sur le corps NEUF, donc il faut se souvenir, entre la
+/// destruction et la renaissance, de qui etait en cours de reconstruction.
+///
+/// ⚠️ On ne peut PAS se contenter de jouer l'effet avant de detruire : l'entite disparait dans la
+/// foulee et emporte l'effet avec elle. C'est la renaissance qui est masquable, pas la mort.
+std::set<uint64_t> g_visageEnReconstruction;
+
 /// Statiques deja rapportes au serveur — un par entite et par session.
 std::set<uint64_t> g_statiquesRapportes;
 
@@ -6432,6 +6443,10 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
             g_dernieresCibles.erase(id);
             g_suiviAvatars.erase(id);
             m_networkedEntitiesLookup.erase(aRefaire);
+            // ⭐ On note la reconstruction pour pouvoir MASQUER la renaissance (voir
+            // `g_visageEnReconstruction`). L'effet se joue sur le corps neuf, pas sur celui qui
+            // vient de mourir — jouer avant de detruire ne montrerait rien.
+            g_visageEnReconstruction.insert(id);
             SDK->logger->InfoF(PLUGIN,
                 "[visage %llu] esthetique CHANGEE (%zu -> %zu o) — avatar detruit, il renaitra au "
                 "prochain snapshot avec le nouveau visage",
@@ -6644,6 +6659,30 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
             m_networkedEntitiesLookup.insert(std::make_pair(networkId, entityId));
             SDK->logger->InfoF(PLUGIN, "Spawn entite reseau %llu -> entity %llu (voie ENRICHIE, "
                                        "porte le V de ce joueur)", networkId, entityId.hash);
+
+            // ── ⭐ MASQUER LA RENAISSANCE APRES UN CHANGEMENT DE VISAGE ──────────────────────
+            //
+            // Demande de Lucas, 2026-09-06 : « j'accepte le fait que ça disparaisse, et on pourrait
+            // masquer la disparition avec le flou d'apparition — la bouillie de pixels ».
+            //
+            // `johnny_appear_glitch` est declare sur notre entite (elle herite des 177 descripteurs
+            // du pantin photomode de V) et pointe `johnny_silverhand_appear_glitch.effect` —
+            // litteralement l'effet d'APPARITION du jeu. On ne fabrique rien : on nomme.
+            //
+            // ⚠️ SEULE LA VOIE ENRICHIE EST CONCERNEE, et ce n'est pas un oubli : c'est la seule qui
+            // porte l'esthetique. La voie sure fabrique un passant generique, qui n'a pas de visage
+            // a changer — y poser un glitch masquerait une reconstruction qui n'a pas lieu.
+            if (const auto renaissance = g_visageEnReconstruction.find(networkId);
+                renaissance != g_visageEnReconstruction.end())
+            {
+                bool joue = false;
+                Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue, entityId,
+                    RED4ext::CName("johnny_appear_glitch"));
+                g_visageEnReconstruction.erase(renaissance);
+                SDK->logger->InfoF(PLUGIN,
+                    "[visage %llu] renaissance masquee par johnny_appear_glitch : %s",
+                    networkId, joue ? "OK" : "ECHEC (entite non resolue)");
+            }
 
             // ── ⭐ LA FICHE DU CORPS, UNE SEULE FOIS ──────────────────────────────────────────
             //

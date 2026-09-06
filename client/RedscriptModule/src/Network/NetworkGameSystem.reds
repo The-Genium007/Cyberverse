@@ -548,16 +548,33 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_EcrireOffsetLocal(moveComponent: ref<IScriptable>, x: Float, y: Float, z: Float) -> Bool;
     /// Placement visuel d'un passager sans empiler d'ordre IA. `moveComponent` est opaque au
     /// script ; le natif borne, ecrit puis relit son entree active (F-PLY-337).
-    public func TesseraEcrirePositionRepresentation(cible: EntityID, position: Vector4) -> Bool {
+    /// 0 = écrit ; 1 = corps introuvable ; 2 = moveComponent introuvable ; 3 = natif refusé.
+    /// Un booléen confondait ces trois pannes et a coûté plusieurs trajets sans diagnostic.
+    public func TesseraEcrirePositionRepresentation(cible: EntityID, position: Vector4) -> Int32 {
         let corps = GameInstance.FindEntityByID(GetGameInstance(), cible) as GameObject;
         if !IsDefined(corps) {
-            return false;
+            return 1;
         }
         let mouvement = corps.FindComponentByName(n"moveComponent") as IScriptable;
+        // F-PLY-332 : sur les avatars enrichis, `moveComponent` est un NOM DE CLASSE, pas
+        // nécessairement le nom d'instance que `FindComponentByName` indexe. La sonde qui a
+        // effectivement trouvé le composant énumère les composants et compare leur classe.
         if !IsDefined(mouvement) {
-            return false;
+            let composants = corps.GetComponents();
+            let i: Int32 = 0;
+            while i < ArraySize(composants) {
+                let classe = NameToString(composants[i].GetClassName());
+                if Equals(classe, "moveComponent") || Equals(classe, "entIMoverComponent") {
+                    mouvement = composants[i] as IScriptable;
+                    break;
+                }
+                i += 1;
+            }
         }
-        return this.Tessera_EcrireOffsetLocal(mouvement, position.X, position.Y, position.Z);
+        if !IsDefined(mouvement) {
+            return 2;
+        }
+        return this.Tessera_EcrireOffsetLocal(mouvement, position.X, position.Y, position.Z) ? 0 : 3;
     }
     /// Pose par le module ascenseurs quand le joueur LOCAL embarque ou descend.
     public native func Tessera_PoserJoueurLocalPorte(actif: Bool) -> Bool;
@@ -1645,6 +1662,30 @@ public native class NetworkGameSystem extends IGameSystem {
 
     public func DestroyTransientEntity(entityId: EntityID) {
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
+    }
+
+    // Joue un effet déclaré sur une entité, par son nom. Appelée depuis le C++.
+    //
+    // ⭐ POURQUOI ELLE EXISTE. Demande de Lucas, 2026-09-06 : masquer la disparition et le retour
+    // de l'avatar quand son visage change, « avec le flou d'apparition, la bouillie de pixels ».
+    // Le C++ sait QUAND reconstruire ; seul le script sait jouer un effet.
+    //
+    // ⚠️ ELLE EST SUR LE SYSTÈME, ET C'EST LA SEULE FORME QUI MARCHE. Un appel C++ vers une
+    // fonction redscript quelconque échoue à la résolution de nom **en silence** — trois voies
+    // essayées, trois échecs muets. Ce qui fonctionne est l'appel virtuel sur `this`, parce que
+    // `NetworkGameSystem` est une classe scriptée qui étend la native : c'est exactement ce que
+    // font déjà `DestroyTransientEntity` et `TesseraQuelquUnIci` juste à côté.
+    //
+    // ⚠️ LA RÉSOLUTION D'ENTITÉ EST CELLE DE `TesseraCorpsDeLEntite`, pas `FindEntityByID` seul :
+    // celui-là rend nil sur un pantin bien vivant (F-PNJ-088), et un effet qui ne part pas
+    // ressemblerait à un effet qui ne rend rien.
+    public func TesseraJouerEffetSurEntite(cible: EntityID, effet: CName) -> Bool {
+        let corps = TesseraCorpsDeLEntite(cible) as GameObject;
+        if !IsDefined(corps) {
+            return false;
+        }
+        GameObjectEffectHelper.StartEffectEvent(corps, effet);
+        return true;
     }
 
     public func TeleportEntity(game: GameInstance, entity: ref<Entity>, position: Vector4, worldOrientation: EulerAngles) {
