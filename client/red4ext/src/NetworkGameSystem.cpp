@@ -695,14 +695,26 @@ std::set<uint64_t> g_visageEnReconstruction;
 /// ⚠️ L'ordre n'est pas neutre : il va du plus plausible au moins. `paperdoll_item_switch_glitch`
 /// est en tete parce que c'est l'effet du changement d'objet sur le pantin d'inventaire — un
 /// fondu numerique sur un personnage, ce qui est exactement la description.
+/// ⭐⭐ LISTE REVUE LE 2026-09-06 APRES UN BALAYAGE DES ARCHIVES. `WolvenKit.CLI archive
+/// --pattern "*.effect" --list` sur les 33 archives du jeu rend **3426 effets**, dont 129 dans
+/// les familles utiles et **28 deja declares sur notre entite** — donc jouables sans rien cuire.
+/// Le catalogue complet est dans `docs/connaissances/catalogue-effets-visuels.md`.
+///
+/// ⭐ Les `ch_hacks_*_malfunction` passent en tete : ce sont les quickhacks qui DETRAQUENT un
+/// organe de la cible, et leur rendu est un parasitage visuel pose SUR le personnage — ce qui
+/// est exactement la description de Lucas. Ils etaient absents de la premiere roue parce que je
+/// n'avais regarde que les effets dont le NOM contenait « glitch ».
+///
+/// ⚠️ Prefixe `ch_` = personnage, `p_` = joueur. Un `p_` joue sur un avatar distant est un pari.
+/// Aucun `p_` dans cette liste.
 static const char* const kEffetsRenaissance[] = {
+    "ch_hacks_optics_malfunction",
+    "ch_hacks_optics_malfunction_var1",
+    "ch_hacks_cyberware_malfunction",
+    "ch_hacks_comms_noise",
     "paperdoll_item_switch_glitch",
     "camo_intro_vfx",
-    "hacks_comms_noise",
-    "yellow_camo",
-    "scanning",
-    "hacks_comms_noise_android",
-    "johnny_appear_glitch",
+    "ch_hacks_locomotion_malfunction",
 };
 static size_t g_prochainEffetRenaissance = 0;
 
