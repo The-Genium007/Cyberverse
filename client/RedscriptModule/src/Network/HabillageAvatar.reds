@@ -65,11 +65,51 @@ func TesseraCorpsDeLEntite(cible: EntityID) -> ref<Entity> {
 // ⚠️ Rend `""` quand l'item n'a pas de `appearanceName` — ce qui arrive (nourriture, argent,
 // cyberware). Un item sans apparence n'est pas une erreur : il n'a simplement rien à montrer.
 func TesseraCleVetement(record: TweakDBID, corpsMasculin: Bool) -> String {
+    let app = TesseraApparenceNue(record);
+    if Equals(app, "") {
+        return "";
+    }
+    return app + (corpsMasculin ? "m" : "w");
+}
+
+// Le `appearanceName` d'un item, SANS la lettre de morphologie.
+//
+// ⭐ POURQUOI IL FAUT LES DEUX FORMES. Un composant cuit se nomme `<apparence><m|w>`, parce qu'un
+// vêtement est genré à la source. Un EFFET, lui, ne l'est pas : `eye_glow_blue` est déclaré une
+// seule fois sur l'entité, pour les deux morphologies. Suffixer son nom le rendrait introuvable.
+func TesseraApparenceNue(record: TweakDBID) -> String {
     let app = TweakDBInterface.GetCName(record + t".appearanceName", n"");
     if Equals(app, n"") {
         return "";
     }
-    return NameToString(app) + (corpsMasculin ? "m" : "w");
+    return NameToString(app);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// LES EFFETS PILOTÉS PAR LE SERVEUR — un état visuel qui n'est PAS un mesh
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// Demande de Lucas, 2026-09-05 : *« quand quelqu'un reçoit un appel, il a les yeux qui passent
+// bleu »*.
+//
+// ⛔ LA RECETTE DES VÊTEMENTS NE S'APPLIQUE PAS ICI, et c'est structurel. Le globe oculaire n'est
+// pas un composant de notre entité d'avatar : il vient de la charge d'esthétique, assemblé à la
+// naissance. Il n'y a donc rien à cuire, et rien à allumer.
+//
+// ⭐⭐ MAIS L'EFFET EST DÉJÀ LÀ. L'entité d'avatar descend du pantin photomode de V, et porte à ce
+// titre **177 descripteurs d'effets** — dont `eye_glow_blue`, `eye_glow_gold`, `eye_glow_purple`,
+// `eye_glow_red` et `eye_flare` (relevé du 2026-09-06 sur `avatar_distant_wa.ent`). Un effet
+// déclaré se joue par son nom, et c'est tout ce qu'il faut.
+//
+// ⚠️ CETTE LISTE EST FERMÉE, ET C'EST DÉLIBÉRÉ. On pourrait « tenter » de jouer n'importe quelle
+// clé orpheline comme un effet : l'appel ne planterait pas, il ne ferait rien. Mais on perdrait le
+// seul instrument qui dit qu'un visuel manque — le journal `NON CUIT`, qui a nommé lui-même les
+// trois composants à cuire le 2026-09-05. Une clé inconnue doit rester une clé inconnue.
+//
+// Les 145 noms déclarés sur l'entité (`status_*`, `trail_*`, `strong_arms_block`…) sont autant
+// d'états visuels disponibles sans une ligne de cuisson. On les ouvre un par un, en les nommant.
+func TesseraEffetsPilotes() -> array<CName> {
+    return [n"eye_glow_blue", n"eye_glow_gold", n"eye_glow_purple", n"eye_glow_red"];
 }
 
 // Vrai si ce composant est une pièce de GARDE-ROBE — donc à nous — et faux s'il appartient au CORPS.
@@ -131,11 +171,16 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     // Parallèle à `cles` : cette clé a-t-elle trouvé au moins un composant ? Une clé orpheline
     // désigne un vêtement que le serveur connaît mais que notre entité ne sait pas montrer.
     let trouvees: array<Bool>;
+    // Parallèle à `cles` : le nom d'apparence NU, sans la lettre de morphologie. C'est lui que le
+    // vocabulaire d'effets emploie — voir `TesseraEffetsPilotes`.
+    let apparences: array<String>;
     let i = 0;
     while i < combien {
-        let cle = TesseraCleVetement(reseau.Tessera_VetementDeLEntite(cible, i), masculin);
+        let record = reseau.Tessera_VetementDeLEntite(cible, i);
+        let cle = TesseraCleVetement(record, masculin);
         if NotEquals(cle, "") {
             ArrayPush(cles, cle);
+            ArrayPush(apparences, TesseraApparenceNue(record));
             ArrayPush(trouvees, false);
         }
         i += 1;
@@ -265,6 +310,38 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     //
     // ⚠️ On journalise la CLÉ, pas l'item : c'est elle qui manque à l'entité, et c'est elle qu'il
     // faudra cuire. Le nom de l'item ne dit pas quel mesh il faudrait ajouter.
+    // ── LES EFFETS, AVANT LE RELEVÉ DES ORPHELINES ─────────────────────────────────────────────
+    //
+    // Un effet piloté n'a pas de composant à allumer : il se joue. On le fait AVANT de compter les
+    // clés orphelines, et on marque la clé comme trouvée — sinon un état visuel qui fonctionne
+    // serait journalisé comme un visuel manquant, à chaque passe, chez chaque observateur.
+    let effets = TesseraEffetsPilotes();
+    let e = 0;
+    while e < ArraySize(effets) {
+        let nomEffet = NameToString(effets[e]);
+        let veut = false;
+        let a = 0;
+        while a < ArraySize(apparences) {
+            if Equals(apparences[a], nomEffet) {
+                veut = true;
+                trouvees[a] = true;
+            }
+            a += 1;
+        }
+        if veut {
+            GameObjectEffectHelper.StartEffectEvent(corps, effets[e]);
+        } else {
+            // ⚠️ ARRÊT INCONDITIONNEL, et c'est ce qui rend la passe idempotente. On ne sait pas
+            // si l'effet joue — aucune API ne le dit — donc on ne peut pas conditionner l'arrêt à
+            // son état. Arrêter un effet qui ne joue pas est sans conséquence ; NE PAS arrêter
+            // celui qui joue laisserait les yeux allumés pour toujours après la fin de l'appel.
+            // C'est le pendant exact du retrait de vêtement qui manquait le 2026-09-03 : une passe
+            // additive seule ne sait pas revenir en arrière.
+            GameObjectEffectHelper.StopEffectEvent(corps, effets[e]);
+        }
+        e += 1;
+    }
+
     let orphelines = "";
     let o = 0;
     while o < ArraySize(cles) {
