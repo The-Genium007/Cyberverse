@@ -6518,6 +6518,21 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
             // dit que la reference etait bonne a T+0 et que le doublon disparait ; un `-1` dirait
             // que la resolution est cassee en general et qu'il faut une autre voie que
             // l'`EntityID`. Sans ce chiffre, les deux hypotheses restent ouvertes.
+            // ── ⭐⭐⭐ LE GLITCH COMMENCE ICI, SUR L'OBSERVATEUR, AVANT LA DESTRUCTION ────────
+            //
+            // Demande de Lucas : *« il faut que ca dure avant le changement, pendant et apres,
+            // histoire qu'on soit sur que tout a ete masque »*.
+            //
+            // ⛔ Un effet porte par le CORPS ne peut pas le faire : il n'existe qu'APRES la
+            // renaissance, et le trou a masquer est precisement celui ou aucun corps n'existe.
+            // C'est structurel. L'observateur, lui, ne disparait pas — son effet traverse toute
+            // la fenetre.
+            bool vue = false;
+            Red::CallVirtual(this, "TesseraJouerEffetSurJoueur", vue,
+                             RED4ext::CName("johnny_appear_glitch"));
+            SDK->logger->InfoF(PLUGIN,
+                "[visage %llu] vue brouillee AVANT le changement : %s", id, vue ? "OK" : "ECHEC");
+
             int32_t eteints = -1;
             Red::CallVirtual(this, "TesseraEteindreCorps", eteints, aRefaire->second);
             SDK->logger->InfoF(PLUGIN,
@@ -7967,17 +7982,27 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                             // ⚠️ Chaque retour est journalise separement : « les deux ont echoue »
                             // et « les deux ont reussi sans rien montrer » sont deux diagnostics
                             // opposes, et un seul booleen les confondrait.
+                            // ⛔ `hacks_system_collapse` RETIRE — verdict de Lucas, 2026-09-06 :
+                            // « on dirait l'effet d'electrocution, ce qui ne va pas du tout ».
+                            // Un nom d'effet ne dit pas a quoi il ressemble ; il a fallu le voir.
+                            //
+                            // ⭐ Reste `johnny_appear_glitch`, sur le corps NEUF — c'est le volet
+                            // « apres » du masquage. Le volet « avant » et « pendant » est porte
+                            // par l'observateur, demarre au moment du changement (voir plus haut).
                             bool joue = false;
                             Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue, entityId,
                                              RED4ext::CName("johnny_appear_glitch"));
-                            bool joue2 = false;
-                            Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue2, entityId,
-                                             RED4ext::CName("hacks_system_collapse"));
+                            // ⚠️ ARRET INCONDITIONNEL de l'effet porte par l'observateur : aucune
+                            // API ne dit si un effet joue, donc on ne peut pas conditionner
+                            // l'arret a son etat. Ne pas l'arreter laisserait la vue brouillee
+                            // POUR TOUJOURS — c'est la lecon des yeux d'appel, transposee.
+                            bool vueOff = false;
+                            Red::CallVirtual(this, "TesseraArreterEffetSurJoueur", vueOff,
+                                             RED4ext::CName("johnny_appear_glitch"));
                             g_visageEnReconstruction.erase(renaissance);
                             SDK->logger->InfoF(PLUGIN,
-                                "[visage %llu] renaissance : johnny_appear_glitch=%s "
-                                "hacks_system_collapse=%s",
-                                networkId, joue ? "OK" : "ECHEC", joue2 ? "OK" : "ECHEC");
+                                "[visage %llu] renaissance : sur le corps=%s · vue rendue=%s",
+                                networkId, joue ? "OK" : "ECHEC", vueOff ? "OK" : "ECHEC");
 
                             // ── ⭐⭐⭐ LE NEUF EST PROUVE VIVANT : ON PEUT ETEINDRE L'ANCIEN ──
                             //
