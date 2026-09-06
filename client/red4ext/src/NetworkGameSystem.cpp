@@ -6500,10 +6500,32 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
                     "maintenant (%d composant(s))", id, vieux);
                 g_ancienCorpsEnSursis.erase(dejaEnSursis);
             }
-            g_ancienCorpsEnSursis[id] = aRefaire->second;
+            // ── ⛔⛔ LE SURSIS SEUL NE MARCHE PAS — mesure du 2026-09-06, verdict de Lucas ────
+            //
+            // « il y a encore l'entite de Kimi qui est presente et l'entite de Redda a pris
+            // possession » : DEUX corps a l'ecran, l'ancien intact. Le journal disait deja
+            // pourquoi — `ancien corps eteint APRES confirmation du neuf : -1, ENTITE
+            // INTROUVABLE`. Quatre secondes plus tard, l'`EntityID` de l'ancien corps ne se
+            // resout plus, donc on ne peut plus l'eteindre. Le sursis protegeait d'une
+            // invisibilite que personne n'a jamais observee, au prix d'un doublon PERMANENT que
+            // Lucas voit a chaque essai.
+            //
+            // ⭐ ON ETEINT DONC ICI, pendant que le C++ tient encore la reference dans
+            // `m_networkedEntitiesLookup` — c'est le seul instant ou elle est certainement bonne.
+            // `Toggle` est mesure (F-PLY-306) et rend le corps invisible meme si l'entite survit.
+            //
+            // ⚠️ ET LE COMPTE EST JOURNALISE, parce que c'est LUI qui tranche : un nombre positif
+            // dit que la reference etait bonne a T+0 et que le doublon disparait ; un `-1` dirait
+            // que la resolution est cassee en general et qu'il faut une autre voie que
+            // l'`EntityID`. Sans ce chiffre, les deux hypotheses restent ouvertes.
+            int32_t eteints = -1;
+            Red::CallVirtual(this, "TesseraEteindreCorps", eteints, aRefaire->second);
             SDK->logger->InfoF(PLUGIN,
-                "[visage %llu] ancien corps EN SURSIS — il reste visible jusqu'a ce que le neuf "
-                "soit prouve vivant (un doublon bref vaut mieux qu'une disparition durable)", id);
+                "[visage %llu] ancien corps eteint TOUT DE SUITE : %d composant(s)%s", id, eteints,
+                eteints < 0 ? " — ENTITE DEJA INTROUVABLE, il restera visible" : "");
+            // On le garde quand meme en sursis : la SUPPRESSION, elle, ne peut se tenter qu'une
+            // fois le neuf vivant, et elle nettoierait pour de bon le jour ou elle marchera.
+            g_ancienCorpsEnSursis[id] = aRefaire->second;
             // ⚠️ CE QU'ON OUBLIE, ET CE QU'ON GARDE — la liste n'est pas celle du despawn d'AoI.
             //
             //   OUBLIE  m_appliedAppearance  decrit une entite de jeu qui vient d'etre detruite ;
@@ -7944,17 +7966,24 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                             if (const auto sursis = g_ancienCorpsEnSursis.find(networkId);
                                 sursis != g_ancienCorpsEnSursis.end())
                             {
+                                // ⚠️ SECOND RIDEAU, pas le premier. L'extinction a deja eu lieu au
+                                // moment du changement, pendant que la reference etait bonne. Ici
+                                // on retente — au cas ou un composant serait apparu depuis — et
+                                // surtout on tente la SUPPRESSION, qui ne peut se faire qu'une
+                                // fois le corps neuf vivant.
+                                //
+                                // ⚠️ Un `-1` ICI n'est plus une panne : c'est le comportement
+                                // attendu si l'entite n'est plus resolvable, et l'extinction du
+                                // premier rideau a deja fait le travail. C'est le compte de
+                                // `eteint TOUT DE SUITE` qui fait foi.
                                 int32_t eteints = -1;
                                 Red::CallVirtual(this, "TesseraEteindreCorps", eteints,
                                                  sursis->second);
                                 Red::CallVirtual(this, "DestroyTransientEntity", sursis->second);
                                 g_ancienCorpsEnSursis.erase(sursis);
                                 SDK->logger->InfoF(PLUGIN,
-                                    "[visage %llu] ancien corps eteint APRES confirmation du neuf "
-                                    ": %d composant(s)%s", networkId, eteints,
-                                    eteints < 0
-                                        ? " — ENTITE INTROUVABLE, l'ancien corps restera visible"
-                                        : "");
+                                    "[visage %llu] second rideau sur l'ancien corps : %d "
+                                    "composant(s) (un -1 est normal ici)", networkId, eteints);
                             }
                         }
                         // ⭐ Le corps a ete habille au moins une fois : les prochains changements

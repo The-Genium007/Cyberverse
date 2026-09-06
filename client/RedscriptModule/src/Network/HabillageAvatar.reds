@@ -294,6 +294,9 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     let brasBascules = 0;
     let brasNommes = "";
     let peauVue = 0;
+    // ⚠️ Vrai dès qu'UNE peau de bras a été allumée : les suivantes seront éteintes. Voir le
+    // commentaire dans la boucle — le natif en monte deux, et deux, ça fait quatre bras.
+    let peauDejaAllumee = false;
     let j = 0;
     while j < ArraySize(composants) {
         let nom = NameToString(composants[j].GetName());
@@ -305,11 +308,31 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
         // transposé.
         if TesseraEstPeauDeBras(nom) {
             peauVue += 1;
-            let peauVoulue = !remplaceAvantBras;
+            // ── ⛔ UNE SEULE PEAU DE BRAS ALLUMÉE, JAMAIS DEUX ──────────────────────────────
+            //
+            // Défaut rapporté par Lucas le 2026-09-06 : « LUCAS1 a un bug, il a deux paires de
+            // bras — il a été créé comme ça ». Mesuré : le spawner natif monte DEUX meshes de
+            // peau de bras, au même nom de base et à suffixe numérique différent —
+            // `a0_000_ma_base__full_ag_hq1491` et `…hq6168` au masculin,
+            // `a0_001_pwa_base_hq__full` et `…full8640` au féminin.
+            //
+            // ⚠️ `PurgerDoublons` ne peut PAS les voir : il compare des noms IDENTIQUES, et
+            // ceux-là diffèrent par leur suffixe. Le défaut était invisible chez KIMY tant que
+            // ses bras gorille recouvraient les deux copies — il ne se voyait que sur un
+            // personnage SANS cyberware de bras.
+            //
+            // ⭐ On applique donc le patron déjà en place pour les jambes (`TesseraJambes`) :
+            // une seule variante allumée, toutes les autres éteintes. La première rencontrée
+            // fait l'affaire — ce sont des copies du même mesh.
+            let peauVoulue = !remplaceAvantBras && !peauDejaAllumee;
+            if peauVoulue {
+                peauDejaAllumee = true;
+            }
             if !Equals(composants[j].IsEnabled(), peauVoulue) {
                 composants[j].Toggle(peauVoulue);
                 brasBascules += 1;
-                brasNommes += (Equals(brasNommes, "") ? "" : ", ") + nom;
+                brasNommes += (Equals(brasNommes, "") ? "" : ", ")
+                            + nom + (peauVoulue ? "[on]" : "[off]");
             }
         }
 
@@ -415,8 +438,14 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
 
     // ── LE VERDICT DES BRAS, DANS LA MÊME LIGNE DE TEMPS QUE L'HABILLAGE ────────────────────
     if brasBascules > 0 {
+        // ⚠️ LE VERBE EST « BASCULÉ », PAS « ÉTEINT » NI « RALLUMÉ », et c'est une correction.
+        // La première rédaction déduisait le verbe de `remplaceAvantBras` — donc elle écrivait
+        // « 1 composant rallumé — …hq6168[off] », qui se contredit dans la même ligne : sans
+        // cyberware on RALLUME la première peau et on ÉTEINT la copie en trop, deux gestes
+        // opposés dans la même passe. Un journal qui résume deux gestes par un seul verbe ment
+        // à moitié. C'est le suffixe [on]/[off] de chaque nom qui porte la vérité.
         TesseraJournalHabillage(
-            s"  bras remplaces : \(brasBascules) composant(s) de peau \(remplaceAvantBras ? "eteint" : "rallume")(s) — \(brasNommes)");
+            s"  bras remplaces : \(brasBascules) composant(s) de peau bascule(s) [cyberware \(remplaceAvantBras ? "OUI" : "non")] — \(brasNommes)");
     } else {
         // ── ⭐⭐⭐ LE SEUL SILENCE QU'ON REFUSE ────────────────────────────────────────────
         //
@@ -491,6 +520,38 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
     if NotEquals(orphelines, "") {
         TesseraJournalHabillage(
             s"  ⚠ NON CUIT dans l'entite — invisible pour les autres : \(orphelines)");
+    }
+
+    // ── ⭐⭐⭐ L'INVENTAIRE COMPLET, UNE FOIS, À LA CONVERGENCE ─────────────────────────────
+    //
+    // ⛔ POURQUOI IL EXISTE. Le 2026-09-06, trois defauts ont ete rapportes par Lucas dans le
+    // meme message — « trois bras sur LUCAS1 », « en local ils sont habilles et rendus nus »,
+    // « pas de suppression de l'ancien modele ». Aucun des trois n'etait lisible dans les
+    // journaux : on y voit des COMPTES (« 3 vetement(s) demande(s), 5 allume(s) ») qui disent ce
+    // qu'on a demande, jamais ce qui est REELLEMENT monte sur le corps.
+    //
+    // ⭐ Un compte d'intention ne prouve rien sur le rendu. « 5 allumes » est vrai aussi bien
+    // avec un bras qu'avec trois. Cet inventaire nomme chaque composant et son etat — c'est la
+    // seule chose qui permet de compter les bras sans les yeux de quelqu'un.
+    //
+    // ⚠️ UNE SEULE FOIS PAR CORPS, a la convergence. Le repeter a chaque passe noierait le
+    // journal (54 composants par avatar, plusieurs avatars, toutes les deux secondes) et
+    // rendrait illisible la ligne qui compte.
+    TesseraJournalHabillage(s"inventaire de \(EntityID.ToDebugString(cible)) :");
+    let inv = 0;
+    let ligne = "";
+    while inv < ArraySize(composants) {
+        let n = NameToString(composants[inv].GetName());
+        ligne += (Equals(ligne, "") ? "" : " ") + n + (composants[inv].IsEnabled() ? "+" : "-");
+        // On coupe en morceaux : une ligne de journal trop longue est tronquee en silence.
+        if (inv % 8) == 7 {
+            TesseraJournalHabillage("  " + ligne);
+            ligne = "";
+        }
+        inv += 1;
+    }
+    if NotEquals(ligne, "") {
+        TesseraJournalHabillage("  " + ligne);
     }
 
     // ⚠️ On rend `true` dès qu'on a fait le tour : rallumer ce qui est déjà allumé ne sert à rien,
