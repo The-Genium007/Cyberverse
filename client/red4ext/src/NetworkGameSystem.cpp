@@ -707,14 +707,34 @@ std::set<uint64_t> g_visageEnReconstruction;
 ///
 /// ⚠️ Prefixe `ch_` = personnage, `p_` = joueur. Un `p_` joue sur un avatar distant est un pari.
 /// Aucun `p_` dans cette liste.
+/// ⛔⛔ CORRIGE LE 2026-09-06 : LA ROUE PORTAIT DES NOMS DE FICHIERS, PAS DES NOMS DECLARES.
+///
+/// La version precedente contenait `ch_hacks_optics_malfunction` — le radical du CHEMIN
+/// `base\fx\characters\hacks\control\ch_hacks_optics_malfunction.effect`. Or le descripteur
+/// declare sur l'entite s'appelle `hacks_optics_malfunction`, SANS le prefixe `ch_`. Aucun des
+/// quatre noms de la famille quickhack n'existait donc, et rien ne pouvait jouer.
+///
+/// ⚠️⚠️ ET L'INSTRUMENT A MENTI. `TesseraJouerEffetSurEntite` rend `true` des que le CORPS se
+/// resout — il ne verifie a aucun moment que l'effet existe. Le journal disait donc `OK` sur un
+/// nom inexistant, et Lucas cherchait a l'ecran quelque chose qui n'avait jamais ete demande.
+/// « L'appel a reussi » ne voulait meme pas dire « l'effet a ete trouve ».
+///
+/// ⭐ Les noms ci-dessous sont extraits des **159 descripteurs reellement declares** sur
+/// `avatar_distant_wa.ent`, par lecture du JSON — plus par rapprochement de radicaux, qui est
+/// precisement ce qui a produit l'erreur. La liste complete est dans
+/// `docs/connaissances/catalogue-effets-visuels.md`.
+///
+/// ⭐⭐ Et `hacks_system_collapse` PROUVE QUE LA VOIE MARCHE : c'est le seul nom correctement
+/// declare qu'on ait essaye, et Lucas l'a vu (« on dirait l'effet d'electrocution »). Le probleme
+/// n'a donc jamais ete le mecanisme — seulement les noms.
 static const char* const kEffetsRenaissance[] = {
-    "ch_hacks_optics_malfunction",
-    "ch_hacks_optics_malfunction_var1",
-    "ch_hacks_cyberware_malfunction",
-    "ch_hacks_comms_noise",
+    "hacks_optics_malfunction",
+    "hacks_cyberware_malfunction",
+    "hacks_comms_noise",
+    "hacks_locomotion_malfunction",
+    "hacks_overheat_lvl1",
     "paperdoll_item_switch_glitch",
     "camo_intro_vfx",
-    "ch_hacks_locomotion_malfunction",
 };
 static size_t g_prochainEffetRenaissance = 0;
 
