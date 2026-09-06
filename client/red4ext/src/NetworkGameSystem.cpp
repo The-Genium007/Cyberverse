@@ -676,6 +676,36 @@ std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 /// foulee et emporte l'effet avec elle. C'est la renaissance qui est masquable, pas la mort.
 std::set<uint64_t> g_visageEnReconstruction;
 
+/// ⭐⭐⭐ LES SEPT EFFETS CANDIDATS POUR MASQUER LA RENAISSANCE, ESSAYES A TOUR DE ROLE.
+///
+/// ⛔ POURQUOI UNE ROUE PLUTOT QU'UN CHOIX. Un nom d'effet ne dit RIEN de ce qu'il rend a
+/// l'ecran, et ca a ete mesure deux fois le 2026-09-06 : `johnny_appear_glitch` part (`OK`) et
+/// reste invisible, `hacks_system_collapse` s'est revele etre « l'effet d'electrocution, ce qui
+/// ne va pas du tout » (verdict de Lucas). Deviner le bon nom coute un aller-retour de test
+/// COMPLET a chaque essai — sept essais, sept relances, sept fois l'attention de quelqu'un.
+///
+/// ⭐ Ce que Lucas cherche, dit avec ses mots : *« comme on peut voir quand les gens sont floutes
+/// avec des gros pixels sur les cameras de surveillance »*, et il precise l'avoir deja vu sur un
+/// PNJ. L'effet existe donc dans le jeu ; il ne reste qu'a le NOMMER.
+///
+/// ⭐⭐ La roue transforme sept tests en UN : chaque reconstruction joue l'effet suivant, le
+/// journal l'annonce en clair, et Lucas dit simplement « celui-la ». Les sept sont ceux
+/// REELLEMENT declares sur notre entite d'avatar — pas une liste d'espoirs.
+///
+/// ⚠️ L'ordre n'est pas neutre : il va du plus plausible au moins. `paperdoll_item_switch_glitch`
+/// est en tete parce que c'est l'effet du changement d'objet sur le pantin d'inventaire — un
+/// fondu numerique sur un personnage, ce qui est exactement la description.
+static const char* const kEffetsRenaissance[] = {
+    "paperdoll_item_switch_glitch",
+    "camo_intro_vfx",
+    "hacks_comms_noise",
+    "yellow_camo",
+    "scanning",
+    "hacks_comms_noise_android",
+    "johnny_appear_glitch",
+};
+static size_t g_prochainEffetRenaissance = 0;
+
 /// ⭐⭐⭐ LES ANCIENS CORPS QU'ON N'ETEINT PAS ENCORE — un par joueur, au plus.
 ///
 /// ⛔ LE PIRE CAS DE CETTE CONCEPTION, ET IL A FALLU L'ECRIRE POUR LE VOIR. La premiere version
@@ -6527,11 +6557,16 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
             // renaissance, et le trou a masquer est precisement celui ou aucun corps n'existe.
             // C'est structurel. L'observateur, lui, ne disparait pas — son effet traverse toute
             // la fenetre.
-            bool vue = false;
-            Red::CallVirtual(this, "TesseraJouerEffetSurJoueur", vue,
-                             RED4ext::CName("johnny_appear_glitch"));
-            SDK->logger->InfoF(PLUGIN,
-                "[visage %llu] vue brouillee AVANT le changement : %s", id, vue ? "OK" : "ECHEC");
+            // ⛔ L'ESSAI « SUR LA VUE DE L'OBSERVATEUR » EST RETIRE, et c'est une mesure.
+            // `TesseraJouerEffetSurJoueur` rendait `OK` a chaque fois et Lucas n'a jamais rien vu :
+            // les 145 effets releves le sont sur NOTRE entite d'avatar, heritee du pantin
+            // photomode — rien ne disait qu'ils existent sur le pantin du JOUEUR, et il s'avere
+            // qu'ils n'y rendent rien. L'hypothese est close.
+            //
+            // ⭐ Et Lucas a precise la cible entre-temps : « c'est cet effet-la que je cherchais a
+            // mettre sur le PNJ ». C'est donc le CORPS qui le porte, a la renaissance — voir la
+            // roue `kEffetsRenaissance`. Les deux methodes redscript restent en place : elles
+            // resserviront le jour ou un etat visuel devra vraiment vivre sur le joueur local.
 
             int32_t eteints = -1;
             Red::CallVirtual(this, "TesseraEteindreCorps", eteints, aRefaire->second);
@@ -7989,20 +8024,29 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                             // ⭐ Reste `johnny_appear_glitch`, sur le corps NEUF — c'est le volet
                             // « apres » du masquage. Le volet « avant » et « pendant » est porte
                             // par l'observateur, demarre au moment du changement (voir plus haut).
+                            // ⭐ L'EFFET VA SUR LE CORPS, PAS SUR LA VUE — precision de Lucas :
+                            // « c'est cet effet-la que je cherchais a mettre sur le PNJ ».
+                            // L'essai « sur la vue de l'observateur » est retire : il rendait
+                            // `OK` sans rien montrer, mesure le 2026-09-06. Un appel qui reussit
+                            // et ne montre rien est un appel qui ne prouve rien.
+                            const char* nom =
+                                kEffetsRenaissance[g_prochainEffetRenaissance
+                                                   % (sizeof(kEffetsRenaissance)
+                                                      / sizeof(kEffetsRenaissance[0]))];
+                            g_prochainEffetRenaissance += 1;
                             bool joue = false;
                             Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue, entityId,
-                                             RED4ext::CName("johnny_appear_glitch"));
-                            // ⚠️ ARRET INCONDITIONNEL de l'effet porte par l'observateur : aucune
-                            // API ne dit si un effet joue, donc on ne peut pas conditionner
-                            // l'arret a son etat. Ne pas l'arreter laisserait la vue brouillee
-                            // POUR TOUJOURS — c'est la lecon des yeux d'appel, transposee.
-                            bool vueOff = false;
-                            Red::CallVirtual(this, "TesseraArreterEffetSurJoueur", vueOff,
-                                             RED4ext::CName("johnny_appear_glitch"));
+                                             RED4ext::CName(nom));
                             g_visageEnReconstruction.erase(renaissance);
+                            // ⚠️ LE NOM EN CLAIR, ET C'EST TOUT L'INTERET DE LA ROUE. Sans lui,
+                            // « j'ai vu quelque chose » ne se rattacherait a aucun effet, et il
+                            // faudrait recommencer les sept essais pour savoir lequel c'etait.
                             SDK->logger->InfoF(PLUGIN,
-                                "[visage %llu] renaissance : sur le corps=%s · vue rendue=%s",
-                                networkId, joue ? "OK" : "ECHEC", vueOff ? "OK" : "ECHEC");
+                                "[visage %llu] renaissance masquee par « %s » : %s "
+                                "(essai %zu sur %zu)",
+                                networkId, nom, joue ? "OK" : "ECHEC",
+                                g_prochainEffetRenaissance,
+                                sizeof(kEffetsRenaissance) / sizeof(kEffetsRenaissance[0]));
 
                             // ── ⭐⭐⭐ LE NEUF EST PROUVE VIVANT : ON PEUT ETEINDRE L'ANCIEN ──
                             //
