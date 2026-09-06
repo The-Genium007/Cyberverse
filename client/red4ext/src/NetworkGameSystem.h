@@ -185,6 +185,7 @@ uint64_t CabineDeAvatarReseau(uint64_t networkId);
 
 /// La derniere pose MONDE voulue pour un avatar attache (0,0,0 s'il n'y en a pas).
 RED4ext::Vector4 PoseVoulueAttachee(uint32_t entiteHash);
+float YawVouluAttache(uint32_t entiteHash);
 
 /// L'allure annoncee pour un avatar attache (0 s'il n'y en a pas).
 uint8_t AllureAttachee(uint32_t entiteHash);
@@ -204,7 +205,8 @@ void PoserPlancherCabine(uint64_t cabineHash, const Red::Handle<RED4ext::IScript
 /// Hauteur du plancher a `instant`, EXTRAPOLEE lineairement depuis les deux derniers releves.
 /// Rend `false` si on n'a pas encore deux points — l'appelant doit alors garder son comportement
 /// habituel plutot que d'inventer une hauteur.
-bool HauteurCabineA(uint64_t cabineHash, double instant, float& sortie, bool& enMouvement);
+bool HauteurCabineA(uint64_t cabineHash, double instant, float& sortie, bool& enMouvement,
+                    float* vitesse = nullptr);
 
 extern std::map<uint64_t, uint64_t> g_apparencesStatiques;
 // Ce qu'il faut pour REFABRIQUER un statique absent chez ce client : record, apparence, pose.
@@ -300,6 +302,13 @@ struct SuiviAvatar
     float depuisS = 0.0f;
     /// Temps écoulé depuis la dernière ligne de diagnostic — voir `PiloterAvatar`.
     float depuisLogS = 0.0f;
+    /// Horloge indépendante du diagnostic passager. La trace verticale ne doit pas la remettre à
+    /// zéro avant qu'elle puisse révéler si l'écriture directe a réellement pris.
+    float depuisLogPassagerS = 0.0f;
+    /// Cible verticale directe de l'image precedente. Sa comparaison avec la position relue au
+    /// debut de l'image suivante mesure l'application, independamment du mouvement de la cabine.
+    float ciblePassagerPrecedenteZ = 0.0f;
+    bool ciblePassagerPrecedenteValide = false;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai
@@ -2165,6 +2174,11 @@ public:
         return PoseVoulueAttachee(entiteHash);
     }
 
+    float Tessera_YawVouluAttache(uint32_t entiteHash) const
+    {
+        return YawVouluAttache(entiteHash);
+    }
+
     bool Tessera_EcrireOffsetLocal(const Red::Handle<RED4ext::IScriptable>& moveComponent,
                                                   float x, float y, float z);
     bool Tessera_PoserJoueurLocalPorte(bool actif);
@@ -3033,6 +3047,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_CabineDeAvatar);
     RTTI_METHOD(Tessera_AllureAttachee);
     RTTI_METHOD(Tessera_PoseVoulueAttachee);
+    RTTI_METHOD(Tessera_YawVouluAttache);
     RTTI_METHOD(Tessera_EcrireOffsetLocal);
     RTTI_METHOD(Tessera_PoserJoueurLocalPorte);
     RTTI_METHOD(Tessera_JoueurLocalPorte);

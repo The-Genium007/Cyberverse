@@ -676,6 +676,25 @@ std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 /// foulee et emporte l'effet avec elle. C'est la renaissance qui est masquable, pas la mort.
 std::set<uint64_t> g_visageEnReconstruction;
 
+/// ⭐⭐⭐ LES ANCIENS CORPS QU'ON N'ETEINT PAS ENCORE — un par joueur, au plus.
+///
+/// ⛔ LE PIRE CAS DE CETTE CONCEPTION, ET IL A FALLU L'ECRIRE POUR LE VOIR. La premiere version
+/// eteignait l'ancien corps immediatement, puis laissait le neuf naitre au snapshot suivant. Si
+/// cette naissance echoue — entite non creee, joueur sorti de portee au mauvais moment, snapshot
+/// perdu — le joueur devient **INVISIBLE**, durablement, et rien ne le rattrape. Un defaut de
+/// rendu se voit ; une absence se lit comme « il s'est deconnecte ».
+///
+/// ⭐ La regle, tiree du §7 cas 6 de la spec du 2026-09-06 : **un doublon BREF est moins grave
+/// qu'une disparition DURABLE**. On garde donc l'ancien corps allume jusqu'a ce que le neuf soit
+/// PROUVE vivant — c'est-a-dire jusqu'au premier habillage reussi, le seul endroit ou l'on sait
+/// que son entite se resout. Le glitch de renaissance se joue au meme instant et masque l'echange.
+///
+/// ⚠️ INVARIANT (I6 de la spec) : au plus UN corps en sursis par joueur. Un second changement de
+/// visage avant que le premier n'ait ete nettoye eteint l'ancien tout de suite — sinon une session
+/// accumulerait des corps morts que `DeleteEntity` ne sait de toute facon pas supprimer
+/// (F-PNJ-090), et la fuite ne serait bornee par rien.
+std::map<uint64_t, RED4ext::ent::EntityID> g_ancienCorpsEnSursis;
+
 /// Statiques deja rapportes au serveur — un par entite et par session.
 std::set<uint64_t> g_statiquesRapportes;
 
@@ -1117,6 +1136,7 @@ static std::set<uint32_t> g_avatarsAttachesPlateforme;
 /// l'ecart local — c'est le petit terme du modele en repere relatif, celui qui porte le mouvement
 /// du passager DANS la cabine.
 static std::map<uint32_t, RED4ext::Vector4> g_poseVoulueAttachee;
+static std::map<uint32_t, float> g_yawVouluAttache;
 
 /// L'allure annoncee pour chaque avatar attache. Sert a deux choses, et il faut les distinguer :
 /// figer un passager IMMOBILE (sinon son pantin joue une animation de marche sur place), et
@@ -1143,6 +1163,12 @@ RED4ext::Vector4 PoseVoulueAttachee(uint32_t cle)
 {
     const auto it = g_poseVoulueAttachee.find(cle);
     return it == g_poseVoulueAttachee.end() ? RED4ext::Vector4{} : it->second;
+}
+
+float YawVouluAttache(uint32_t cle)
+{
+    const auto it = g_yawVouluAttache.find(cle);
+    return it == g_yawVouluAttache.end() ? 0.0f : it->second;
 }
 
 /// Marque un avatar comme PORTE par une plateforme (ou leve la marque). Appele par le redscript
@@ -1287,6 +1313,7 @@ bool NetworkGameSystem::Tessera_AvatarPorteParPlateforme(uint32_t entiteHash, bo
     else
     {
         g_avatarsAttachesPlateforme.erase(entiteHash);
+        g_yawVouluAttache.erase(entiteHash);
     }
     return g_avatarsAttachesPlateforme.count(entiteHash) != 0;
 }
@@ -3798,6 +3825,22 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             g_tamponsJoueurs.erase(it->first);
             g_absentsDepuis.erase(it->first);
             g_suiviAvatars.erase(it->first);
+            // ⭐ LE SURSIS SE TERMINE AUSSI ICI — §7 cas 4 de la spec du 2026-09-06 (« le joueur
+            // sort de portee pendant sa reconstruction »). Sans cette ligne, un joueur dont le
+            // corps neuf n'a jamais ete habille laisserait son ancien corps en sursis pour le
+            // reste de la session : allume, immobile, avec l'ancien visage. On l'eteint en
+            // partant, ce qui est le bon defaut — plus personne n'a besoin de le voir.
+            if (const auto sursis = g_ancienCorpsEnSursis.find(it->first);
+                sursis != g_ancienCorpsEnSursis.end())
+            {
+                int32_t eteints = -1;
+                Red::CallVirtual(this, "TesseraEteindreCorps", eteints, sursis->second);
+                Red::CallVirtual(this, "DestroyTransientEntity", sursis->second);
+                g_ancienCorpsEnSursis.erase(sursis);
+                SDK->logger->InfoF(PLUGIN,
+                    "[visage %llu] sortie de portee pendant la reconstruction : ancien corps "
+                    "eteint (%d composant(s))", it->first, eteints);
+            }
             // La table d'échantillonnage de la télémétrie suit la même règle que ses voisines
             // ci-dessus : une entrée par id réseau jamais revu s'accumulerait sur une session de
             // plusieurs heures. Petit, mais c'est exactement le patron de la « table jamais
@@ -6418,11 +6461,49 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
         const auto aRefaire = m_networkedEntitiesLookup.find(id);
         if (aRefaire != m_networkedEntitiesLookup.end())
         {
-            if (!Red::CallVirtual(this, "DestroyTransientEntity", aRefaire->second))
+            // ── ⛔ ON ETEINT D'ABORD, ON SUPPRIME ENSUITE — ET L'ORDRE EST LE POINT ────────
+            //
+            // Mesure du 2026-09-06, sur observation de Lucas : « il n'y a pas le nettoyage de
+            // l'ancienne entite, on a une superposition des deux corps, un qui n'est pas anime et
+            // le nouveau qui a l'air anime ».
+            //
+            // `DestroyTransientEntity` appelle `DynamicEntitySystem.DeleteEntity`, et l'avatar de
+            // la voie ENRICHIE n'est PAS cree par ce systeme — il vient du spawner natif du mode
+            // photo, et se retrouve par enumeration du monde. L'appel reussit donc et ne supprime
+            // rien (F-PNJ-090), sans le dire.
+            //
+            // ⚠️ ET MON GARDE-FOU NE POUVAIT PAS L'ATTRAPER : `Red::CallVirtual` rend « l'appel a
+            // ete dispatche », pas la valeur de la fonction appelee — laquelle ne rend d'ailleurs
+            // RIEN. Je testais la reussite du pont, jamais celle de la suppression. Un garde-fou
+            // qui ne peut pas echouer ne garde rien.
+            //
+            // On eteint donc le corps, et on tente la suppression derriere : `Toggle` est mesure
+            // (F-PLY-306) et rend le corps invisible meme si l'entite survit. Le jour ou la
+            // suppression marchera, elle nettoiera pour de bon.
+            //
+            // ── ⭐⭐⭐ MAIS PAS MAINTENANT — voir `g_ancienCorpsEnSursis` ─────────────────────
+            //
+            // Eteindre ici rendrait le joueur INVISIBLE si le corps neuf ne naissait jamais. On
+            // met donc l'ancien EN SURSIS : il reste allume, et il ne s'eteint qu'au premier
+            // habillage reussi du neuf, quand sa resolution est prouvee. Le doublon dure le temps
+            // d'un aller-retour de snapshot, et le glitch le masque.
+            if (const auto dejaEnSursis = g_ancienCorpsEnSursis.find(id);
+                dejaEnSursis != g_ancienCorpsEnSursis.end())
             {
-                SDK->logger->WarnF(PLUGIN,
-                    "[visage %llu] echec de la destruction — l'ancien visage restera", id);
+                // ⚠️ INVARIANT I6 — deux changements coup sur coup. Le corps du sursis precedent
+                // a deja ete remplace : il n'a plus rien a garantir, on l'eteint tout de suite.
+                int32_t vieux = -1;
+                Red::CallVirtual(this, "TesseraEteindreCorps", vieux, dejaEnSursis->second);
+                Red::CallVirtual(this, "DestroyTransientEntity", dejaEnSursis->second);
+                SDK->logger->InfoF(PLUGIN,
+                    "[visage %llu] second changement avant nettoyage : l'ancien sursis est eteint "
+                    "maintenant (%d composant(s))", id, vieux);
+                g_ancienCorpsEnSursis.erase(dejaEnSursis);
             }
+            g_ancienCorpsEnSursis[id] = aRefaire->second;
+            SDK->logger->InfoF(PLUGIN,
+                "[visage %llu] ancien corps EN SURSIS — il reste visible jusqu'a ce que le neuf "
+                "soit prouve vivant (un doublon bref vaut mieux qu'une disparition durable)", id);
             // ⚠️ CE QU'ON OUBLIE, ET CE QU'ON GARDE — la liste n'est pas celle du despawn d'AoI.
             //
             //   OUBLIE  m_appliedAppearance  decrit une entite de jeu qui vient d'etre detruite ;
@@ -6660,29 +6741,12 @@ bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Ve
             SDK->logger->InfoF(PLUGIN, "Spawn entite reseau %llu -> entity %llu (voie ENRICHIE, "
                                        "porte le V de ce joueur)", networkId, entityId.hash);
 
-            // ── ⭐ MASQUER LA RENAISSANCE APRES UN CHANGEMENT DE VISAGE ──────────────────────
-            //
-            // Demande de Lucas, 2026-09-06 : « j'accepte le fait que ça disparaisse, et on pourrait
-            // masquer la disparition avec le flou d'apparition — la bouillie de pixels ».
-            //
-            // `johnny_appear_glitch` est declare sur notre entite (elle herite des 177 descripteurs
-            // du pantin photomode de V) et pointe `johnny_silverhand_appear_glitch.effect` —
-            // litteralement l'effet d'APPARITION du jeu. On ne fabrique rien : on nomme.
-            //
-            // ⚠️ SEULE LA VOIE ENRICHIE EST CONCERNEE, et ce n'est pas un oubli : c'est la seule qui
-            // porte l'esthetique. La voie sure fabrique un passant generique, qui n'a pas de visage
-            // a changer — y poser un glitch masquerait une reconstruction qui n'a pas lieu.
-            if (const auto renaissance = g_visageEnReconstruction.find(networkId);
-                renaissance != g_visageEnReconstruction.end())
-            {
-                bool joue = false;
-                Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue, entityId,
-                    RED4ext::CName("johnny_appear_glitch"));
-                g_visageEnReconstruction.erase(renaissance);
-                SDK->logger->InfoF(PLUGIN,
-                    "[visage %llu] renaissance masquee par johnny_appear_glitch : %s",
-                    networkId, joue ? "OK" : "ECHEC (entite non resolue)");
-            }
+            // ⚠️ LE GLITCH N'EST PLUS DECLENCHE ICI. Pose a cet instant, il echouait a TOUS LES
+            // COUPS : le corps est cree de facon ASYNCHRONE et n'est pas encore resolvable quand
+            // le spawn rend son identifiant (mesure du 2026-09-06). Il est desormais joue dans
+            // `PiloterAvatar`, au moment ou l'habillage vient de REUSSIR — donc ou la resolution
+            // du corps est prouvee et non supposee.
+
 
             // ── ⭐ LA FICHE DU CORPS, UNE SEULE FOIS ──────────────────────────────────────────
             //
@@ -7379,10 +7443,14 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         if (g_avatarsAttachesPlateforme.count(cle) != 0)
         {
             g_poseVoulueAttachee[cle] = positionVoulue;
-            g_allureAttachee[cle] = pose.locomotion;
+            g_yawVouluAttache[cle] = pose.yaw;
+            // Dans une cabine en mouvement, le moteur annonce souvent InAir (6) même lorsque le
+            // joueur reste immobile. Seule l'entrée directionnelle dit qu'il marche réellement.
+            g_allureAttachee[cle] = pose.moveDir == 0 ? 0 : std::max<uint8_t>(1, pose.locomotion);
             return;
         }
         g_poseVoulueAttachee.erase(cle);
+        g_yawVouluAttache.erase(cle);
         g_allureAttachee.erase(cle);
     }
 
@@ -7836,6 +7904,59 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                      suiviPosture.passesHabillage);
                     if (habille)
                     {
+                        // ── ⭐ LE GLITCH D'APPARITION, ICI ET PAS AU SPAWN ────────────────────
+                        //
+                        // ⛔ MESURE DU 2026-09-06 : pose a l'instant du spawn, l'appel echouait a
+                        // TOUS LES COUPS — « renaissance masquee : ECHEC (entite non resolue) ».
+                        // Le corps est cree de facon ASYNCHRONE : au moment ou le spawn rend son
+                        // identifiant, l'entite n'est pas encore resolvable. J'avais donc pose
+                        // l'appel au seul instant ou il ne pouvait pas aboutir.
+                        //
+                        // ⭐ ICI, LA RESOLUTION EST PROUVEE : `habille` vaut `true`, ce qui veut
+                        // dire que le script vient de parcourir les composants de ce corps. On ne
+                        // suppose pas qu'il est resolvable, on le SAIT.
+                        //
+                        // ⚠️ Et le retour de l'appel reste journalise. Sans lui, « pas de glitch »
+                        // et « glitch qui ne rend rien » seraient indiscernables — c'est ce qui a
+                        // permis de nommer la cause du premier echec en une seule lecture.
+                        if (const auto renaissance = g_visageEnReconstruction.find(networkId);
+                            renaissance != g_visageEnReconstruction.end())
+                        {
+                            bool joue = false;
+                            Red::CallVirtual(this, "TesseraJouerEffetSurEntite", joue, entityId,
+                                             RED4ext::CName("johnny_appear_glitch"));
+                            g_visageEnReconstruction.erase(renaissance);
+                            SDK->logger->InfoF(PLUGIN,
+                                "[visage %llu] renaissance masquee par johnny_appear_glitch : %s",
+                                networkId, joue ? "OK" : "ECHEC (entite non resolue)");
+
+                            // ── ⭐⭐⭐ LE NEUF EST PROUVE VIVANT : ON PEUT ETEINDRE L'ANCIEN ──
+                            //
+                            // C'est le seul endroit du programme ou on le sait. `habille` vaut
+                            // `true`, donc le script vient de parcourir les composants de CE
+                            // corps : il existe, il se resout, il porte sa tenue. Tant qu'on
+                            // n'etait pas passe ici, eteindre l'ancien aurait pu laisser le
+                            // joueur sans aucun corps visible.
+                            //
+                            // ⚠️ L'ordre compte : le glitch D'ABORD, l'extinction ENSUITE. Le
+                            // glitch se joue sur le corps neuf et couvre l'echange ; l'inverse
+                            // montrerait un trou avant de le masquer.
+                            if (const auto sursis = g_ancienCorpsEnSursis.find(networkId);
+                                sursis != g_ancienCorpsEnSursis.end())
+                            {
+                                int32_t eteints = -1;
+                                Red::CallVirtual(this, "TesseraEteindreCorps", eteints,
+                                                 sursis->second);
+                                Red::CallVirtual(this, "DestroyTransientEntity", sursis->second);
+                                g_ancienCorpsEnSursis.erase(sursis);
+                                SDK->logger->InfoF(PLUGIN,
+                                    "[visage %llu] ancien corps eteint APRES confirmation du neuf "
+                                    ": %d composant(s)%s", networkId, eteints,
+                                    eteints < 0
+                                        ? " — ENTITE INTROUVABLE, l'ancien corps restera visible"
+                                        : "");
+                            }
+                        }
                         // ⭐ Le corps a ete habille au moins une fois : les prochains changements
                         // n'ont plus a attendre qu'il finisse de se monter.
                         suiviPosture.habilleAuMoinsUneFois = true;
