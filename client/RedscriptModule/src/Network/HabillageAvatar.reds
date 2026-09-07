@@ -124,9 +124,19 @@ func TesseraApparenceNue(record: TweakDBID) -> String {
 // niveau des yeux ». Un effet écarté à l'œil ne revient pas dans la liste.
 func TesseraEffetsPilotes() -> array<CName> {
     return [n"eye_glow_blue", n"eye_glow_gold", n"eye_glow_purple", n"eye_glow_red",
+            // Premier tour de roue — tous écartés à l'œil par Lucas le 2026-09-06. Ils restent
+            // déclarés : les rouvrir coûte une ligne de YAML, et les retirer perdrait la trace
+            // de ce qui a DÉJÀ été essayé.
             n"paperdoll_item_switch_glitch", n"camo_intro_vfx",
             n"hacks_cyberware_malfunction", n"hacks_comms_noise",
-            n"hacks_locomotion_malfunction", n"hacks_overheat_lvl1"];
+            n"hacks_locomotion_malfunction", n"hacks_overheat_lvl1",
+            // ⭐ Second tour. Ceux-là sortent de la LECTURE des 159 descripteurs, pas d'un
+            // filtre sur les mots « glitch » ou « hack » — c'est ce filtrage qui me les avait
+            // cachés. Le Mur Noir et le virus de netrunner sont les corruptions numériques les
+            // plus fortes que le jeu pose sur un personnage.
+            n"netrunner_virus_big", n"netrunner_virus",
+            n"black_wall_upload", n"black_wall_activation",
+            n"fx_sandevistan_versus", n"status_emp"];
 }
 
 // Vrai si ce composant est une pièce de GARDE-ROBE — donc à nous — et faux s'il appartient au CORPS.
