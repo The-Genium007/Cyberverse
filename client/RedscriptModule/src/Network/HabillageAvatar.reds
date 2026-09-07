@@ -108,8 +108,25 @@ func TesseraApparenceNue(record: TweakDBID) -> String {
 //
 // Les 145 noms déclarés sur l'entité (`status_*`, `trail_*`, `strong_arms_block`…) sont autant
 // d'états visuels disponibles sans une ligne de cuisson. On les ouvre un par un, en les nommant.
+// ⭐ LES SIX DERNIERS SONT LES CANDIDATS AU MASQUAGE D'UNE RECONSTRUCTION, ajoutés le 2026-09-06.
+//
+// Demande de Lucas : *« j'aime pouvoir tester les sept trucs »*. Les passer par des ITEMS plutôt
+// que par une reconstruction rend l'essai instantané, répétable et réversible — et surtout il
+// n'exige plus de manipuler une esthétique à chaque coup. C'est le mécanisme des yeux d'appel,
+// mesuré et validé à l'œil le 2026-09-05, appliqué à un autre besoin.
+//
+// ⚠️ CHAQUE NOM EST UN DESCRIPTEUR RELEVÉ SUR L'ENTITÉ, jamais un radical de chemin de ressource.
+// Le fichier s'appelle `ch_hacks_optics_malfunction.effect`, le descripteur
+// `hacks_optics_malfunction` — l'écart a coûté une session entière le 2026-09-06, parce que
+// l'appel rend `OK` même sur un nom qui n'existe pas.
+//
+// ⚠️ `hacks_optics_malfunction` est volontairement absent : Lucas l'a vu, « c'est une explosion au
+// niveau des yeux ». Un effet écarté à l'œil ne revient pas dans la liste.
 func TesseraEffetsPilotes() -> array<CName> {
-    return [n"eye_glow_blue", n"eye_glow_gold", n"eye_glow_purple", n"eye_glow_red"];
+    return [n"eye_glow_blue", n"eye_glow_gold", n"eye_glow_purple", n"eye_glow_red",
+            n"paperdoll_item_switch_glitch", n"camo_intro_vfx",
+            n"hacks_cyberware_malfunction", n"hacks_comms_noise",
+            n"hacks_locomotion_malfunction", n"hacks_overheat_lvl1"];
 }
 
 // Vrai si ce composant est une pièce de GARDE-ROBE — donc à nous — et faux s'il appartient au CORPS.
