@@ -185,20 +185,58 @@ func TesseraTousLesEffets() -> array<CName> {
 }
 
 func TesseraEffetsPilotes() -> array<CName> {
-    return [n"eye_glow_blue", n"eye_glow_gold", n"eye_glow_purple", n"eye_glow_red",
-            // Premier tour de roue — tous écartés à l'œil par Lucas le 2026-09-06. Ils restent
-            // déclarés : les rouvrir coûte une ligne de YAML, et les retirer perdrait la trace
-            // de ce qui a DÉJÀ été essayé.
-            n"paperdoll_item_switch_glitch", n"camo_intro_vfx",
-            n"hacks_cyberware_malfunction", n"hacks_comms_noise",
-            n"hacks_locomotion_malfunction", n"hacks_overheat_lvl1",
-            // ⭐ Second tour. Ceux-là sortent de la LECTURE des 159 descripteurs, pas d'un
-            // filtre sur les mots « glitch » ou « hack » — c'est ce filtrage qui me les avait
-            // cachés. Le Mur Noir et le virus de netrunner sont les corruptions numériques les
-            // plus fortes que le jeu pose sur un personnage.
-            n"netrunner_virus_big", n"netrunner_virus",
-            n"black_wall_upload", n"black_wall_activation",
-            n"fx_sandevistan_versus", n"status_emp"];
+    // ⛔ BLOC GÉNÉRÉ — `python3 <scratchpad>/generer-effets.py`. Source unique :
+    // `tools/re-probe/entites/avatar_distant_wa.ent.json`. Les items TweakXL
+    // (`tessera-effets.yaml`) et la table serveur (`effets_avatar.rs`) en découlent aussi, donc
+    // les trois ne peuvent pas diverger.
+    //
+    // ⭐ POURQUOI LES 153 ET PLUS SIX. Les effets FONCTIONNENT — Lucas l'a confirmé le
+    // 2026-09-06 : « les effets fonctionnent parfaitement, c'est juste que je ne trouve pas celui
+    // qui me plaît ». J'avais conclu l'inverse d'un « aucun de cela », et c'était une
+    // sur-interprétation : il me disait qu'aucun ne lui convenait, pas qu'aucun ne rendait.
+    // Le servir six par six lui coûtait un aller-retour par lot ; avec un item par effet, il
+    // balaie seul, à son rythme.
+    return [
+            n"black_wall", n"black_wall_activation", n"black_wall_upload", n"blood_headshot",
+            n"blood_mouth_punch_strong", n"blood_mouth_punch_weak", n"blood_nose_punch_strong", n"camo_intro_vfx",
+            n"charged_jump", n"cigarette_smoke_exhaust", n"cigarette_smoke_exhaust_dex_car", n"cigarette_smoke_exhaust_green",
+            n"cigarette_smoke_exhaust_johnny", n"cigarette_smoke_exhaust_pink", n"cigarette_smoke_exhaust_small", n"cigarette_smoke_exhaust_small_green",
+            n"cigarette_smoke_exhaust_small_johnny", n"cigarette_smoke_exhaust_small_pink", n"cigarette_smoke_exhaust_small_yellow", n"cigarette_smoke_exhaust_yellow",
+            n"drug_exhale_extra", n"e3_sh0000_collar", n"e3_sh0290_collar", n"e3_sh0450_collar",
+            n"e3_sh0489_collar", n"e3_sh0525_collar", n"electric_hit", n"enviromental_takedown",
+            n"eye_flare", n"eye_glow_blue", n"eye_glow_gold", n"eye_glow_purple",
+            n"eye_glow_red", n"eye_hasan_gold", n"finisher_katana_01", n"finisher_katana_01_head",
+            n"finisher_katana_02", n"finisher_katana_02_decal", n"finisher_long_blade_decal", n"finishers_01_axe",
+            n"finishers_01_knife", n"finishers_02_knife", n"finsher_mantis_01_blood_back", n"finsher_mantis_01_blood_l",
+            n"finsher_mantis_01_blood_r", n"fists_stagger_front", n"fx_communities", n"fx_hacks",
+            n"fx_kerenzikov", n"fx_man_base", n"fx_npc_base", n"fx_sandevistan",
+            n"fx_sandevistan_left", n"fx_sandevistan_right", n"fx_sandevistan_versus", n"fx_sandevistan_versus_loop",
+            n"fx_sandevistan_versus_start", n"fx_status_effects", n"fx_status_effects_extra", n"hacks_brain_bolt",
+            n"hacks_brain_bolt_kill", n"hacks_comms_noise", n"hacks_comms_noise_android", n"hacks_contagion",
+            n"hacks_contagion_explosion", n"hacks_cyberware_malfunction", n"hacks_locomotion_malfunction", n"hacks_optics_malfunction",
+            n"hacks_overheat_android", n"hacks_overheat_lvl1", n"hacks_overheat_lvl2", n"hacks_system_collapse",
+            n"hacks_weapon_malfunction", n"human_shield", n"idle_chemical", n"idle_electric",
+            n"idle_thermal", n"johnny_appear_glitch", n"kerenzikov_center", n"kerenzikov_dodge_01",
+            n"kerenzikov_dodge_02", n"kerenzikov_dodge_03", n"kerenzikov_dodge_04", n"kerenzikov_dodge_05",
+            n"kerenzikov_dodge_06", n"kerenzikov_dodge_dodge_back_01", n"kerenzikov_dodge_left_01", n"kerenzikov_dodge_right_01",
+            n"kerenzikov_left", n"kerenzikov_right", n"landing_death", n"landing_hard",
+            n"landing_regular", n"landing_very_hard", n"monowire_relic_tree_quickhack_attack_impact", n"netrunner_virus",
+            n"netrunner_virus_big", n"paperdoll_item_switch_glitch", n"pee", n"smoke_exhale",
+            n"sniffing_drugs", n"sniffing_drugs_only_line", n"special_finishers_impact", n"stand_inhale_drug_exhale",
+            n"stand_spit", n"status_berserk", n"status_bleeding", n"status_blinded",
+            n"status_burning", n"status_craving", n"status_crippled", n"status_cyberware_disabled",
+            n"status_decreased_stats", n"status_defeated", n"status_disabled_comms", n"status_disarmed",
+            n"status_drugged", n"status_electricity_resistance", n"status_electrocuted", n"status_emp",
+            n"status_fire_resistance", n"status_health_regen", n"status_heartattack", n"status_increased_stats",
+            n"status_knockdowned", n"status_poison_resistance", n"status_poisoned", n"status_poisoned_exhaust",
+            n"status_poisoned_vomit", n"status_stamina_regen", n"status_stunned", n"status_suicide",
+            n"status_wounded_l_arm", n"status_wounded_l_arm_cyberflesh", n"status_wounded_l_leg", n"status_wounded_l_leg_cyberflesh",
+            n"status_wounded_r_arm", n"status_wounded_r_arm_cyberflesh", n"status_wounded_r_leg", n"status_wounded_r_leg_cyberflesh",
+            n"strong_arms_block", n"strong_arms_taunt", n"suicide_knife", n"takedown_aerial_back_blood_ground",
+            n"takedown_aerial_front_blood_ground", n"takedown_grapple", n"trail_chemical", n"trail_electric",
+            n"trail_physical", n"trail_thermal", n"vomit", n"vomit_quick",
+            n"weapon_malfunction_blow_up"
+    ];
 }
 
 // Vrai si ce composant est une pièce de GARDE-ROBE — donc à nous — et faux s'il appartient au CORPS.
@@ -599,9 +637,27 @@ func TesseraHabillerLeCorps(cible: EntityID, passe: Uint32) -> Bool {
         TesseraJournalHabillage(s"  SONDE : \(ArraySize(tous)) effets lances d'un coup sur ce corps");
     }
 
+    // ── ⚠️⚠️ LE BALAYAGE DES EFFETS EST BORNE AUX TROIS PREMIERES PASSES ─────────────────────
+    //
+    // ⛔ POURQUOI. La liste pilotee est passee de 4 a 153 noms le 2026-09-07, pour que Lucas
+    // puisse balayer seul les effets de l'entite. Or ce bloc appelle `StartEffectEvent` ou
+    // `StopEffectEvent` pour CHAQUE nom, a CHAQUE passe : le cout est passe de 4 appels moteur a
+    // 153, dix fois par corps. Une instance a plante dans la demi-heure qui a suivi.
+    //
+    // ⚠️ RIEN NE PROUVE LE LIEN — aucun vidage memoire, aucun rapport de plantage, aucune erreur
+    // RED4ext, et le journal de l'instance morte s'arrete en pleine partie ordinaire. Mais une
+    // multiplication par 38 du travail moteur, juste avant un plantage, ne se laisse pas en place
+    // en attendant d'etre innocentee.
+    //
+    // ⭐ Les trois premieres passes suffisent : le C++ remet `passesHabillage` a zero a chaque
+    // changement de tenue, donc `passe < 3` veut dire « quelque chose vient de changer ». En
+    // regime etabli, plus un seul appel. Le cout par changement passe de 1530 a 459.
+    //
+    // ⚠️ Trois et pas une : un corps qui vient de naitre n'a pas fini de monter ses composants, et
+    // une seule tentative tomberait parfois dans la fenetre morte.
     let effets = TesseraEffetsPilotes();
     let e = 0;
-    while e < ArraySize(effets) {
+    while passe < 3u && e < ArraySize(effets) {
         let nomEffet = NameToString(effets[e]);
         let veut = false;
         let a = 0;
