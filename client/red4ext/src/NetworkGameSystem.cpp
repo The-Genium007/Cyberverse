@@ -1304,6 +1304,55 @@ float YawVouluAttache(uint32_t cle)
 /// ⚠️ ON REND UNE CHAINE VIDE, JAMAIS DES ZEROS, quand la lecture n'est pas sure. Des zeros
 /// plausibles sont exactement ce qui fait ecrire un fait faux : « la structure est vide » au lieu
 /// de « je n'ai pas pu lire ». C'est la lecon du compteur d'echecs de F-PLY-341.
+/// Lit `nombre` flottants depuis la BASE du composant — voir l'en-tete pour le pourquoi.
+///
+/// ⚠️ Meme discipline que son jumeau : chaine VIDE si la lecture n'est pas sure, jamais des zeros
+/// plausibles. Un zero credible fait ecrire un fait faux.
+Red::CString NetworkGameSystem::Tessera_LireComposantBrut(
+    const Red::Handle<RED4ext::IScriptable>& composant, int32_t offset, int32_t nombre) const
+{
+    auto* comp = composant.instance;
+    if (comp == nullptr || offset < 0 || offset > 0x4000 || nombre <= 0 || nombre > 64)
+    {
+        return Red::CString("");
+    }
+    MEMORY_BASIC_INFORMATION mbi{};
+    auto lisible = [&](std::uintptr_t ou, std::size_t taille)
+    {
+        if (VirtualQuery(reinterpret_cast<void*>(ou), &mbi, sizeof(mbi)) == 0
+            || mbi.State != MEM_COMMIT)
+        {
+            return false;
+        }
+        constexpr DWORD kOk = PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ
+                            | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY;
+        if ((mbi.Protect & kOk) == 0)
+        {
+            return false;
+        }
+        const auto fin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        return ou + taille <= fin;
+    };
+
+    const auto base = reinterpret_cast<std::uintptr_t>(comp) + static_cast<std::uintptr_t>(offset);
+    if (!lisible(base, static_cast<std::size_t>(nombre) * 4u))
+    {
+        return Red::CString("");
+    }
+    std::string sortie;
+    sortie.reserve(static_cast<std::size_t>(nombre) * 18u);
+    char tampon[48];
+    for (int32_t i = 0; i < nombre; ++i)
+    {
+        const auto ou = base + static_cast<std::uintptr_t>(i) * 4u;
+        const float f = *reinterpret_cast<const float*>(ou);
+        const std::uint32_t u = *reinterpret_cast<const std::uint32_t*>(ou);
+        std::snprintf(tampon, sizeof(tampon), "%d:%.4f/%u ", offset + i * 4, f, u);
+        sortie += tampon;
+    }
+    return Red::CString(sortie.c_str());
+}
+
 Red::CString NetworkGameSystem::Tessera_LireMouvementBrut(
     const Red::Handle<RED4ext::IScriptable>& moveComponent, int32_t offset, int32_t nombre) const
 {

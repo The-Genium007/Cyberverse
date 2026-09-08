@@ -1210,6 +1210,18 @@ public:
     Red::CString Tessera_LireMouvementBrut(const Red::Handle<RED4ext::IScriptable>& moveComponent,
                                            int32_t offset, int32_t nombre) const;
 
+    /// ⭐ LE MEME LECTEUR, MAIS DEPUIS LA BASE DU COMPOSANT — sans suivre `+0x160`.
+    ///
+    /// POURQUOI IL EXISTE. [F-PLY-408] a mesure que RIEN ne varie dans 1 Ko de la representation
+    /// de mouvement d'un avatar QUI MARCHE. La locomotion n'y est donc pas — ou plus exactement,
+    /// personne ne l'y ecrit. Le candidat suivant est le composant d'ANIMATION, que la sonde
+    /// n'avait jamais regarde, et il se lit depuis SA propre base.
+    ///
+    /// ⚠️ Deux natifs plutot qu'un parametre de mode : un mode qui change le SENS d'un offset est
+    /// exactement le genre de commodite qui fait lire la mauvaise adresse six mois plus tard.
+    Red::CString Tessera_LireComposantBrut(const Red::Handle<RED4ext::IScriptable>& composant,
+                                           int32_t offset, int32_t nombre) const;
+
     Red::CString Tessera_GetServerShard() const { return Red::CString(m_serverShard.c_str()); }
     Red::CString Tessera_GetServerOverlaps() const { return Red::CString(m_serverOverlapsCsv.c_str()); }
     int32_t Tessera_GetVisiblePlayerCount() const
@@ -3075,6 +3087,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_YawVouluAttache);
     RTTI_METHOD(Tessera_EcrireOffsetLocal);
     RTTI_METHOD(Tessera_LireMouvementBrut);
+    RTTI_METHOD(Tessera_LireComposantBrut);
     RTTI_METHOD(Tessera_PoserJoueurLocalPorte);
     RTTI_METHOD(Tessera_JoueurLocalPorte);
     RTTI_METHOD(Tessera_AvatarPorteParPlateforme);

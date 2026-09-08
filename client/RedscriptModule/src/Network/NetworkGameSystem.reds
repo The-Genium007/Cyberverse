@@ -551,6 +551,9 @@ public native class NetworkGameSystem extends IGameSystem {
     /// ou une chaîne VIDE si la lecture n'est pas sûre : des zéros plausibles feraient écrire un
     /// fait faux (« la structure est vide » au lieu de « je n'ai pas pu lire »).
     public native func Tessera_LireMouvementBrut(moveComponent: ref<IScriptable>, offset: Int32, nombre: Int32) -> String;
+    /// Le meme lecteur, mais depuis la BASE du composant — pour le composant d'ANIMATION, que
+    /// F-PLY-408 designe comme le candidat suivant.
+    public native func Tessera_LireComposantBrut(composant: ref<IScriptable>, offset: Int32, nombre: Int32) -> String;
     /// Placement visuel d'un passager sans empiler d'ordre IA. `moveComponent` est opaque au
     /// script ; le natif borne, ecrit puis relit son entree active (F-PLY-337).
     /// 0 = écrit ; 1 = corps introuvable ; 2 = moveComponent introuvable ; 3 = natif refusé.
