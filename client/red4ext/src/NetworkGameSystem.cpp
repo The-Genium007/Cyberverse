@@ -8046,6 +8046,19 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 g_telemetrie.Evenement("appel", networkId,
                                        appel ? (ok ? "yeux_bleus" : "yeux_bleus_refuse")
                                              : (ok ? "raccroche" : "raccroche_refuse"));
+                // ⚠️ ET DANS LE JOURNAL RED4EXT, PAS SEULEMENT DANS LA TELEMETRIE.
+                //
+                // Mesure du 2026-09-08 : les fichiers de telemetrie s'etaient arretes trois
+                // heures plus tot, et l'absence d'evenement `appel` ne prouvait donc RIEN sur ce
+                // code. Un instrument qui ne tourne pas rend un silence, et un silence se lit
+                // comme un verdict — c'est le defaut qui a coute la journee.
+                //
+                // Le journal red4ext, lui, ecrit toujours : c'est celui qui porte deja
+                // `[Habillage]` et `[PurgeVisage]`. Une ligne ici rend le cablage OBSERVABLE sans
+                // dependre d'un appel telephonique reel.
+                SDK->logger->InfoF(PLUGIN, "[Appel] avatar=%llu flags=0x%02X appel=%d pousse=%d",
+                                   static_cast<unsigned long long>(networkId),
+                                   static_cast<unsigned>(pose.flags), appel ? 1 : 0, ok ? 1 : 0);
             }
         }
 
