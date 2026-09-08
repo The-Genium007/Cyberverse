@@ -727,14 +727,18 @@ std::set<uint64_t> g_visageEnReconstruction;
 /// ⭐⭐ Et `hacks_system_collapse` PROUVE QUE LA VOIE MARCHE : c'est le seul nom correctement
 /// declare qu'on ait essaye, et Lucas l'a vu (« on dirait l'effet d'electrocution »). Le probleme
 /// n'a donc jamais ete le mecanisme — seulement les noms.
+/// ⭐ ORDRE REVU LE 2026-09-06 SUR VERDICT DE LUCAS. `hacks_optics_malfunction` est RETIRE —
+/// il rend « une explosion au niveau des yeux, donc ca ne va pas ». Et il place lui-meme le
+/// fondu du pantin d'inventaire en tete : « je pense que le six est a tester des le depart ».
+/// C'etait aussi mon premier choix avant que le balayage des archives ne me fasse deplacer les
+/// quickhacks devant — son intuition et la mienne se rejoignent, on la suit.
 static const char* const kEffetsRenaissance[] = {
-    "hacks_optics_malfunction",
+    "paperdoll_item_switch_glitch",
+    "camo_intro_vfx",
     "hacks_cyberware_malfunction",
     "hacks_comms_noise",
     "hacks_locomotion_malfunction",
     "hacks_overheat_lvl1",
-    "paperdoll_item_switch_glitch",
-    "camo_intro_vfx",
 };
 static size_t g_prochainEffetRenaissance = 0;
 

@@ -543,6 +543,7 @@ public native class NetworkGameSystem extends IGameSystem {
     /// Rend l'etat EFFECTIF (relu apres ecriture), pas l'argument.
     /// La pose MONDE que le netcode voudrait pour cet avatar attache.
     public native func Tessera_PoseVoulueAttachee(entiteHash: Uint32) -> Vector4;
+    public native func Tessera_YawVouluAttache(entiteHash: Uint32) -> Float;
     /// L'allure annoncee pour cet avatar attache.
     public native func Tessera_AllureAttachee(entiteHash: Uint32) -> Int32;
     public native func Tessera_EcrireOffsetLocal(moveComponent: ref<IScriptable>, x: Float, y: Float, z: Float) -> Bool;
@@ -1679,6 +1680,110 @@ public native class NetworkGameSystem extends IGameSystem {
     // ⚠️ LA RÉSOLUTION D'ENTITÉ EST CELLE DE `TesseraCorpsDeLEntite`, pas `FindEntityByID` seul :
     // celui-là rend nil sur un pantin bien vivant (F-PNJ-088), et un effet qui ne part pas
     // ressemblerait à un effet qui ne rend rien.
+    // Éteint TOUS les composants de mesh d'un corps, et rend combien ont été éteints.
+    //
+    // ⛔ POURQUOI ÉTEINDRE AU LIEU DE SUPPRIMER — mesuré le 2026-09-06, sur l'observation de Lucas :
+    // « il n'y a pas le nettoyage de l'ancienne entité, on a une superposition des deux corps, un
+    // qui n'est pas animé et le nouveau qui a l'air animé ».
+    //
+    // `DestroyTransientEntity` appelle `DynamicEntitySystem.DeleteEntity`. Or l'avatar de la voie
+    // ENRICHIE n'est **pas** créé par ce système : il vient du spawner natif du mode photo, et se
+    // retrouve par énumération du monde. `DeleteEntity` ne peut donc pas le supprimer — et il ne le
+    // dit pas : l'appel réussit et ne fait rien. C'est la forme exacte de [F-PNJ-090], et le
+    // symptôme est un ancien corps qui reste planté là, figé, par-dessus le neuf.
+    //
+    // ⭐ Ce qui MARCHE, mesuré et employé partout ailleurs dans ce dépôt, c'est `Toggle` sur un
+    // composant monté ([F-PLY-306]). Un corps dont tous les meshes sont éteints est invisible.
+    //
+    // ⚠️ L'ENTITÉ SURVIT, et il faut le savoir : elle occupe encore de la mémoire et son IA tourne.
+    // C'est acceptable parce qu'un changement de visage est RARE et volontaire (un passage chez le
+    // ripperdoc), pas parce que c'est propre. Le jour où l'on saura supprimer une entité de la voie
+    // enrichie, ceci devient un repli.
+    //
+    // ⚠️ ON REND UN COMPTE, PAS UN BOOLÉEN. « 0 éteint » et « entité introuvable » sont deux causes
+    // opposées derrière le même échec visuel, et un booléen les confondrait — d'où le `-1`.
+    // ── ⭐⭐⭐ POURQUOI CETTE FONCTION SE JOURNALISE ELLE-MÊME ────────────────────────────────
+    //
+    // Elle a rendu `-1` **deux fois de suite** le 2026-09-06, dans deux contextes opposés — au
+    // moment du changement d'esthétique ET quatre secondes plus tard, à la renaissance. Chaque
+    // fois l'ancien corps est resté visible, et Lucas l'a vu : « il y a encore l'entité de KIMY
+    // qui est présente ».
+    //
+    // ⛔ Or `-1` couvre TROIS causes que rien ne distingue de l'extérieur :
+    //   1. l'`EntityID` reçu ne désigne rien (mauvaise valeur, entité déjà détruite) ;
+    //   2. l'entité existe mais aucune des deux voies ne la rend — `DynamicEntitySystem.GetEntity`
+    //      échoue sur la voie ENRICHIE (spawner natif du mode photo, l'entité ne lui appartient
+    //      pas) et `FindEntityByID` rend nil sur un pantin bien vivant ([F-PNJ-088]) ;
+    //   3. l'appel vient du fil RÉSEAU et non du fil de JEU. C'est la seule différence
+    //      structurelle avec `TesseraJouerEffetSurEntite`, qui marche — elle, est appelée depuis
+    //      `PiloterAvatar`, donc depuis le fil de jeu.
+    //
+    // ⚠️ J'ai bâti DEUX correctifs sur un diagnostic deviné entre ces trois hypothèses, et les
+    // deux étaient faux. On mesure maintenant : l'id reçu, et laquelle des deux résolutions échoue.
+    public func TesseraEteindreCorps(cible: EntityID) -> Int32 {
+        let corps = TesseraCorpsDeLEntite(cible) as GameObject;
+        if !IsDefined(corps) {
+            // ⚠️ On ne refait les deux résolutions QUE dans la branche d'échec : dans le cas
+            // nominal elles coûteraient deux appels moteur pour rien, à chaque changement.
+            let parDynamique = GameInstance.GetDynamicEntitySystem().GetEntity(cible);
+            let parRecherche = GameInstance.FindEntityByID(GetGameInstance(), cible);
+            this.Tessera_Journal(
+                s"[Eteindre] ECHEC sur \(EntityID.ToDebugString(cible)) — dynamique:\(IsDefined(parDynamique)) recherche:\(IsDefined(parRecherche))");
+            return -1;
+        }
+        let comps = corps.GetComponents();
+        let eteints = 0;
+        let i = 0;
+        while i < ArraySize(comps) {
+            if IsDefined(comps[i]) && comps[i].IsEnabled() {
+                comps[i].Toggle(false);
+                eteints += 1;
+            }
+            i += 1;
+        }
+        return eteints;
+    }
+
+    // ── ⭐⭐⭐ L'EFFET SUR L'OBSERVATEUR LUI-MÊME, PAS SUR LE CORPS QUI CHANGE ────────────────
+    //
+    // Demande de Lucas, 2026-09-06, et elle redéfinit la cible : *« le fait qu'on ait la vue qui
+    // soit brouillée, c'est ça qu'on cherche. Il faut que ça dure avant le changement, pendant et
+    // après, histoire qu'on soit sûr que tout a été masqué. »*
+    //
+    // ⛔ CE QUE ÇA CASSE DANS L'APPROCHE PRÉCÉDENTE. L'effet était joué sur le CORPS reconstruit —
+    // donc il ne pouvait exister qu'APRÈS la renaissance, jamais avant ni pendant. Le trou qu'il
+    // fallait masquer est précisément celui où aucun corps n'existe : impossible d'y accrocher un
+    // effet porté par un corps. La contrainte est structurelle, pas un défaut de réglage.
+    //
+    // ⭐ Un effet porté par l'OBSERVATEUR, lui, traverse toute la fenêtre : il commence avant la
+    // destruction et survit à la renaissance, parce que le joueur local, lui, ne disparaît pas.
+    //
+    // ⚠️ **NON MESURÉ — HYPOTHÈSE.** Que `johnny_appear_glitch` soit déclaré sur le pantin du
+    // JOUEUR et y rende quelque chose n'est établi par rien : les 145 effets relevés le sont sur
+    // NOTRE entité d'avatar, héritée du pantin photomode. Le retour de cette fonction est donc
+    // journalisé par l'appelant, et « pas d'effet » se distinguera de « effet invisible ».
+    public func TesseraJouerEffetSurJoueur(effet: CName) -> Bool {
+        let joueur = GetPlayer(GetGameInstance());
+        if !IsDefined(joueur) {
+            return false;
+        }
+        GameObjectEffectHelper.StartEffectEvent(joueur, effet);
+        return true;
+    }
+
+    /// Arrête l'effet sur l'observateur. ⚠️ Inconditionnel, comme pour les yeux d'appel : aucune
+    /// API ne dit si un effet joue, donc on ne peut pas conditionner l'arrêt à son état. Arrêter
+    /// ce qui ne joue pas est sans conséquence ; ne pas arrêter ce qui joue laisserait la vue
+    /// brouillée pour toujours.
+    public func TesseraArreterEffetSurJoueur(effet: CName) -> Bool {
+        let joueur = GetPlayer(GetGameInstance());
+        if !IsDefined(joueur) {
+            return false;
+        }
+        GameObjectEffectHelper.StopEffectEvent(joueur, effet);
+        return true;
+    }
+
     public func TesseraJouerEffetSurEntite(cible: EntityID, effet: CName) -> Bool {
         let corps = TesseraCorpsDeLEntite(cible) as GameObject;
         if !IsDefined(corps) {
