@@ -676,6 +676,24 @@ std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 /// foulee et emporte l'effet avec elle. C'est la renaissance qui est masquable, pas la mort.
 std::set<uint64_t> g_visageEnReconstruction;
 
+// ⭐ LE PLAN DE BITS DE `PositionUpdate.flags` — voir le commentaire a l'emission pour le
+// raisonnement complet. Une seule declaration, pour que l'emetteur et le recepteur ne puissent
+// pas diverger : deux definitions du meme bit, c'est un etat qui s'allume chez l'un et pas chez
+// l'autre, et un symptome qu'on cherche du mauvais cote.
+constexpr std::uint8_t kFlagVisee = 1 << 0;
+constexpr std::uint8_t kFlagAccroupi = 1 << 1;
+constexpr std::uint8_t kFlagACouvert = 1 << 2;
+constexpr std::uint8_t kFlagPorte = 1 << 3;
+constexpr std::uint8_t kFlagAuSol = 1 << 4;
+constexpr std::uint8_t kFlagNage = 1 << 5;
+constexpr std::uint8_t kFlagAppelTelephonique = 1 << 6;
+// bit 7 : RESERVE. Ne pas consommer.
+
+// L'effet declare qui rend l'appel visible sur un avatar distant. Il fait partie des 165
+// descripteurs de notre entite (table `effets_avatar.rs`, entree 44) et la voie « effet declare
+// sur avatar distant » est mesuree (F-PLY-371).
+constexpr const char* kEffetYeuxAppel = "eye_glow_blue";
+
 /// ⭐⭐⭐ LES SEPT EFFETS CANDIDATS POUR MASQUER LA RENAISSANCE, ESSAYES A TOUR DE ROLE.
 ///
 /// ⛔ POURQUOI UNE ROUE PLUTOT QU'UN CHOIX. Un nom d'effet ne dit RIEN de ce qu'il rend a
@@ -2109,8 +2127,38 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
             }
         }
     }
+    // ── ⭐ `flags` N'ETAIT REMPLI PAR PERSONNE — huit bits libres depuis le gel du palier 2 ──
+    //
+    // Le champ existe dans `protocol.fbs` (« bitfield ubyte reserve »), il traverse le shard, il
+    // est range dans le monde (`world.rs`), il repart dans chaque `PlayerState`... et l'emetteur
+    // envoyait `0`. Un canal complet a zero producteur : le symetrique exact de `sustained`, qui
+    // avait zero CONSOMMATEUR pendant des semaines (F-PLY-303).
+    //
+    // ⚠️ LE PLAN DE BITS EST FIGE ICI ET NULLE PART AILLEURS. Il est dans la spec du 2026-09-08,
+    // et le bit 7 reste VOLONTAIREMENT libre : une fois les huit pris, etendre coute un champ de
+    // protocole, donc une regeneration de l'en-tete C++, donc un desaccordage client/serveur
+    // possible. Sept bits utiles et un de garde, c'est un choix.
+    //
+    //     bit 0  visee (mise en joue)        bit 4  au sol / en l'air
+    //     bit 1  accroupi                    bit 5  nage
+    //     bit 2  a couvert                   bit 6  APPEL TELEPHONIQUE  <- pose ici
+    //     bit 3  porte quelque chose         bit 7  RESERVE, ne pas consommer
+    //
+    // ⭐ Seul le bit 6 est rempli pour l'instant, et c'est deliberé : c'est le seul etat dont le
+    // canal de RENDU sur un avatar distant soit MESURE (F-PLY-393 pour l'item, F-PLY-371 pour
+    // l'effet declare). Remplir les autres avant de savoir les afficher produirait un fil bavard
+    // et rien a l'ecran — l'erreur exacte que `sustained` a coutee.
+    std::uint8_t flags = 0;
+    {
+        bool appel = false;
+        Red::CallVirtual(this, "TesseraAppelActif", appel);
+        if (appel)
+        {
+            flags |= kFlagAppelTelephonique;
+        }
+    }
     const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
-        builder, &pos, QuantYaw(yaw), locomotion, moveDir, /*flags=*/0,
+        builder, &pos, QuantYaw(yaw), locomotion, moveDir, flags,
         /*frame ignoré par le serveur=*/0, /*slot=*/0, QuantYaw(lookYawDeg),
         QuantPitch(lookPitchDeg), framePosValide ? &framePos : nullptr, framePosValide);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
@@ -3302,6 +3350,9 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             pose.z = positionMonde.Z;
             pose.yaw = DequantYaw(ps->yaw());
             pose.locomotion = ps->locomotion();
+            // ⭐ Le bitfield d'etats binaires. Il traversait deja le shard et le monde ; il
+            // n'etait ni rempli a l'emission, ni lu ici. Un canal complet a DEUX bouts manquants.
+            pose.flags = ps->flags();
             // Le REGARD (spec 2026-08-15 §5.1). Defaut (0,0) = non rapporte par ce client :
             // le consommateur retombe alors sur le yaw du corps.
             pose.lookYaw = DequantYaw(ps->look_yaw());
@@ -7898,6 +7949,38 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             g_telemetrie.Evenement("posture", networkId,
                                    accroupi ? (pousse ? "accroupi" : "accroupi_refuse")
                                             : (pousse ? "debout" : "debout_refuse"));
+        }
+
+        // -- ⭐ L'APPEL TELEPHONIQUE : LES YEUX BLEUS (cable le 2026-09-08) ------------------
+        //
+        // Demande de Lucas : « quand on a un appel telephonique, on a les yeux qui deviennent
+        // bleus ». Les deux bouts du fil sont mesures :
+        //   · l'etat se LIT en une ligne  -> `questPhoneManager.IsPhoneCallActive()`
+        //   · l'effet se JOUE sur un avatar distant -> F-PLY-371, `eye_glow_blue` est declare
+        // Il ne manquait que le fil, et `flags` etait libre.
+        //
+        // ⚠️ SUR CHANGEMENT, jamais en continu — meme regle que l'accroupissement juste au-dessus.
+        // Une ecriture d'effet par avatar et par frame, c'est le regime qui a fait tomber le jeu
+        // deux fois le 2026-08-06.
+        //
+        // ⚠️ ET ON ETEINT EXPLICITEMENT. `eye_glow_blue` est une BOUCLE : sans l'arret, les yeux
+        // resteraient bleus apres le raccrochage, et le defaut serait attribue a l'effet plutot
+        // qu'a son pilote. Un effet tenu qu'on ne sait pas eteindre ne doit pas etre allume.
+        {
+            const bool appel = (pose.flags & kFlagAppelTelephonique) != 0;
+            const std::int8_t voulu = appel ? 1 : 0;
+            if (suiviPosture.dernierAppel != voulu)
+            {
+                suiviPosture.dernierAppel = voulu;
+                bool ok = false;
+                Red::CallVirtual(this,
+                                 appel ? "TesseraJouerEffetSurEntite"
+                                       : "TesseraArreterEffetSurEntite",
+                                 ok, entityId, Red::CName(kEffetYeuxAppel));
+                g_telemetrie.Evenement("appel", networkId,
+                                       appel ? (ok ? "yeux_bleus" : "yeux_bleus_refuse")
+                                             : (ok ? "raccroche" : "raccroche_refuse"));
+            }
         }
 
         // -- LA POSE TENUE, SUR CHANGEMENT (cablee le 2026-08-24) -----------------------------

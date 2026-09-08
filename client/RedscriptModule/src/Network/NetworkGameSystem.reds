@@ -1784,6 +1784,37 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    /// ⭐ L'APPEL TÉLÉPHONIQUE DU JOUEUR LOCAL — lu, pas deviné.
+    ///
+    /// Demande de Lucas, 2026-09-08 : *« quand on a un appel téléphonique, on a les yeux qui
+    /// deviennent bleus »*. `IsPhoneCallActive()` est une méthode `public import` du
+    /// `questPhoneManager` (`gameInstance.script:95`) — donc l'état est disponible en une ligne,
+    /// sans hook, sans sonde, sans supposition.
+    ///
+    /// ⚠️ Le manager peut ne pas exister (chargement, menu). On rend `false`, jamais une
+    /// exception : un état cosmétique absent vaut « éteint », il ne vaut pas « plante ».
+    public func TesseraAppelActif() -> Bool {
+        let tel = GameInstance.GetPhoneManager(GetGameInstance());
+        if !IsDefined(tel) {
+            return false;
+        }
+        return tel.IsPhoneCallActive();
+    }
+
+    /// Arrête un effet déclaré sur une ENTITÉ distante (le pendant de `TesseraJouerEffetSurEntite`).
+    ///
+    /// ⚠️ `eye_glow_blue` est une BOUCLE : sans cet arrêt, les yeux resteraient bleus après le
+    /// raccrochage. Un effet tenu qu'on ne sait pas éteindre est un effet qu'on ne doit pas allumer.
+    public func TesseraArreterEffetSurEntite(cible: EntityID, effet: CName) -> Bool {
+        let corps = TesseraCorpsDeLEntite(cible) as GameObject;
+        if !IsDefined(corps) {
+            return false;
+        }
+        GameObjectEffectHelper.BreakEffectLoopEvent(corps, effet);
+        GameObjectEffectHelper.StopEffectEvent(corps, effet);
+        return true;
+    }
+
     public func TesseraJouerEffetSurEntite(cible: EntityID, effet: CName) -> Bool {
         let corps = TesseraCorpsDeLEntite(cible) as GameObject;
         if !IsDefined(corps) {

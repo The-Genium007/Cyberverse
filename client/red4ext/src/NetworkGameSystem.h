@@ -422,6 +422,10 @@ struct SuiviAvatar
     /// Un avatar qui apparaît DEJA accroupi recoit quand meme sa pousse : son etat voulu vaut 1,
     /// donc different de 0. Le tri-etat ne servait a rien.
     std::int8_t dernierePostureAccroupie = 0;
+    // ⚠️ -1 et NON 0 : un avatar qui naît AVEC un appel en cours doit recevoir sa première
+    // pousse. Avec 0, l'état « pas d'appel » serait déjà « connu » et le premier vrai appel
+    // passerait pour un non-changement. Même raison que le -1 de la posture.
+    std::int8_t dernierAppel = -1;
     /// Derniere POSE TENUE (assis, adosse) vue pour cet avatar. Sentinelle a 0xFFFFFFFF et non
     /// a 0 : `0` est une valeur LEGITIME (« aucune posture »), donc l'initialiser a 0 ferait
     /// taire la premiere transition d'un avatar qui naît deja assis. Meme piege que le -1 de

@@ -123,6 +123,9 @@ struct Pose
     float z = 0.0f;
     float yaw = 0.0f; // degrés
     std::uint8_t locomotion = 0;
+    /// Le bitfield d'etats binaires (visee, accroupi, appel...). Discret comme
+    /// `locomotion` : on prend celui de l'echantillon courant, on ne l'interpole pas.
+    std::uint8_t flags = 0;
     std::uint8_t moveDir = 0;
     /// POSE TENUE (assis, adosse, allonge) : code de posture, 0 = aucune. Voyage sur le fil dans
     /// `PlayerState.sustained` depuis le palier 2 — et n'etait lu NULLE PART cote client jusqu'au
@@ -162,6 +165,9 @@ struct PoseRendue
     float vy = 0.0f;
     float vz = 0.0f;
     std::uint8_t locomotion = 0;
+    /// Le bitfield d'etats binaires (visee, accroupi, appel...). Discret comme
+    /// `locomotion` : on prend celui de l'echantillon courant, on ne l'interpole pas.
+    std::uint8_t flags = 0;
     std::uint8_t moveDir = 0;
     /// La pose TENUE, transportee jusqu'a la boucle de rendu. Etat discret comme `locomotion` :
     /// on prend celle de l'echantillon courant, on ne l'interpole pas — une posture est ou n'est
@@ -533,6 +539,7 @@ private:
         r.frameZ = p.frameZ;
         r.framePositionValid = p.framePositionValid;
         r.locomotion = p.locomotion;
+        r.flags = p.flags;
         r.moveDir = p.moveDir;
         r.sustained = p.sustained;
         return r;
@@ -560,6 +567,7 @@ private:
             r.framePositionValid = true;
         }
         r.locomotion = a.pose.locomotion;
+        r.flags = a.pose.flags;
         r.moveDir = a.pose.moveDir;
         r.sustained = a.pose.sustained;
         PoserVitesse(r, a, b, duree);
