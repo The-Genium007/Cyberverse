@@ -1189,6 +1189,27 @@ public:
     // modset Tessera, qui délèguent à GameInstance.GetNetworkGameSystem()). Reflètent le dernier
     // ShardAssignment reçu + le nombre de puppets distants suivis. Chaînes vides / 0 tant que rien
     // n'est arrivé — le HUD retombe alors sur son calcul local seul.
+    /// ⭐ LE LECTEUR DE LA REPRESENTATION DE MOUVEMENT — le pendant de `Tessera_EcrireOffsetLocal`.
+    ///
+    /// POURQUOI IL EXISTE. La locomotion d'un avatar distant ne se pilote par AUCUNE voie de
+    /// script : `ApplyFeature` est inerte (F-PLY-340), les entrees de graphe aussi (F-PLY-342,
+    /// ratio 0,91x), et sur 33 poids de couche seuls 3 passent, tous des modificateurs de posture
+    /// (F-PLY-343). Il reste l'ecriture NATIVE — et une ecriture exige de savoir OU.
+    ///
+    /// ⭐⭐ ET ON NE LE CHERCHE PAS AU DESASSEMBLEUR : on COMPARE. Le joueur local a une machine
+    /// de locomotion qui tourne, donc sa structure CHANGE a chaque image ; l'avatar distant a la
+    /// meme structure, GELEE (F-PLY-336). Les octets qui bougent chez l'un et pas chez l'autre
+    /// SONT la locomotion. C'est exactement ce qui a livre l'offset de position (F-PLY-336 ->
+    /// F-PLY-337), et ca ne demande ni Ghidra ni symbole.
+    ///
+    /// ⚠️ LECTURE SEULE, et gardee comme l'ecriture : page engagee, bornes, et rendu vide au
+    /// moindre doute. Un lecteur qui invente des octets est pire qu'un lecteur qui se tait.
+    ///
+    /// ⚠️ Le composant vient du REDSCRIPT — aucun parcours d'offsets bruts ici, donc rien a
+    /// recalibrer sur une montee de version au-dela de l'offset lui-meme.
+    Red::CString Tessera_LireMouvementBrut(const Red::Handle<RED4ext::IScriptable>& moveComponent,
+                                           int32_t offset, int32_t nombre) const;
+
     Red::CString Tessera_GetServerShard() const { return Red::CString(m_serverShard.c_str()); }
     Red::CString Tessera_GetServerOverlaps() const { return Red::CString(m_serverOverlapsCsv.c_str()); }
     int32_t Tessera_GetVisiblePlayerCount() const
@@ -3053,6 +3074,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_PoseVoulueAttachee);
     RTTI_METHOD(Tessera_YawVouluAttache);
     RTTI_METHOD(Tessera_EcrireOffsetLocal);
+    RTTI_METHOD(Tessera_LireMouvementBrut);
     RTTI_METHOD(Tessera_PoserJoueurLocalPorte);
     RTTI_METHOD(Tessera_JoueurLocalPorte);
     RTTI_METHOD(Tessera_AvatarPorteParPlateforme);

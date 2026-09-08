@@ -547,6 +547,10 @@ public native class NetworkGameSystem extends IGameSystem {
     /// L'allure annoncee pour cet avatar attache.
     public native func Tessera_AllureAttachee(entiteHash: Uint32) -> Int32;
     public native func Tessera_EcrireOffsetLocal(moveComponent: ref<IScriptable>, x: Float, y: Float, z: Float) -> Bool;
+    /// ⭐ LE LECTEUR — le pendant de l'écrivain ci-dessus. Rend `offset:flottant/entier` par mot,
+    /// ou une chaîne VIDE si la lecture n'est pas sûre : des zéros plausibles feraient écrire un
+    /// fait faux (« la structure est vide » au lieu de « je n'ai pas pu lire »).
+    public native func Tessera_LireMouvementBrut(moveComponent: ref<IScriptable>, offset: Int32, nombre: Int32) -> String;
     /// Placement visuel d'un passager sans empiler d'ordre IA. `moveComponent` est opaque au
     /// script ; le natif borne, ecrit puis relit son entree active (F-PLY-337).
     /// 0 = écrit ; 1 = corps introuvable ; 2 = moveComponent introuvable ; 3 = natif refusé.

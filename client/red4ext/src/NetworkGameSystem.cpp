@@ -1295,6 +1295,72 @@ float YawVouluAttache(uint32_t cle)
 ///     mille metres. Une valeur aberrante est refusee au lieu d'etre ecrite ;
 ///   · rend `false` sans rien faire au moindre doute. « Accepte » n'est pas « execute », et un
 ///     appelant qui verifie ne doit pas pouvoir se faire mentir.
+/// Lit `nombre` flottants a partir de `activeEntry + offset`, et les rend en texte.
+///
+/// Le format est volontairement plat — `offset:valeur` separes par des espaces — parce que le
+/// consommateur est un JOURNAL qu'on relit hors du jeu, pas un programme. Une structure elegante
+/// ici couterait un parseur la-bas.
+///
+/// ⚠️ ON REND UNE CHAINE VIDE, JAMAIS DES ZEROS, quand la lecture n'est pas sure. Des zeros
+/// plausibles sont exactement ce qui fait ecrire un fait faux : « la structure est vide » au lieu
+/// de « je n'ai pas pu lire ». C'est la lecon du compteur d'echecs de F-PLY-341.
+Red::CString NetworkGameSystem::Tessera_LireMouvementBrut(
+    const Red::Handle<RED4ext::IScriptable>& moveComponent, int32_t offset, int32_t nombre) const
+{
+    auto* comp = moveComponent.instance;
+    if (comp == nullptr || offset < 0 || offset > 0x2000 || nombre <= 0 || nombre > 64)
+    {
+        return Red::CString("");
+    }
+    MEMORY_BASIC_INFORMATION mbi{};
+    auto lisible = [&](std::uintptr_t ou, std::size_t taille)
+    {
+        if (VirtualQuery(reinterpret_cast<void*>(ou), &mbi, sizeof(mbi)) == 0
+            || mbi.State != MEM_COMMIT)
+        {
+            return false;
+        }
+        constexpr DWORD kOk = PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ
+                            | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY;
+        if ((mbi.Protect & kOk) == 0)
+        {
+            return false;
+        }
+        const auto fin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        return ou + taille <= fin;
+    };
+
+    const auto champ = reinterpret_cast<std::uintptr_t>(comp) + 0x160;
+    if (!lisible(champ, 8))
+    {
+        return Red::CString("");
+    }
+    const auto entree = *reinterpret_cast<std::uint64_t*>(champ);
+    const auto base = static_cast<std::uintptr_t>(entree) + static_cast<std::uintptr_t>(offset);
+    if (entree == 0 || !lisible(base, static_cast<std::size_t>(nombre) * 4u))
+    {
+        return Red::CString("");
+    }
+
+    std::string sortie;
+    sortie.reserve(static_cast<std::size_t>(nombre) * 18u);
+    char tampon[48];
+    for (int32_t i = 0; i < nombre; ++i)
+    {
+        const auto ou = base + static_cast<std::uintptr_t>(i) * 4u;
+        const float f = *reinterpret_cast<const float*>(ou);
+        const std::uint32_t u = *reinterpret_cast<const std::uint32_t*>(ou);
+        // ⭐ On rend LES DEUX lectures du meme mot. Un champ de locomotion peut etre un `Int32`
+        // (`action`, `style`) ou un `Float` (`speedProgress`) — et un entier lu en flottant donne
+        // une valeur denormalisee absurde, tandis qu'un flottant lu en entier donne un grand
+        // nombre. Les deux cote a cote rendent le type LISIBLE au lieu de le faire deviner.
+        std::snprintf(tampon, sizeof(tampon), "%d:%.4f/%u ",
+                      offset + i * 4, f, u);
+        sortie += tampon;
+    }
+    return Red::CString(sortie.c_str());
+}
+
 bool NetworkGameSystem::Tessera_EcrireOffsetLocal(const Red::Handle<RED4ext::IScriptable>& moveComponent,
                                                   float x, float y, float z)
 {
