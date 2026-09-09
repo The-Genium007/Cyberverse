@@ -8353,6 +8353,37 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                         // signature ci-dessus — il n'y a donc rien a re-armer.
                         suiviPosture.passesHabillage = kPassesHabillage;
                         g_telemetrie.Evenement("habillage", networkId, "pose");
+
+                        // -- ⭐⭐ L'HABILLAGE EFFACE LES EFFETS POSES AVANT LUI (F-PLY-420) ----
+                        //
+                        // Mesure du 2026-09-09, verdict de Lucas devant l'ecran : les yeux bleus
+                        // d'appel ne rendaient PAS, alors que la chaine etait mesuree jusqu'au
+                        // corps (`flags=0x40 appel=1 pousse=1`). Le meme effet declenche A LA
+                        // MAIN, sur le meme corps, par la meme API, rend parfaitement.
+                        //
+                        // Le journal donne la cause a la seconde pres : l'effet est pose a
+                        // 20:02:53.081, et l'habillage reconstruit l'apparence 521 ms plus tard.
+                        // L'ordre est accepte ET execute — il est simplement DEFAIT ensuite.
+                        //
+                        // ⭐ On invalide donc le suivi : le prochain paquet verra un ecart entre
+                        // l'etat voulu et l'etat cru, et repoussera. Une seule fois, au moment ou
+                        // l'ecrasement vient d'avoir lieu.
+                        //
+                        // ⚠️ ET SURTOUT PAS UNE ECRITURE CONTINUE. Une ecriture d'effet par avatar
+                        // et par frame est le regime qui a fait tomber le jeu deux fois le
+                        // 2026-08-06. Le declencheur reste le CHANGEMENT ; on se contente de dire
+                        // « ce que tu croyais pose ne l'est plus ».
+                        //
+                        // ⚠️ `-1` et non `0` : `0` signifierait « on sait qu'il ne telephone pas »
+                        // et n'entrainerait aucune repoussee si l'etat reel est aussi 0. `-1` est
+                        // la valeur d'ignorance, celle avec laquelle le champ est initialise.
+                        suiviPosture.dernierAppel = -1;
+                        // ⚠️ La posture, elle, n'est PAS mesuree ecrasee — Lucas voit bien
+                        // l'accroupi apres habillage. On l'invalide quand meme parce que le
+                        // mecanisme est identique et le cout nul (une repoussee au plus), mais
+                        // c'est une PRECAUTION, pas une correction : ne pas la citer comme un
+                        // fait mesure.
+                        suiviPosture.dernierePostureAccroupie = -1;
                     }
                     else
                     {
