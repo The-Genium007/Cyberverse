@@ -327,6 +327,11 @@ struct SuiviAvatar
     int dernierRetourCommande = -1;
     std::uint8_t derniereMoveDir = 0;
     float dernierYawEntree = 0.0f;
+    /// Visee de la derniere commande EMISE — sert a `g_marcheSansRelance` (F-PLY-425) : tant que
+    /// l'entree ne change pas, on ne relance qu'a l'approche de ce point.
+    float viseeX = 0.0f;
+    float viseeY = 0.0f;
+    bool viseeValide = false;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans
@@ -2226,6 +2231,9 @@ public:
     /// Bascule le pilotage par les ENTREES (ADR 0032). Voir `g_pilotageParEntrees`.
     bool Tessera_PilotageParEntrees(bool actif);
 
+    /// A/B de la cadence de marche (F-PLY-425). Voir `g_marcheSansRelance`.
+    bool Tessera_MarcheSansRelance(bool actif);
+
     /// Allume ou eteint le SPAWN ENRICHI — le corps d'un joueur distant porte SON V au lieu du
     /// visage d'un passant. ⚠️ **Eteint par defaut** : couche 3 (ADR 0015), mode d'echec = crash du
     /// processus. Rend l'etat effectif, pour qu'un depouillement puisse dire si le mode etait actif
@@ -3093,6 +3101,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_AvatarPorteParPlateforme);
     RTTI_METHOD(Tessera_SuspendreCorrections);
     RTTI_METHOD(Tessera_PilotageParEntrees);
+    RTTI_METHOD(Tessera_MarcheSansRelance);
     RTTI_METHOD(Tessera_SpawnEnrichi);
     RTTI_METHOD(Tessera_LireTableAlias);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);

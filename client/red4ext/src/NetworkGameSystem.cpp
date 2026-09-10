@@ -932,6 +932,22 @@ bool g_suspendreCorrections = false;
 // tressauter : le suspect est l'interaction des deux, pas ce drapeau seul.
 bool g_pilotageParEntrees = true;
 
+// ── MARCHE SANS RELANCE — interrupteur d'A/B, ETEINT par defaut (F-PLY-425) ──────────────────
+//
+// Verdict de Lucas le 2026-09-10 : « que du glissement partout, à peine le talon se lever ». Chaque
+// reemission annule la marche et en relance le DEPART (`useStart`), toutes les ~0,2 s : la machine
+// ne quitte jamais `Start` (F-PLY-130). Allume, on ne reemet plus que sur un changement d'entree ou
+// d'allure, ou quand l'avatar arrive a 2 m de sa visee. ⚠️ F-PLY-131 : muter la politique au lieu
+// de reemettre a divise l'allure par deux — surveiller allure et derive, pas seulement l'image.
+bool g_marcheSansRelance = false;
+
+bool NetworkGameSystem::Tessera_MarcheSansRelance(bool actif)
+{
+    g_marcheSansRelance = actif;
+    g_telemetrie.Evenement("marche_sans_relance", actif ? 1u : 0u, "");
+    return g_marcheSansRelance;
+}
+
 bool NetworkGameSystem::Tessera_PilotageParEntrees(bool actif)
 {
     g_pilotageParEntrees = actif;
@@ -9579,6 +9595,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         }
     }
 
+    // Sans relance (F-PLY-425) : entree et allure inchangees, visee encore loin -> on laisse
+    // la marche en cours se derouler, quels que soient le plafond et l'ecart de visee ci-dessous.
+    if (g_marcheSansRelance && g_pilotageParEntrees && suivi.commande && suivi.viseeValide
+        && !entreeAChange && !allureAChange)
+    {
+        static constexpr float kResteAvantRelanceM = 2.0f;
+        const auto iciGarde = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+        const float rx = suivi.viseeX - iciGarde.X;
+        const float ry = suivi.viseeY - iciGarde.Y;
+        if (std::sqrt(rx * rx + ry * ry) > kResteAvantRelanceM)
+        {
+            return;
+        }
+    }
+
     if (suivi.commande && !entreeAChange && !cibleABouge && !allureAChange
         && suivi.depuisS < kReemissionMaxS)
     {
@@ -9670,6 +9701,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         return;
     }
     ++suivi.commandesEmises;
+    suivi.viseeX = visee.X;
+    suivi.viseeY = visee.Y;
+    suivi.viseeValide = true;
     if (Red::CallVirtual(this, "TesseraSuivreAvatar", enRoute, entityId, visee,
                          static_cast<int32_t>(pose.locomotion), pose.yaw)
         && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
