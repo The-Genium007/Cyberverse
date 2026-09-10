@@ -8573,7 +8573,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                     "[vert %llu] loco=%u BRANCHE=%s | cible.z=%.3f reel.z=%.3f ECART.z=%+.3f | "
                     "dh=%.3f | dz_cible_par_frame=%+.4f porteur=%d",
                     networkId, static_cast<unsigned>(pose.locomotion),
-                    pose.locomotion == 0 ? "IMMOBILE" : "MOBILE",
+                    (pose.locomotion == 0 || pose.locomotion == 4) ? "IMMOBILE" : "MOBILE",
                     positionVoulue.Z, reel.Z, reel.Z - positionVoulue.Z, dh, dzCible,
                     g_porteurParAvatar.count(networkId) != 0 ? 1 : 0);
             }
@@ -8584,7 +8584,20 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     //
     // Une commande de marche vers un point ou l'on est deja produit un pietinement. On place, et
     // c'est tout — c'est aussi ce que fait le chemin PNJ pour `locomotion == 0`.
-    if (pose.locomotion == 0)
+    // ⛔ CORRIGE LE 2026-09-10 (F-PLY-422) — L'ACCROUPI IMMOBILE EST UN ETAT IMMOBILE.
+    //
+    // Cette branche n'etait prise que pour `locomotion == 0`. L'allure 4 (`CrouchIdle`, un
+    // joueur accroupi SANS bouger) tombait donc dans le chemin de SUIVI, qui reemet un
+    // `AIMoveToCommand` neuf toutes les 100 ms (`kReemissionMaxS`), chacun avec `useStart = true`
+    // — une animation de DEPART de marche rejouee sur un corps qui ne bouge pas. Mesure :
+    // 9,47 commandes/s, et la tete de l'avatar en dent de scie 78 -> ~105 cm, relancee 3,3 fois
+    // par seconde. C'est l'oscillation que Lucas voyait (« il s'accroupit frenetiquement »).
+    //
+    // ⭐ La posture, elle, est portee par le poids de wrapper, pousse AILLEURS et une seule fois :
+    // la figer ici ne l'enleve pas. L'allure 5 (`CrouchMove`) reste en suivi : elle implique
+    // un deplacement, et le suivi est alors le bon chemin.
+    const bool immobileAuSol = pose.locomotion == 0 || pose.locomotion == 4;
+    if (immobileAuSol)
     {
         // ⚠️ IL FAUT ANNULER L'ORDRE, PAS SEULEMENT CESSER D'EN DONNER.
         //
@@ -8607,7 +8620,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             Red::CallVirtual(this, "TesseraFigerAvatar", fige, entityId);
             suivi.commande = false;
         }
-        suivi.derniereLocomotion = 0;
+        // L'allure REELLE, pas 0 : l'accroupi immobile passe aussi par ici (F-PLY-422).
+        suivi.derniereLocomotion = pose.locomotion;
 
         // ── UN AVATAR IMMOBILE NE DOIT RIEN COÛTER, ET IL COÛTAIT LE PLUS CHER ─────────────
         //
