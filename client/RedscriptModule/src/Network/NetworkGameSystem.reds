@@ -2669,6 +2669,37 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // LE REGARD PENDANT LA MARCHE (F-PLY-428) — ce qui fait RECULER au lieu de faire demi-tour.
+    //
+    // Un `facingTarget` en position monde est ignore (F-PNJ-152) et un `facingTarget` entite bloque
+    // la machine en `IdleTurn` (F-PLY-426). Ce qui est consomme, c'est la cible de strafe posee sur
+    // la POLITIQUE en cours : `GetTopPolicies().SetStrafingPosition` (mesure : recul a 180 deg, verdict
+    // de Lucas « avant arriere parfait »). La politique n'existe que pendant la marche et change a
+    // chaque ordre : l'appelant la repose a chaque passage, pas une fois a l'emission.
+    //
+    // 100 m devant selon le yaw : assez loin pour que la direction ne bouge pas quand l'avatar avance
+    // ou recule vers le point. ⚠️ Le pas chasse n'est PAS obtenu par ce levier (F-PLY-429).
+    public func TesseraRegardDeMarche(entityId: EntityID, yaw: Float) -> Bool {
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let puppet = ent as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let politiques = puppet.GetMovePolicesComponent();
+        if !IsDefined(politiques) {
+            return false;
+        }
+        let politique = politiques.GetTopPolicies();
+        if !IsDefined(politique) {
+            return false;
+        }
+        // Chaque retour est stocke avant d'en lire un champ (F-PLY-421).
+        let ici = puppet.GetWorldPosition();
+        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
+        politique.SetStrafingPosition(new Vector4(ici.X + avant.X * 100.0, ici.Y + avant.Y * 100.0, ici.Z, 1.0));
+        return true;
+    }
+
     // FIGE un avatar sur place : annule sa marche en cours et le tient immobile.
     //
     // ── POURQUOI CETTE FONCTION EXISTE ─────────────────────────────────────────────────────

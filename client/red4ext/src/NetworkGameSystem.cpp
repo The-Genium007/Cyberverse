@@ -9606,6 +9606,12 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const float ry = suivi.viseeY - iciGarde.Y;
         if (std::sqrt(rx * rx + ry * ry) > kResteAvantRelanceM)
         {
+            // Le regard suit le yaw pendant que la marche se deroule (F-PLY-428) : la politique
+            // de mouvement n'existe que tant que la commande tourne, on la repose donc a chaque
+            // passage. ponytail: un appel script par image et par avatar en marche ; espacer
+            // (ecart de yaw > 2 deg) si le profilage le montre.
+            bool regardOk = false;
+            Red::CallVirtual(this, "TesseraRegardDeMarche", regardOk, entityId, pose.yaw);
             return;
         }
     }
