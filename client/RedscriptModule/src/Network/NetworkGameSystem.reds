@@ -2447,7 +2447,20 @@ public native class NetworkGameSystem extends IGameSystem {
         // Le Z ABSOLU de la tête, en centimètres. La soustraction du sol se fait à l'ANALYSE,
         // qui lit le Z des lignes `rx` du même intervalle — un calcul fait à la mesure peut
         // échouer en silence, un calcul fait à l'analyse se rejoue sur des données acquises.
-        return Cast<Int32>(WorldPosition.ToVector4(WorldTransform.GetWorldPosition(transformation)).Z * 100.0);
+        // ⛔ CORRIGE LE 2026-09-10 (F-PLY-421) — LA CAUSE DU `cm=0` N'ETAIT NI H1 NI H2.
+        //
+        // Lire `.Z` directement sur le RETOUR d'un appel rend 0, ou des octets non initialises
+        // (-2 641 142 cm releves sur un PNJ) : c'est la forme qu'employait la ligne ci-dessous
+        // depuis le 2026-08-19. Le slot, le composant et le nom etaient justes ; la lecture ne
+        // l'etait pas. Stocker la STRUCTURE d'abord rend la vraie hauteur (124,66 m sur le joueur).
+        //
+        // ⚠️ Et l'affirmation plus haut — « `GetWorldPosition()` rend zero sur un pantin distant » —
+        // est le MEME artefact : `puppet.GetWorldPosition().Z` lu sur le retour. Stockee dans une
+        // variable, la position d'un avatar distant se lit tres bien (123,06 m). La soustraction
+        // cote C++ reste correcte, mais elle n'etait pas necessaire pour la raison donnee.
+        let positionTete = WorldTransform.GetWorldPosition(transformation);
+        let vecteurTete = WorldPosition.ToVector4(positionTete);
+        return Cast<Int32>(vecteurTete.Z * 100.0);
     }
 
     // ── LE CONTRÔLE QUI MANQUAIT, SANS AVOIR À VISER QUI QUE CE SOIT ───────────────────────
