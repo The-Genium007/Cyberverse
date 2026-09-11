@@ -2697,6 +2697,12 @@ public native class NetworkGameSystem extends IGameSystem {
         let ici = puppet.GetWorldPosition();
         let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
         politique.SetStrafingPosition(new Vector4(ici.X + avant.X * 100.0, ici.Y + avant.Y * 100.0, ici.Z, 1.0));
+        // Pas d'EVITEMENT (F-PLY-441) : pres d'un joueur (~2 m) l'evitement de collision faisait pivoter
+        // l'avatar au milieu d'un pas chasse (droite 52 % -> 72 % lateral, gauche 85 % -> 100 %, une fois
+        // coupe). Un avatar replique suit le chemin REEL d'un joueur : il n'a rien a contourner.
+        politique.SetCollisionAvoidancePolicy(false, false);
+        politique.SetGetOutOfWay(false);
+        politique.SetStopOnObstacle(false);
         return true;
     }
 
