@@ -340,6 +340,9 @@ struct SuiviAvatar
     float depuisPasChasseS = 0.0f;
     /// Temps depuis le dernier `AIRotateToCommand` a l'arret (pivot sur place, F-PLY-443).
     float depuisPivotS = 10.0f;
+    /// Piétinement (F-PLY-451) : la commande « sur place » est-elle en cours ? Remis a faux par
+    /// toute commande qui l'annule (marche emise, placement par teleport).
+    bool pietinementEmis = false;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans
@@ -2245,6 +2248,8 @@ public:
     bool Tessera_PasLateral(bool actif);
     /// Depart vif : course et sprint sans phase Start (F-PLY-446). Eteint par defaut.
     bool Tessera_DepartVif(bool actif);
+    /// Pietinement a l'arret (F-PLY-451) au lieu du placement de yaw. Eteint par defaut.
+    bool Tessera_Pietinement(bool actif);
     /// Pivot a l'arret par AIRotateToCommand (F-PLY-444). Eteint par defaut.
     bool Tessera_PivotRotation(bool actif);
 
@@ -3118,6 +3123,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_MarcheSansRelance);
     RTTI_METHOD(Tessera_PasLateral);
     RTTI_METHOD(Tessera_DepartVif);
+    RTTI_METHOD(Tessera_Pietinement);
     RTTI_METHOD(Tessera_PivotRotation);
     RTTI_METHOD(Tessera_SpawnEnrichi);
     RTTI_METHOD(Tessera_LireTableAlias);

@@ -967,6 +967,19 @@ bool NetworkGameSystem::Tessera_DepartVif(bool actif)
     return g_departVif;
 }
 
+// Pietinement a l'arret (F-PLY-449, F-PLY-451) : le remplacant du pivot d'un bloc refuse par Lucas.
+// A l'arret, une commande « sur place » + la cible de strafe orientee selon le yaw du joueur font
+// tourner le corps en `IdleTurn`/`Reposition`, pieds en mouvement. ETEINT tant qu'il n'est pas
+// valide sur une trace reelle.
+bool g_pietinement = false;
+
+bool NetworkGameSystem::Tessera_Pietinement(bool actif)
+{
+    g_pietinement = actif;
+    g_telemetrie.Evenement("pietinement", actif ? 1u : 0u, "");
+    return g_pietinement;
+}
+
 bool NetworkGameSystem::Tessera_PivotRotation(bool actif)
 {
     g_pivotRotation = actif;
@@ -9090,13 +9103,33 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suiviImmobile.depuisPivotS = 0.0f;
         }
 
+        // ── LE PIETINEMENT (F-PLY-451) — remplace le pivot d'un bloc, refuse par Lucas ─────────
+        //
+        // Commande « sur place » emise une fois (relancee si une marche ou un teleport l'a annulee),
+        // puis cible de strafe reposee a chaque periode : la politique change, et le yaw du joueur
+        // aussi. Le moteur tourne le corps en `IdleTurn` et le cale en `Reposition`, pieds en
+        // mouvement ; le yaw ne passe donc plus par le teleport de placement.
+        const bool pietinementSurPlace = g_marcheSansRelance && g_pietinement && !pivotSurPlace
+            && !passager && !ciblePortee && deriveFinale <= bandeMorte;
+        if (pietinementSurPlace && !g_suspendreCorrections && suiviImmobile.depuisPivotS >= kPeriodePivotS)
+        {
+            bool pietinementOk = false;
+            Red::CallVirtual(this, "TesseraPietinerAvatar", pietinementOk, entityId, pose.yaw,
+                             !suiviImmobile.pietinementEmis);
+            suiviImmobile.pietinementEmis = true;
+            suiviImmobile.depuisPivotS = 0.0f;
+        }
+
         // ⭐ PLUS DE `!passager` ICI : un passager passe desormais par ce regime, comme tout
         // avatar dont la cible defile. Voir le pave ci-dessus.
         if (!placementDirectPassager && !g_suspendreCorrections
-            && (deriveFinale > bandeMorte || (deriveYaw > kBandeMorteYawDeg && !pivotSurPlace))
+            && (deriveFinale > bandeMorte
+                || (deriveYaw > kBandeMorteYawDeg && !pivotSurPlace && !pietinementSurPlace))
             && suiviImmobile.depuisPlacementImmobileS >= periode)
         {
             suiviImmobile.depuisPlacementImmobileS = 0.0f;
+            // Le teleport empile un `AITeleportCommand` qui annule la commande « sur place ».
+            suiviImmobile.pietinementEmis = false;
             if (ciblePortee)
             {
                 // ⭐ `SetEntityPosition` — le SEUL placement dont l'effet soit prouve (F-PLY-085).
@@ -9792,6 +9825,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         return;
     }
     ++suivi.commandesEmises;
+    // Une marche emise annule la commande « sur place » du pietinement (F-PLY-451) : a relancer au
+    // prochain arret.
+    suivi.pietinementEmis = false;
     suivi.viseeX = visee.X;
     suivi.viseeY = visee.Y;
     suivi.viseeValide = true;

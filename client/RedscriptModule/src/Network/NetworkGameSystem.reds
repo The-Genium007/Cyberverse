@@ -2763,6 +2763,49 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // LE PIETINEMENT A L'ARRET (F-PLY-449, F-PLY-451) — le remplacant du pivot d'un bloc.
+    //
+    // Une commande de marche qui ne DEPLACE pas (destination = la ou l'avatar se tient, distance 0,
+    // jamais « terminee ») fait vivre une politique de mouvement ; la cible de STRAFE posee sur cette
+    // politique oriente le corps, que le moteur tourne en `IdleTurn` puis cale en `Reposition` — pieds
+    // en mouvement. Mesure en jeu : 0 / 90 / 180 / 270 deg atteints a moins de 0,3 deg.
+    // `relancer` : le C++ sait si la commande a ete annulee (marche emise, teleport de placement).
+    // ⚠️ Destination en POSITION MONDE (`SetWorldPosition`, par reference) : `AIPositionSpec.SetEntity`
+    // prend la structure PAR VALEUR (aiCommand.script:61) et ne la modifierait pas depuis redscript.
+    // ⚠️ PAS de `facingTarget` : une cible de regard (le joueur, F-PLY-449) l'emporte sur le strafe.
+    public func TesseraPietinerAvatar(entityId: EntityID, yaw: Float, relancer: Bool) -> Bool {
+        if relancer {
+            let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+            let puppet = ent as ScriptedPuppet;
+            if !IsDefined(puppet) {
+                return false;
+            }
+            let controller = puppet.GetAIControllerComponent();
+            if !IsDefined(controller) {
+                return false;
+            }
+            controller.CancelOrInterruptCommand(n"AIRotateToCommand", true, false);
+            controller.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
+            controller.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
+            let wp: WorldPosition;
+            WorldPosition.SetVector4(wp, puppet.GetWorldPosition());
+            let ici: AIPositionSpec;
+            AIPositionSpec.SetWorldPosition(ici, wp);
+            let cmd = new AIMoveToCommand();
+            cmd.movementTarget = ici;
+            cmd.movementType = moveMovementType.Walk;
+            cmd.ignoreNavigation = true;
+            cmd.finishWhenDestinationReached = false;
+            cmd.desiredDistanceFromTarget = 0.0;
+            cmd.useStart = true;
+            cmd.useStop = true;
+            controller.SendCommand(cmd);
+        }
+        // La politique naît avec la commande et change : la cible de strafe se repose a chaque passage.
+        // Premier passage apres l'emission : pas encore de politique, `false`, le suivant la pose.
+        return this.TesseraRegardDeMarche(entityId, yaw);
+    }
+
     // FIGE un avatar sur place : annule sa marche en cours et le tient immobile.
     //
     // ── POURQUOI CETTE FONCTION EXISTE ─────────────────────────────────────────────────────
