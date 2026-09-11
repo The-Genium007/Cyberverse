@@ -9117,10 +9117,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         if (pietinementSurPlace && !g_suspendreCorrections && suiviImmobile.depuisPivotS >= kPeriodePivotS)
         {
             bool pietinementOk = false;
-            Red::CallVirtual(this, "TesseraPietinerAvatar", pietinementOk, entityId, pose.yaw,
-                             !suiviImmobile.pietinementEmis);
+            const bool relancer = !suiviImmobile.pietinementEmis;
+            Red::CallVirtual(this, "TesseraPietinerAvatar", pietinementOk, entityId, pose.yaw, relancer);
             suiviImmobile.pietinementEmis = true;
             suiviImmobile.depuisPivotS = 0.0f;
+            // ── L'INSTRUMENT (F-PLY-454) ─────────────────────────────────────────────────────────
+            // Sans lui, rien ne disait si le pietinement AGISSAIT pendant une execution : deux A/B se
+            // sont contredits sans qu'on sache si la commande partait. `ok` = la cible de strafe a ete
+            // posee (politique trouvee) ; `relancer` = la commande « sur place » a ete (re)emise.
+            ++suiviImmobile.pietinementAppels;
+            if (pietinementOk)
+            {
+                ++suiviImmobile.pietinementReussis;
+            }
+            if (relancer || suiviImmobile.pietinementAppels % 10 == 0)
+            {
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] PIETINEMENT appels=%u ok=%u relancer=%d yaw=%.1f derive_yaw=%.1f",
+                                   networkId, suiviImmobile.pietinementAppels, suiviImmobile.pietinementReussis,
+                                   relancer ? 1 : 0, pose.yaw, deriveYaw);
+            }
         }
 
         // ⭐ PLUS DE `!passager` ICI : un passager passe desormais par ce regime, comme tout

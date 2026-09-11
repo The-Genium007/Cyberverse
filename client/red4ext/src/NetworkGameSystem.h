@@ -343,6 +343,9 @@ struct SuiviAvatar
     /// Piétinement (F-PLY-451) : la commande « sur place » est-elle en cours ? Remis a faux par
     /// toute commande qui l'annule (marche emise, placement par teleport).
     bool pietinementEmis = false;
+    /// Instrument (F-PLY-454) : appels au pietinement, et ceux ou la cible de strafe a ete posee.
+    uint32_t pietinementAppels = 0;
+    uint32_t pietinementReussis = 0;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans
