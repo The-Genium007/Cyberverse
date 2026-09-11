@@ -970,10 +970,11 @@ bool NetworkGameSystem::Tessera_DepartVif(bool actif)
 // Pietinement a l'arret (F-PLY-449, F-PLY-451) : le remplacant du pivot d'un bloc refuse par Lucas.
 // A l'arret, une commande « sur place » + la cible de strafe orientee selon le yaw du joueur font
 // tourner le corps en `IdleTurn`/`Reposition`, pieds en mouvement.
-// ⭐ ALLUME PAR DEFAUT DEPUIS LE 2026-09-11 18:00 — valide sur la trace `regard-tournant` (F-PLY-452 :
-// pointes de yaw a l'arret 1 592 -> 106 deg/s) ; decision de Lucas : ce qui est valide est allume pour
-// tous les pantins joues. `Tessera_Pietinement(false)` rend le teleport de yaw.
-bool g_pietinement = true;
+// ⛔ REPASSE ETEINT LE 2026-09-11 20:10 — l'allumage par defaut de 18:00 reposait sur UNE execution
+// par bras (F-PLY-452). Refaite a 19:58 / 20:00 : temoin 121 deg/s, pietinement 1 588 deg/s — l'inverse.
+// Les pointes a l'arret sont des evenements rares qui dominent le max ; l'effet n'est pas etabli
+// (F-PLY-454). La regle de Lucas vaut pour ce qui est VALIDE, et ceci ne l'est pas encore.
+bool g_pietinement = false;
 
 bool NetworkGameSystem::Tessera_Pietinement(bool actif)
 {
