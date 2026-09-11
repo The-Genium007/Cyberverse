@@ -2700,6 +2700,24 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // LE PAS CHASSE (F-PLY-437, F-PLY-438) — pose ou retire les TROIS wrappers du jeu de combat.
+    //
+    // Les jeux detendus de l'avatar n'ont pas de clips lateraux (walk_090 / walk_270) ; l'entite ne
+    // charge ma_gang_unarmed_locomotion_combat qu'avec MeleeWeapon + combatLocomotion + WeaponRight,
+    // cumulatifs (un seul ne suffit pas, mesure). Appele par le C++ au CHANGEMENT seulement.
+    public func TesseraPasChasse(entityId: EntityID, actif: Bool) -> Bool {
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let corps = ent as GameObject;
+        if !IsDefined(corps) {
+            return false;
+        }
+        let poids = actif ? 1.0 : 0.0;
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"MeleeWeapon", poids);
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"combatLocomotion", poids);
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"WeaponRight", poids);
+        return true;
+    }
+
     // FIGE un avatar sur place : annule sa marche en cours et le tient immobile.
     //
     // ── POURQUOI CETTE FONCTION EXISTE ─────────────────────────────────────────────────────

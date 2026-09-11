@@ -8636,6 +8636,13 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             Red::CallVirtual(this, "TesseraFigerAvatar", fige, entityId);
             suivi.commande = false;
         }
+        // A l'arret, plus de pas chasse : on retire la garde de combat (F-PLY-438).
+        if (suivi.pasChasse)
+        {
+            bool retire_ok = false;
+            Red::CallVirtual(this, "TesseraPasChasse", retire_ok, entityId, false);
+            suivi.pasChasse = false;
+        }
         // L'allure REELLE, pas 0 : l'accroupi immobile passe aussi par ici (F-PLY-422).
         suivi.derniereLocomotion = pose.locomotion;
 
@@ -9592,6 +9599,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         {
             suivi.derniereMoveDir = pose.moveDir;
             suivi.dernierYawEntree = pose.yaw;
+        }
+    }
+
+    // ── LE PAS CHASSE (F-PLY-437, F-PLY-438) ─────────────────────────────────────────────────
+    //
+    // Les jeux de locomotion detendus de l'avatar n'ont PAS de clips lateraux ; seul le jeu de combat
+    // a mains nues en porte, et l'entite le selectionne par trois wrappers cumulatifs. On les pose
+    // pendant un deplacement LATERAL (move_dir a +-45 deg de 64 ou 192), on les retire sinon. Le prix
+    // est la garde de combat pendant le pas chasse — seul jeu livre qui les porte (F-PLY-439).
+    if (g_marcheSansRelance)
+    {
+        const int md = static_cast<int>(pose.moveDir);
+        const auto ecartA = [](int a, int b) { const int d = std::abs(a - b); return std::min(d, 256 - d); };
+        const bool lateral = ecartA(md, 64) <= 32 || ecartA(md, 192) <= 32;
+        if (lateral != suivi.pasChasse)
+        {
+            bool pose_ok = false;
+            Red::CallVirtual(this, "TesseraPasChasse", pose_ok, entityId, lateral);
+            suivi.pasChasse = lateral;
         }
     }
 

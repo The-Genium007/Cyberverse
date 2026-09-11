@@ -332,6 +332,9 @@ struct SuiviAvatar
     float viseeX = 0.0f;
     float viseeY = 0.0f;
     bool viseeValide = false;
+    /// Les trois wrappers du jeu de combat sont-ils poses (pas chasse, F-PLY-438) ? Suivi pour ne
+    /// les pousser qu'au CHANGEMENT, et les retirer a l'arret.
+    bool pasChasse = false;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans
