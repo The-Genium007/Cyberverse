@@ -2241,6 +2241,12 @@ public:
 
     /// A/B de la cadence de marche (F-PLY-425). Voir `g_marcheSansRelance`.
     bool Tessera_MarcheSansRelance(bool actif);
+    /// Pas lateral par le jeu d'animation derive (wrapper `TesseraPasLateral`). Eteint par defaut.
+    bool Tessera_PasLateral(bool actif);
+    /// Depart vif : course et sprint sans phase Start (F-PLY-446). Eteint par defaut.
+    bool Tessera_DepartVif(bool actif);
+    /// Pivot a l'arret par AIRotateToCommand (F-PLY-444). Eteint par defaut.
+    bool Tessera_PivotRotation(bool actif);
 
     /// Allume ou eteint le SPAWN ENRICHI — le corps d'un joueur distant porte SON V au lieu du
     /// visage d'un passant. ⚠️ **Eteint par defaut** : couche 3 (ADR 0015), mode d'echec = crash du
@@ -3110,6 +3116,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_SuspendreCorrections);
     RTTI_METHOD(Tessera_PilotageParEntrees);
     RTTI_METHOD(Tessera_MarcheSansRelance);
+    RTTI_METHOD(Tessera_PasLateral);
+    RTTI_METHOD(Tessera_DepartVif);
+    RTTI_METHOD(Tessera_PivotRotation);
     RTTI_METHOD(Tessera_SpawnEnrichi);
     RTTI_METHOD(Tessera_LireTableAlias);
     RTTI_METHOD(Tessera_CompteAvatarsJoueurs);

@@ -2559,7 +2559,12 @@ public native class NetworkGameSystem extends IGameSystem {
         return moveMovementType.Walk;
     }
 
+    // Signature a 4 arguments conservee : `ElevatorBridge.reds` (tessera-elevators) l'appelle.
     public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float) -> Bool {
+        return this.TesseraSuivreAvatarAvecDepart(entityId, visee, locomotion, yaw, true);
+    }
+
+    public func TesseraSuivreAvatarAvecDepart(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float, useStart: Bool) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -2662,7 +2667,8 @@ public native class NetworkGameSystem extends IGameSystem {
         cmd.ignoreNavigation = true;
         cmd.finishWhenDestinationReached = false;
         cmd.desiredDistanceFromTarget = 0.0;
-        cmd.useStart = true;
+        // `useStart` vient du C++ : faux en course et sprint quand le depart vif est allume (F-PLY-446).
+        cmd.useStart = useStart;
         cmd.useStop = true;
 
         controller.SendCommand(cmd);
@@ -2717,10 +2723,10 @@ public native class NetworkGameSystem extends IGameSystem {
         if !IsDefined(corps) {
             return false;
         }
-        let poids = actif ? 1.0 : 0.0;
-        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"MeleeWeapon", poids);
-        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"combatLocomotion", poids);
-        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"WeaponRight", poids);
+        // Jeu DERIVE `tessera_ma_pas_lateral.anims` (jambes de combat, bras detendus), choisi par
+        // l'entite sur ce seul wrapper. Les trois wrappers de combat restent au vrai combat a mains
+        // nues : la garde est refusee hors combat (decision de Lucas, 2026-09-11).
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"TesseraPasLateral", actif ? 1.0 : 0.0);
         return true;
     }
 

@@ -939,7 +939,40 @@ bool g_pilotageParEntrees = true;
 // ne quitte jamais `Start` (F-PLY-130). Allume, on ne reemet plus que sur un changement d'entree ou
 // d'allure, ou quand l'avatar arrive a 2 m de sa visee. ⚠️ F-PLY-131 : muter la politique au lieu
 // de reemettre a divise l'allure par deux — surveiller allure et derive, pas seulement l'image.
-bool g_marcheSansRelance = false;
+// ⭐ ALLUME PAR DEFAUT DEPUIS LE 2026-09-11 — decision de Lucas : « toutes les animations seront
+// allumees pour tout le monde », c'est-a-dire pour tous les pantins joues par des joueurs. Ce qui est
+// VALIDE ici : marche sans relance, regard de marche (avant / arriere « parfaits »), pas d'evitement.
+bool g_marcheSansRelance = true;
+// Pas lateral par le jeu DERIVE `tessera_ma_pas_lateral.anims` (jambes de combat, bras detendus),
+// wrapper `TesseraPasLateral`. La garde de combat (F-PLY-438) est refusee par Lucas hors combat.
+bool g_pasLateral = false;
+// Pivot a l'arret par AIRotateToCommand (F-PLY-444) : ETEINT — rotation d'un bloc, refusee par Lucas ;
+// remplacant cherche du cote du pietinement (idle_step_single_*, idle_to_idle_*).
+bool g_pivotRotation = false;
+// Depart vif (F-PLY-446) : sans relance, la course n'atteint pas sa croisiere avant la fin d'une
+// rafale courte. Allume, la commande de course et de sprint part sans phase Start.
+bool g_departVif = false;
+
+bool NetworkGameSystem::Tessera_PasLateral(bool actif)
+{
+    g_pasLateral = actif;
+    g_telemetrie.Evenement("pas_lateral", actif ? 1u : 0u, "");
+    return g_pasLateral;
+}
+
+bool NetworkGameSystem::Tessera_DepartVif(bool actif)
+{
+    g_departVif = actif;
+    g_telemetrie.Evenement("depart_vif", actif ? 1u : 0u, "");
+    return g_departVif;
+}
+
+bool NetworkGameSystem::Tessera_PivotRotation(bool actif)
+{
+    g_pivotRotation = actif;
+    g_telemetrie.Evenement("pivot_rotation", actif ? 1u : 0u, "");
+    return g_pivotRotation;
+}
 
 bool NetworkGameSystem::Tessera_MarcheSansRelance(bool actif)
 {
@@ -9047,7 +9080,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         static constexpr float kSeuilPivotDeg = 8.0f;
         static constexpr float kPeriodePivotS = 0.3f;
         suiviImmobile.depuisPivotS += deltaTime;
-        const bool pivotSurPlace = g_marcheSansRelance && !passager && !ciblePortee
+        const bool pivotSurPlace = g_marcheSansRelance && g_pivotRotation && !passager && !ciblePortee
             && deriveFinale <= bandeMorte;
         if (pivotSurPlace && !g_suspendreCorrections && deriveYaw > kSeuilPivotDeg
             && suiviImmobile.depuisPivotS >= kPeriodePivotS)
@@ -9627,7 +9660,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // a mains nues en porte, et l'entite le selectionne par trois wrappers cumulatifs. On les pose
     // pendant un deplacement LATERAL (move_dir a +-45 deg de 64 ou 192), on les retire sinon. Le prix
     // est la garde de combat pendant le pas chasse — seul jeu livre qui les porte (F-PLY-439).
-    if (g_marcheSansRelance)
+    if (g_marcheSansRelance && g_pasLateral)
     {
         const int md = static_cast<int>(pose.moveDir);
         const auto ecartA = [](int a, int b) { const int d = std::abs(a - b); return std::min(d, 256 - d); };
@@ -9762,8 +9795,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     suivi.viseeX = visee.X;
     suivi.viseeY = visee.Y;
     suivi.viseeValide = true;
-    if (Red::CallVirtual(this, "TesseraSuivreAvatar", enRoute, entityId, visee,
-                         static_cast<int32_t>(pose.locomotion), pose.yaw)
+    // Depart vif (F-PLY-446) : course (2) et sprint (3) sans phase Start.
+    const bool useStart = !(g_departVif && (pose.locomotion == 2 || pose.locomotion == 3));
+    if (Red::CallVirtual(this, "TesseraSuivreAvatarAvecDepart", enRoute, entityId, visee,
+                         static_cast<int32_t>(pose.locomotion), pose.yaw, useStart)
         && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
     {
         // ── L'INSTRUMENT ───────────────────────────────────────────────────────────────────
