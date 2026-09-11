@@ -9613,11 +9613,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const int md = static_cast<int>(pose.moveDir);
         const auto ecartA = [](int a, int b) { const int d = std::abs(a - b); return std::min(d, 256 - d); };
         const bool lateral = ecartA(md, 64) <= 32 || ecartA(md, 192) <= 32;
-        if (lateral != suivi.pasChasse)
+        suivi.depuisPasChasseS += deltaTime;
+        // ⚠️ REPOSE PERIODIQUE, PAS SEULEMENT AU CHANGEMENT. Premier portage (pose au changement) :
+        // lateral 45 a 80 % dans les 0,8 premieres secondes du segment, puis PIVOT — les wrappers
+        // d'arme sont remis a zero par le moteur (l'avatar n'a pas d'arme). La sonde qui les reposait
+        // toutes les ~0,5 s tenait le lateral. 0,25 s : sous la remise a zero observee.
+        const bool reposer = lateral && suivi.depuisPasChasseS >= 0.25f;
+        if (lateral != suivi.pasChasse || reposer)
         {
             bool pose_ok = false;
             Red::CallVirtual(this, "TesseraPasChasse", pose_ok, entityId, lateral);
             suivi.pasChasse = lateral;
+            suivi.depuisPasChasseS = 0.0f;
         }
     }
 

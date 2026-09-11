@@ -335,6 +335,9 @@ struct SuiviAvatar
     /// Les trois wrappers du jeu de combat sont-ils poses (pas chasse, F-PLY-438) ? Suivi pour ne
     /// les pousser qu'au CHANGEMENT, et les retirer a l'arret.
     bool pasChasse = false;
+    /// Temps depuis la derniere pose des wrappers : ils sont REMIS A ZERO peu apres (mesure : latéral
+    /// au debut du segment, pivot apres ~0,8 s), donc on les repose tant que dure le lateral.
+    float depuisPasChasseS = 0.0f;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans
