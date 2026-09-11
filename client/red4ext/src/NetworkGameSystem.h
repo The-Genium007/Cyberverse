@@ -346,6 +346,10 @@ struct SuiviAvatar
     /// Instrument (F-PLY-454) : appels au pietinement, et ceux ou la cible de strafe a ete posee.
     uint32_t pietinementAppels = 0;
     uint32_t pietinementReussis = 0;
+    /// Instrument du recul (campagne 2026-09-11 : A1 a 0 ou 180 deg selon l'execution, corps sans
+    /// effet) : `TesseraRegardDeMarche` appele / cible de strafe posee, pendant le segment en cours.
+    uint32_t regardAppels = 0;
+    uint32_t regardReussis = 0;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans
@@ -445,6 +449,9 @@ struct SuiviAvatar
     // pousse. Avec 0, l'état « pas d'appel » serait déjà « connu » et le premier vrai appel
     // passerait pour un non-changement. Même raison que le -1 de la posture.
     std::int8_t dernierAppel = -1;
+    /// 1 = couche sur `kFlagATerre` du snapshot. 0 initial : un pantin naît debout, et un avatar qui
+    /// naît deja a terre differe de 0, donc il est couche a sa premiere lecture (H2).
+    std::int8_t dernierATerre = 0;
     /// Derniere POSE TENUE (assis, adosse) vue pour cet avatar. Sentinelle a 0xFFFFFFFF et non
     /// a 0 : `0` est une valeur LEGITIME (« aucune posture »), donc l'initialiser a 0 ferait
     /// taire la premiere transition d'un avatar qui naît deja assis. Meme piege que le -1 de

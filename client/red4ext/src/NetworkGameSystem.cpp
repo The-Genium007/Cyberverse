@@ -676,6 +676,11 @@ std::set<std::tuple<uint64_t, int32_t, int32_t, int32_t>> g_promotionsDemandees;
 /// foulee et emporte l'effet avec elle. C'est la renaissance qui est masquable, pas la mort.
 std::set<uint64_t> g_visageEnReconstruction;
 
+/// Avatars que le snapshot ne porte plus « a terre » alors qu'on les a couches : le corps tue ne se
+/// releve pas, on le reconstruit. DIFFERE apres la boucle de rendu, qui itere
+/// `m_networkedEntitiesLookup` — effacer depuis `PiloterAvatar` invaliderait son iterateur.
+std::set<uint64_t> g_avatarsARelever;
+
 // ⭐ LE PLAN DE BITS DE `PositionUpdate.flags` — voir le commentaire a l'emission pour le
 // raisonnement complet. Une seule declaration, pour que l'emetteur et le recepteur ne puissent
 // pas diverger : deux definitions du meme bit, c'est un etat qui s'allume chez l'un et pas chez
@@ -687,6 +692,9 @@ constexpr std::uint8_t kFlagPorte = 1 << 3;
 constexpr std::uint8_t kFlagAuSol = 1 << 4;
 constexpr std::uint8_t kFlagNage = 1 << 5;
 constexpr std::uint8_t kFlagAppelTelephonique = 1 << 6;
+// Bit 7 : « a terre », pose par le SERVEUR dans le snapshot (`DRAPEAU_A_TERRE`, `sante.rs`), jamais
+// emis par un client — le serveur l'efface de ce qu'il recoit.
+constexpr std::uint8_t kFlagATerre = 1 << 7;
 // bit 7 : RESERVE. Ne pas consommer.
 
 // L'effet declare qui rend l'appel visible sur un avatar distant. Il fait partie des 165
@@ -6370,9 +6378,8 @@ void NetworkGameSystem::HandleHealthSync(const cyberpunk_rp::protocol::HealthSyn
     const auto entite = m_networkedEntitiesLookup.find(msg->id());
     if (entite == m_networkedEntitiesLookup.end())
     {
-        // Pas spawne chez nous (hors de portee au moment du coup). Rien a coucher — et rien a
-        // rattraper : s'il revient en vue, il reviendra vivant, ce qui est un ecart connu et
-        // borne tant que le serveur ne porte pas l'etat de mort dans le Snapshot.
+        // Pas spawne chez nous (hors de portee au moment du coup). Rien a coucher ICI : quand il
+        // naitra, le snapshot le portera « a terre » (`kFlagATerre`) et `PiloterAvatar` le couchera.
         SDK->logger->InfoF(PLUGIN, "Mort de %llu ignoree : avatar pas spawne localement", msg->id());
         return;
     }
@@ -7753,6 +7760,43 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
         }
         PiloterAvatar(networkId, entite->second, pose, deltaTime);
     }
+
+    // ── RELEVER UN AVATAR QUE LE SERVEUR NE PORTE PLUS A TERRE (H3) ─────────────────────────
+    //
+    // Memes gestes que la reconstruction sur changement d'esthetique (`HandleAppearanceSync`,
+    // mesures F-PLY-306 et 2026-09-06) : eteindre le corps TANT QUE la reference est bonne, le
+    // mettre en sursis pour le second rideau, oublier l'etat de pilotage, laisser le prochain
+    // snapshot faire renaitre un corps vivant sous le glitch. ponytail: copie de ce bloc plutot
+    // qu'une extraction, pour ne pas toucher un chemin deja valide par Lucas ; factoriser au
+    // prochain changement de l'un des deux.
+    for (const auto id : g_avatarsARelever)
+    {
+        const auto corps = m_networkedEntitiesLookup.find(id);
+        if (corps == m_networkedEntitiesLookup.end())
+        {
+            continue;
+        }
+        if (const auto sursis = g_ancienCorpsEnSursis.find(id); sursis != g_ancienCorpsEnSursis.end())
+        {
+            int32_t vieux = -1;
+            Red::CallVirtual(this, "TesseraEteindreCorps", vieux, sursis->second);
+            Red::CallVirtual(this, "DestroyTransientEntity", sursis->second);
+            g_ancienCorpsEnSursis.erase(sursis);
+        }
+        int32_t eteints = -1;
+        Red::CallVirtual(this, "TesseraEteindreCorps", eteints, corps->second);
+        g_ancienCorpsEnSursis[id] = corps->second;
+        m_appliedAppearance.erase(id);
+        g_dernieresCibles.erase(id);
+        g_suiviAvatars.erase(id);
+        m_networkedEntitiesLookup.erase(corps);
+        g_visageEnReconstruction.insert(id);
+        g_telemetrie.Evenement("a_terre", id, "releve");
+        SDK->logger->InfoF(PLUGIN, "[avatar %llu] RELEVE : plus a terre au snapshot — corps eteint "
+                                   "(%d composant(s)), renaitra vivant au prochain snapshot",
+                           static_cast<unsigned long long>(id), eteints);
+    }
+    g_avatarsARelever.clear();
 }
 
 void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
@@ -8173,6 +8217,32 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 SDK->logger->InfoF(PLUGIN, "[Appel] avatar=%llu flags=0x%02X appel=%d pousse=%d",
                                    static_cast<unsigned long long>(networkId),
                                    static_cast<unsigned>(pose.flags), appel ? 1 : 0, ok ? 1 : 0);
+            }
+        }
+
+        // -- A TERRE, LU DANS LE SNAPSHOT (H2/H3 de la campagne mouvement, 2026-09-11) ----------
+        //
+        // Le `HealthSync` de mort ne part qu'une fois, vers l'AoI du moment : un avatar ne chez nous
+        // APRES (arrivee tardive, renaissance) restait debout. Le bit est reposé a chaque snapshot.
+        // Couche : on retente tant que `TesseraRendreMort` refuse (pantin pas encore attache).
+        // Releve : le corps tue ne se releve pas — reconstruction differee (`g_avatarsARelever`).
+        {
+            const bool aTerre = (pose.flags & kFlagATerre) != 0;
+            if (aTerre && suiviPosture.dernierATerre != 1)
+            {
+                bool ok = false;
+                Red::CallVirtual(this, "TesseraRendreMort", ok, entityId);
+                if (ok)
+                {
+                    suiviPosture.dernierATerre = 1;
+                    g_telemetrie.Evenement("a_terre", networkId, "couche");
+                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] A TERRE (snapshot) : couche",
+                                       static_cast<unsigned long long>(networkId));
+                }
+            }
+            else if (!aTerre && suiviPosture.dernierATerre == 1)
+            {
+                g_avatarsARelever.insert(networkId);
             }
         }
 
@@ -9760,6 +9830,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // (ecart de yaw > 2 deg) si le profilage le montre.
             bool regardOk = false;
             Red::CallVirtual(this, "TesseraRegardDeMarche", regardOk, entityId, pose.yaw);
+            ++suivi.regardAppels;
+            if (regardOk)
+            {
+                ++suivi.regardReussis;
+            }
             return;
         }
     }
@@ -9855,6 +9930,14 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         return;
     }
     ++suivi.commandesEmises;
+    // Bilan du segment qui se termine : le regard de marche a-t-il ete pose (recul) ou jamais ?
+    SDK->logger->InfoF(PLUGIN, "[avatar %llu] REGARD_MARCHE segment appels=%u ok=%u -> nouvelle "
+                               "commande loco=%u mdir=%u yaw=%.1f",
+                       static_cast<unsigned long long>(networkId), suivi.regardAppels,
+                       suivi.regardReussis, static_cast<unsigned>(pose.locomotion),
+                       static_cast<unsigned>(pose.moveDir), pose.yaw);
+    suivi.regardAppels = 0;
+    suivi.regardReussis = 0;
     // Une marche emise annule la commande « sur place » du pietinement (F-PLY-451) : a relancer au
     // prochain arret.
     suivi.pietinementEmis = false;
