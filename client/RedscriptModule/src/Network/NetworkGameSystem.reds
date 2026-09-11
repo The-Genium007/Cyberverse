@@ -2770,8 +2770,11 @@ public native class NetworkGameSystem extends IGameSystem {
     // politique oriente le corps, que le moteur tourne en `IdleTurn` puis cale en `Reposition` — pieds
     // en mouvement. Mesure en jeu : 0 / 90 / 180 / 270 deg atteints a moins de 0,3 deg.
     // `relancer` : le C++ sait si la commande a ete annulee (marche emise, teleport de placement).
-    // ⚠️ Destination en POSITION MONDE (`SetWorldPosition`, par reference) : `AIPositionSpec.SetEntity`
-    // prend la structure PAR VALEUR (aiCommand.script:61) et ne la modifierait pas depuis redscript.
+    // ⛔ Destination = l'ENTITE de l'avatar (`SetEntity`), comme la sonde qui marche (F-PLY-451). La
+    // premiere version visait sa POSITION MONDE, par crainte d'un passage par valeur (aiCommand.script:61) :
+    // l'instrument a rendu `ok=0` sur 270 appels — aucune politique a qui poser le strafe (F-PLY-455). Or
+    // CDPR appelle `SetEntity` sur une variable locale qu'il utilise ensuite comme cible
+    // (quickhackEffectors.script:1127-1128) : l'ecriture se fait bien en place.
     // ⚠️ PAS de `facingTarget` : une cible de regard (le joueur, F-PLY-449) l'emporte sur le strafe.
     public func TesseraPietinerAvatar(entityId: EntityID, yaw: Float, relancer: Bool) -> Bool {
         if relancer {
@@ -2787,10 +2790,8 @@ public native class NetworkGameSystem extends IGameSystem {
             controller.CancelOrInterruptCommand(n"AIRotateToCommand", true, false);
             controller.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
             controller.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
-            let wp: WorldPosition;
-            WorldPosition.SetVector4(wp, puppet.GetWorldPosition());
             let ici: AIPositionSpec;
-            AIPositionSpec.SetWorldPosition(ici, wp);
+            AIPositionSpec.SetEntity(ici, puppet);
             let cmd = new AIMoveToCommand();
             cmd.movementTarget = ici;
             cmd.movementType = moveMovementType.Walk;
