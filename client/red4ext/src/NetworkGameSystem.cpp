@@ -9632,6 +9632,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     auto& suivi = g_suiviAvatars[networkId];
     suivi.depuisS += deltaTime;
     suivi.depuisLogS += deltaTime;
+    // ── APRES UN PIETINEMENT, LA MARCHE DOIT ETRE REEMISE (2026-09-11 19:55) ────────────────
+    //
+    // A l'arret, le pietinement (F-PLY-451) ANNULE la commande de marche et la remplace par une
+    // commande « sur place ». Mais la branche immobile rend la main AVANT que ce suivi ne memorise
+    // l'allure et la direction : au redemarrage avec la meme allure et la meme direction, la garde
+    // « sans relance » croyait la marche toujours en cours, n'emettait rien, et l'avatar restait sur
+    // sa commande sur place — plante, rattrape par les teleports, sans regard de marche (recul a 0 deg
+    // au lieu de 180 deg, test de 19:51). On oublie donc la commande : la prochaine passe l'emet.
+    if (suivi.pietinementEmis)
+    {
+        suivi.commande = false;
+    }
     const float vx = cx - suivi.cibleX;
     const float vy = cy - suivi.cibleY;
     const float vz = cz - suivi.cibleZ;
