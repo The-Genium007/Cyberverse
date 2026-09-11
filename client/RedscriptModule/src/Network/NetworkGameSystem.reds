@@ -2724,6 +2724,39 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // LE PIVOT SUR PLACE (F-PLY-443) — tourne un avatar a l'arret vers `yaw`, progressivement.
+    //
+    // Le placement immobile appliquait le yaw par teleport : le regard sautait (F-PLY-442).
+    // `AIRotateToCommand` tourne le corps en ~0,6 s pour 90 deg. On annule la rotation precedente et
+    // le gel en cours pour que la nouvelle ne fasse pas la queue (une commande d'IA s'execute, elle ne
+    // se remplace pas). Appele par le C++ au plus toutes les 0,3 s, ecart de yaw > 8 deg.
+    public func TesseraPivoterAvatar(entityId: EntityID, yaw: Float) -> Bool {
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let puppet = ent as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let controller = puppet.GetAIControllerComponent();
+        if !IsDefined(controller) {
+            return false;
+        }
+        controller.CancelOrInterruptCommand(n"AIRotateToCommand", true, false);
+        controller.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
+        let ici = puppet.GetWorldPosition();
+        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
+        let wp: WorldPosition;
+        WorldPosition.SetVector4(wp, new Vector4(ici.X + avant.X * 10.0, ici.Y + avant.Y * 10.0, ici.Z, 1.0));
+        let cible: AIPositionSpec;
+        AIPositionSpec.SetWorldPosition(cible, wp);
+        let cmd = new AIRotateToCommand();
+        cmd.target = cible;
+        cmd.angleTolerance = 5.0;
+        cmd.angleOffset = 0.0;
+        cmd.speed = 1.0;
+        controller.SendCommand(cmd);
+        return true;
+    }
+
     // FIGE un avatar sur place : annule sa marche en cours et le tient immobile.
     //
     // ── POURQUOI CETTE FONCTION EXISTE ─────────────────────────────────────────────────────

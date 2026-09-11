@@ -338,6 +338,8 @@ struct SuiviAvatar
     /// Temps depuis la derniere pose des wrappers : ils sont REMIS A ZERO peu apres (mesure : latéral
     /// au debut du segment, pivot apres ~0,8 s), donc on les repose tant que dure le lateral.
     float depuisPasChasseS = 0.0f;
+    /// Temps depuis le dernier `AIRotateToCommand` a l'arret (pivot sur place, F-PLY-443).
+    float depuisPivotS = 10.0f;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans

@@ -9038,10 +9038,29 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suiviImmobile.ciblePassagerPrecedenteValide = false;
         }
 
+        // ── LE PIVOT SUR PLACE (F-PLY-442, F-PLY-443) ─────────────────────────────────────────
+        //
+        // A l'arret, le yaw etait applique par le teleport ci-dessous : le regard SAUTAIT (pointes
+        // mesurees a 635 deg/s, mediane 0). `AIRotateToCommand` tourne le corps progressivement
+        // (~0,6 s pour 90 deg). En mode experimental seulement, un ecart d'ORIENTATION seul (position
+        // dans la bande morte) passe donc par la commande de rotation, et plus par le teleport.
+        static constexpr float kSeuilPivotDeg = 8.0f;
+        static constexpr float kPeriodePivotS = 0.3f;
+        suiviImmobile.depuisPivotS += deltaTime;
+        const bool pivotSurPlace = g_marcheSansRelance && !passager && !ciblePortee
+            && deriveFinale <= bandeMorte;
+        if (pivotSurPlace && !g_suspendreCorrections && deriveYaw > kSeuilPivotDeg
+            && suiviImmobile.depuisPivotS >= kPeriodePivotS)
+        {
+            bool pivotOk = false;
+            Red::CallVirtual(this, "TesseraPivoterAvatar", pivotOk, entityId, pose.yaw);
+            suiviImmobile.depuisPivotS = 0.0f;
+        }
+
         // ⭐ PLUS DE `!passager` ICI : un passager passe desormais par ce regime, comme tout
         // avatar dont la cible defile. Voir le pave ci-dessus.
         if (!placementDirectPassager && !g_suspendreCorrections
-            && (deriveFinale > bandeMorte || deriveYaw > kBandeMorteYawDeg)
+            && (deriveFinale > bandeMorte || (deriveYaw > kBandeMorteYawDeg && !pivotSurPlace))
             && suiviImmobile.depuisPlacementImmobileS >= periode)
         {
             suiviImmobile.depuisPlacementImmobileS = 0.0f;
