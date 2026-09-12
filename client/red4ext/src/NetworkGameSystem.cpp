@@ -9417,6 +9417,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // son historique — les deux doivent parler de la même chose, sinon l'un lisse ce que l'autre
     // vient de déclarer discontinu.
     static constexpr float kSautFrancM = 15.0f;
+    // ⚠️ ESSAI DU 2026-09-12, NON RETENU — et c'est la mesure qui tranche, pas l'idee.
+    //
+    // Piste (recherche reactivite, levier 3) : le placement est un `AITeleportCommand` par image
+    // (F-PLY-328), donc on a essaye de le remplacer par un DECALAGE DE LA CIBLE de marche egal a
+    // l'ecart, pour que l'avatar resorbe en marchant. Deux bras de 5 executions sur la course, meme
+    // session : derive moyenne 1,01 m avec, 1,39 m sans — **p = 0,24**, rien d'etabli. Et la course
+    // est tres bruyante : de 0,07 a 2,63 m selon l'execution, parce que l'ordre `Sprint` n'atteint
+    // pas toujours son regime (vitesse relevee de 2,3 a 3,8 m/s). Un seul relevé a 0,07 m avait
+    // fait croire a un gain enorme.
+    //
+    // Monter ce seuil a 0,80 m degrade la MARCHE (0,32 -> 0,50 m) : a 1,2 m/s, l'avatar ne rattrape
+    // pas assez vite pour se passer du filet. On garde donc la forme simple.
     static constexpr float kCorrectionMiniM = 0.25f;
     // 0,15 par passage : à 60 fps l'écart est divisé par deux en ~70 ms. Assez vif pour que la
     // dérive ne s'installe pas, assez doux pour qu'aucun pas ne se voie.
