@@ -982,6 +982,27 @@ public native class NetworkGameSystem extends IGameSystem {
         ev.SetStaticTarget(cible);
         ev.SetStyle(animLookAtStyle.Normal);
 
+        // ── ⛔ « LA TETE NE TOURNE PAS » (verdict de Lucas, E1, 2026-09-12) ───────────────────
+        //
+        // L'evenement partait bien (F-PLY-462 a corrige son APPEL), mais il ne portait AUCUNE
+        // partie de corps hors arme en main : ni `bodyPart`, ni `lookAtParts`. On demandait donc
+        // au moteur de regarder un point sans jamais lui dire QUOI tourner.
+        //
+        // Reference : `LookatPreset.HeadLookAtPreset` (dump TweakDB,
+        // `lookat_presets/base_values.tweak:4-17`) — le preset de tete de CDPR n'a pas non plus
+        // de `bodyPart`, il a UNE partie : `Head`, `weight = 0.5`. Valeur reprise telle quelle.
+        //
+        // ⚠️ Ne pas confondre avec la recette de REACTION (`reactionComponent.script:4657`), qui
+        // met `Head` a `weight 0.1 / suppress 1.0` — elle SUPPRIME la tete expres, et c'est elle
+        // qui avait produit « la tete ne tourne pas » en aout.
+        let tete: LookAtPartRequest;
+        tete.partName = n"Head";
+        tete.weight = 0.5;
+        tete.suppress = 0.0;
+        tete.mode = 0;
+        let parties: array<LookAtPartRequest>;
+        ArrayPush(parties, tete);
+
         // ── ⭐ LE POINTAGE : LE BUSTE SUIT LA VISÉE, MAIS SEULEMENT ARME EN MAIN ──────────────
         //
         // Lucas, 2026-08-25 : *« on voit l'arme en main. Par contre, quand on pointe, ça ne
@@ -1040,10 +1061,9 @@ public native class NetworkGameSystem extends IGameSystem {
             buste.weight = 2.0;
             buste.suppress = 0.0;
             buste.mode = 0;
-            let parties: array<LookAtPartRequest>;
             ArrayPush(parties, buste);
-            ev.SetAdditionalPartsArray(parties);
         }
+        ev.SetAdditionalPartsArray(parties);
         ev.request.limits.softLimitDegrees = 360.0;
         ev.request.limits.hardLimitDegrees = 270.0;
         ev.request.limits.backLimitDegrees = 210.0;
@@ -1099,9 +1119,27 @@ public native class NetworkGameSystem extends IGameSystem {
             bras.SetStaticTarget(cible);
             bras.SetStyle(animLookAtStyle.Normal);
             bras.bodyPart = n"RightHand";
-            bras.request.limits.softLimitDegrees = 360.0;
-            bras.request.limits.hardLimitDegrees = 270.0;
-            bras.request.limits.backLimitDegrees = 210.0;
+            // ── ⛔ « CA LUI TORD LE BRAS SUR L'ARRIERE » (verdict de Lucas, I1, 2026-09-12) ──
+            //
+            // Les trois limites ci-dessous etaient INVENTEES (360 / 270 / 210) : le bras suivait
+            // donc la visee tout autour du corps, jusqu'a ramener l'arme dans le dos. Lucas :
+            // *« on peut lever un peu l'arme, on peut la baisser, mais on ne tord pas le bras »*.
+            //
+            // Valeurs reprises telles quelles du preset de CDPR pour cette partie de corps,
+            // `LookatPreset.RightHand` (dump TweakDB, `lookat_presets/base_values.tweak:106-120`) :
+            // soft 100, hard 110, arriere 180, transition 120 / sortie 100. Au-dela, le bras
+            // cesse de suivre et garde sa pose — l'arme ne peut plus passer derriere le corps.
+            // C'est le domaine accepte du consommateur (ADR 0034), pas une estimation.
+            //
+            // ⚠️ `calculatePositionInParentSpace` reste a `false`, contrairement au preset : notre
+            // cible est un point MONDE, pas un point dans le repere du parent.
+            bras.request.limits.softLimitDegrees = 100.0;
+            bras.request.limits.hardLimitDegrees = 110.0;
+            bras.request.limits.backLimitDegrees = 180.0;
+            bras.request.limits.hardLimitDistance = 1000000.0;
+            bras.request.transitionSpeed = 120.0;
+            bras.request.hasOutTransition = true;
+            bras.request.outTransitionSpeed = 100.0;
             bras.request.calculatePositionInParentSpace = false;
             bras.request.priority = 100;
             puppet.QueueEvent(bras);
@@ -2777,7 +2815,7 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
-    // ⛔ `directionAngle` / `desiredYaw` POUSSES AU GRAPHE : INERTES (F-PLY-468, 2026-09-12).
+    // ⛔ `directionAngle` / `desiredYaw` POUSSES AU GRAPHE : INERTES (F-PLY-471, 2026-09-12).
     // Les deux variantes d'ecriture (simple et repliquee) partent et sont acceptees ; le recul reste
     // a 0 deg sur 5 executions. La fonction est retiree : ne pas la reecrire sans une raison neuve.
 
@@ -2803,7 +2841,7 @@ public native class NetworkGameSystem extends IGameSystem {
         return action + 100 * evaluee + 1000 * repos;
     }
 
-    // LA DISPONIBILITE D'UN CLIP, DEPUIS LE JEU (F-PLY-466)
+    // LA DISPONIBILITE D'UN CLIP, DEPUIS LE JEU (F-PLY-469)
     //
     // L'inventaire des `.anims` se lit hors jeu, mais il ne dit pas ce que le moteur a REELLEMENT
     // charge pour CETTE entite. `GetAnimationDuration` le dit : une duree > 0 = le clip est

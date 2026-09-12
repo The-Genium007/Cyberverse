@@ -10135,7 +10135,23 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ⚠️ ETENDU A LA MARCHE le 2026-09-12 (F-PLY-458). Pendant la phase `Start`, le pantin
     // s'oriente vers sa DESTINATION : c'est un candidat pour le demi-tour au recul, et il ne se
     // testait pas — l'interrupteur ne coupait `Start` qu'en course et en sprint.
-    const bool useStart = !g_departVif;
+    //
+    // ── ⛔ « TU REFAIS EN BOUCLE LE DEBUT DE L'ANIMATION » (verdict de Lucas, A5, 2026-09-12) ──
+    //
+    // Sur une COURBE, le yaw derive en continu : la garde d'entree (10 deg) rouvre environ deux
+    // fois par seconde, et chaque reemission repartait avec `useStart = true`. Le pantin rejouait
+    // donc la phase de DEPART de la marche toutes les ~0,5 s — on ne voyait que les premieres
+    // images du cycle, en boucle, alors que la trajectoire, elle, etait bonne.
+    //
+    // `useStart` veut dire « joue la transition d'ENTREE en marche ». Re-viser en cours de marche
+    // n'est pas un depart : la phase ne doit etre demandee que pour la PREMIERE commande d'un
+    // deplacement. `suivi.commande` porte deja exactement cette information (« une marche est en
+    // cours ») — elle est remise a faux a l'arret, au teleport et au pietinement.
+    //
+    // ⚠️ A verifier au compteur, pas au rendu (lecon du 2026-09-12) : `enRoute` doit rester a ~99 %
+    // d'acceptation. Si la reemission sans depart etait refusee, la marche s'arreterait au lieu de
+    // se lisser — et la derive le dirait avant l'oeil.
+    const bool useStart = !g_departVif && !suivi.commande;
     if (Red::CallVirtual(this, "TesseraSuivreAvatarAvecDepart", enRoute, entityId, visee,
                          static_cast<int32_t>(pose.locomotion), pose.yaw, useStart)
         && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
