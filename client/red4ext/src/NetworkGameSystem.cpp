@@ -8417,20 +8417,38 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // moins d'une seconde et le defaut se lit comme « ca ne marche pas ».
         {
             const bool enJoue = (pose.flags & kFlagVisee) != 0;
+            // ── ⚗️ BALAYAGE DES VALEURS DE `NonCombatAim.state` (2026-09-12) ────────────────
+            //
+            // Premiere mesure : les trois wrappers + `NonCombatAim.state = 1` laissent l'arme
+            // PENDANTE sur toute la video. Or le graphe compare ce trait a 0, 1, 2 ET 3 : la
+            // valeur qui vaut « arme devant » n'est ecrite nulle part, et la deviner une fois de
+            // plus coute une session. On la BALAIE : 1, puis 2, puis 3, quatre secondes chacune,
+            // pendant que la visee est demandee. Une seule video tranche les trois.
+            const int etat = enJoue
+                ? 1 + static_cast<int>(suiviPosture.depuisBalayageViseeS / 4.0f) % 3
+                : 0;
+            if (enJoue)
+            {
+                suiviPosture.depuisBalayageViseeS += deltaTime;
+            }
+            else
+            {
+                suiviPosture.depuisBalayageViseeS = 0.0f;
+            }
             suiviPosture.depuisViseeS += deltaTime;
             const bool reposerVisee = enJoue && suiviPosture.depuisViseeS >= 0.25f;
-            if (enJoue != suiviPosture.derniereVisee || reposerVisee)
+            if (etat != suiviPosture.dernierEtatVisee || reposerVisee)
             {
                 bool pousse = false;
-                Red::CallVirtual(this, "TesseraPousserVisee", pousse, entityId, enJoue);
-                if (enJoue != suiviPosture.derniereVisee)
+                Red::CallVirtual(this, "TesseraPousserVisee", pousse, entityId, etat);
+                if (etat != suiviPosture.dernierEtatVisee)
                 {
-                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] VISEE %s pose=%d",
-                                       static_cast<unsigned long long>(networkId),
-                                       enJoue ? "EN JOUE" : "repos", pousse ? 1 : 0);
+                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] VISEE etat=%d pose=%d",
+                                       static_cast<unsigned long long>(networkId), etat,
+                                       pousse ? 1 : 0);
                     g_telemetrie.Evenement("visee", networkId, enJoue ? "en_joue" : "repos");
                 }
-                suiviPosture.derniereVisee = enJoue;
+                suiviPosture.dernierEtatVisee = etat;
                 suiviPosture.depuisViseeS = 0.0f;
             }
         }
@@ -10011,14 +10029,16 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             if (enRecul != suivi.recul)
             {
                 // ⚠️ `pose=1` NE DIT QUE « l'appel a abouti ». Le temoin qui dit si le jeu DERIVE
-                // est reellement selectionne est un clip qui n'existe QUE dans lui :
-                // `walk_0_avant_inutilise` (l'ancienne marche avant, renommee). Duree > 0 = le jeu
-                // derive est charge pour ce pantin ; -1 = il ne l'est pas, et le wrapper n'a rien
-                // selectionne. Sans ce temoin, « il se retourne encore » ne distingue pas
-                // « l'entree n'est pas choisie » de « elle l'est, et c'est le CORPS qui tourne ».
+                // est reellement selectionne doit porter un nom QUE LE GRAPHE ADRESSE — sinon il
+                // rend -1 de toute façon et ne prouve rien (F-PLY-478, une heure perdue a lire ce
+                // silence comme un refus). `walk_090` est ce nom : le graphe le demande pour un pas
+                // de cote, et il ne resout sur AUCUN jeu de ce corps (-1 partout). Le jeu derive lui
+                // donne la duree tres reconnaissable d'`idle_step_single_090`, 1,63 s. Donc :
+                //     1,6x = notre jeu derive est bien celui qui joue
+                //     -1   = il ne l'est pas, et le wrapper n'a rien selectionne.
                 float temoin = -9.0f;
                 Red::CallVirtual(this, "TesseraDureeClip", temoin, entityId,
-                                 Red::CName("walk_0_avant_inutilise"));
+                                 Red::CName("walk_090"));
                 SDK->logger->InfoF(PLUGIN,
                                    "[avatar %llu] RECUL_ANIM %s (mdir=%u) pose=%d jeu_derive=%.2f",
                                    static_cast<unsigned long long>(networkId),

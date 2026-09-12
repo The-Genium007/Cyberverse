@@ -494,6 +494,10 @@ struct SuiviAvatar
     /// le moteur remet les poids de wrapper a zero.
     bool derniereVisee = false;
     float depuisViseeS = 0.0f;
+    /// Balayage des valeurs de `NonCombatAim.state` : le graphe les compare a 0,1,2,3 et rien ne
+    /// dit laquelle vaut « arme devant ». On les essaie 4 s chacune pendant que la visee dure.
+    int dernierEtatVisee = -1;
+    float depuisBalayageViseeS = 0.0f;
 
     /// Derniere valeur lue de `TesseraLireLocomotion` (`action * 10 + exploration`), pour
     /// n'ecrire au journal que les CHANGEMENTS d'etat de la machine de deplacement.

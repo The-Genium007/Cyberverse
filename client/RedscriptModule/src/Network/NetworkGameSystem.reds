@@ -2370,15 +2370,37 @@ public native class NetworkGameSystem extends IGameSystem {
     ///
     /// ⚠️ CE QUE CA NE FAIT PAS : orienter le tir. La direction, c'est le yaw du corps, qui voyage
     /// deja sur le fil — « quand le gars va a droite ou a gauche, on fait une rotation du pantin ».
-    public func TesseraPousserVisee(entityId: EntityID, enJoue: Bool) -> Bool {
+    ///
+    /// ⚠️ `etat` EST UN ENTIER, PAS UN BOOLEEN, et c'est une consequence directe du graphe :
+    /// `NonCombatAim.state` y est compare a 0, 1, 2 ET 3 (relevé du 2026-09-12). Quelle valeur
+    /// correspond a « arme devant » n'est ecrit nulle part — ça se BALAIE. 0 = repos.
+    public func TesseraPousserVisee(entityId: EntityID, etat: Int32) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
         }
+        let enJoue = etat > 0;
         let poids = enJoue ? 1.0 : 0.0;
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"combatLocomotion", poids);
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"RangedWeapon", poids);
+
+        // ── ⭐⭐ ET LE TRAIT `NonCombatAim`, QUI EST LE LEVIER QUE LE GRAPHE LIT VRAIMENT ────
+        //
+        // Dépouillement du graphe livré (2026-09-12) : **aucune** des 348 conditions de transition
+        // ne lit un nœud d'ENTRÉE. Elles lisent des TRAITS (203), des WRAPPERS (73), des fins
+        // d'animation, des événements ou le temps. Écrire une entrée (`SetInput*`) ne fait que
+        // pondérer un mélange DANS l'état courant — ça ne fait jamais changer d'état.
+        //
+        // Et `NonCombatAim.state` est cité par **7** conditions de transition : c'est exactement
+        // « l'animation qui existe pour pointer quelqu'un » que Lucas décrit. Les wrappers
+        // ci-dessus choisissent le JEU de clips (tenue d'arme au poing) ; ce trait choisit l'ÉTAT.
+        // Les deux sont complémentaires, pas redondants.
+        //
+        // ⚠️ `AnimFeature_NPCState` n'expose qu'un `Int32 state`, et `ApplyFeature` apparie
+        // champ ↔ nœud PAR LE NOM : ça marche ici parce que la propriété visée s'appelle `state`
+        // (ce ne sera pas le cas pour le saut, dont la propriété est `explorationType`).
+        this.TesseraPousserTrait(entityId, n"NonCombatAim", etat);
         // `WeaponRight` est pose par `TesseraPousserArme` tant que l'arme est degainee ; on le
         // remet ici parce que la mise en joue peut arriver avant la prochaine passe d'arme.
         if enJoue {
