@@ -350,6 +350,14 @@ struct SuiviAvatar
     /// effet) : `TesseraRegardDeMarche` appele / cible de strafe posee, pendant le segment en cours.
     uint32_t regardAppels = 0;
     uint32_t regardReussis = 0;
+    /// Images restant a relever apres un ordre de RECUL (F-PLY-458). La telemetrie lit l'etat
+    /// toutes les 2 s : trop lache pour voir le demarrage d'un segment de 2,5 s.
+    int32_t imagesEtatRecul = 0;
+    int32_t imageEtatIndex = 0;
+    /// Dernier yaw pour lequel la cible de strafe a ete posee. Bande morte de 2 deg : voir le
+    /// bloc `sans relance` du .cpp — reposer a CHAQUE image est suspecte de retenir la machine
+    /// en `Start` (F-PLY-458 : 30 images sur 30 en Start).
+    float dernierYawStrafe = 1e9f;
     /// ── HABILLAGE ────────────────────────────────────────────────────────────────────────
     /// Signature de la tenue annoncee par le serveur. Un changement la remet a zero et relance
     /// les passes : c'est ce qui fait qu'une tenue changee en cours de partie est ramassee sans

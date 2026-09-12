@@ -8106,6 +8106,26 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     }
 
 
+    // ── ⭐ RECUL : L'ETAT DU MOTEUR IMAGE PAR IMAGE (F-PLY-458) ────────────────────────────
+    //
+    // Le strafe est pose sur ~99 % des images et l'avatar se retourne quand meme : ce qui distingue
+    // un recul d'un demi-tour se joue donc dans les premieres images du segment. La telemetrie lit
+    // l'etat toutes les 2 s — elle ne peut pas le voir. On releve donc 30 images (~0,5 s) apres
+    // CHAQUE ordre de recul, puis on se tait.
+    {
+        auto& suiviEtat = g_suiviAvatars[networkId];
+        if (suiviEtat.imagesEtatRecul > 0)
+        {
+            --suiviEtat.imagesEtatRecul;
+            int32_t lu = -2;
+            Red::CallVirtual(this, "TesseraLireLocomotion", lu, entityId);
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECUL_ETAT i=%d etat=%d mdir=%u yaw=%.1f",
+                               static_cast<unsigned long long>(networkId),
+                               suiviEtat.imageEtatIndex++, lu,
+                               static_cast<unsigned>(pose.moveDir), pose.yaw);
+        }
+    }
+
     // ── FIL MUET : ON FIGE, ON NE LAISSE PAS COURIR ────────────────────────────────────────
     //
     // Observé par Lucas le 2026-08-13, plusieurs instances chargeant en meme temps : « il y a des
@@ -9323,6 +9343,20 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                pose.extrapolee, g_horlogeRendu.DelaiCourant(),
                                g_horlogeRendu.Gigue(), /*recalage=*/false);
         }
+
+        // ── ⛔ LE REGARD NE PARTAIT PAS SUR UN AVATAR IMMOBILE (mesure du 2026-09-12) ──────
+        //
+        // Cette branche rend la main AVANT la pousse du regard, qui vit plus bas dans le chemin de
+        // MARCHE. Un joueur plante qui tourne la tete restait donc fige de face chez les autres —
+        // le cas le plus frequent en RP — et la sonde de visee (F-PLY-460) ne se declenchait
+        // jamais : elle n'etait pas inerte, elle n'etait pas APPELEE. Meme garde qu'en marche :
+        // (0,0) = ce client ne rapporte pas de regard, on ne pose rien.
+        if (pose.lookYaw != 0.0f || pose.lookPitch != 0.0f)
+        {
+            bool regardImmobileOk = false;
+            Red::CallVirtual(this, "TesseraPousserRegard", regardImmobileOk, entityId, pose.lookYaw,
+                             pose.lookPitch);
+        }
         return;
     }
 
@@ -9828,12 +9862,22 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // de mouvement n'existe que tant que la commande tourne, on la repose donc a chaque
             // passage. ponytail: un appel script par image et par avatar en marche ; espacer
             // (ecart de yaw > 2 deg) si le profilage le montre.
-            bool regardOk = false;
-            Red::CallVirtual(this, "TesseraRegardDeMarche", regardOk, entityId, pose.yaw);
-            ++suivi.regardAppels;
-            if (regardOk)
+            // ⚠️ BANDE MORTE DE 2 DEG (2026-09-12). La cible de strafe etait reposee a CHAQUE
+            // image : ~275 appels par segment, dont ~99 % acceptes — et l'avatar se retournait
+            // quand meme (F-PLY-458), machine bloquee en `Start` sur 30 images sur 30. On teste
+            // donc l'inverse : poser une fois par segment, puis seulement quand le regard bouge.
+            const bool premierDuSegment = suivi.dernierYawStrafe > 1e8f;
+            if (premierDuSegment
+                || std::fabs(Tessera::Sync::EcartAngulaire(suivi.dernierYawStrafe, pose.yaw)) > 2.0f)
             {
-                ++suivi.regardReussis;
+                bool regardOk = false;
+                Red::CallVirtual(this, "TesseraRegardDeMarche", regardOk, entityId, pose.yaw);
+                suivi.dernierYawStrafe = pose.yaw;
+                ++suivi.regardAppels;
+                if (regardOk)
+                {
+                    ++suivi.regardReussis;
+                }
             }
             return;
         }
@@ -9938,6 +9982,17 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                        static_cast<unsigned>(pose.moveDir), pose.yaw);
     suivi.regardAppels = 0;
     suivi.regardReussis = 0;
+    suivi.dernierYawStrafe = 1e9f;
+    // Recul = deplacement a +-45 deg de l'oppose du regard (`mdir` 128 sur 256).
+    {
+        const int md = static_cast<int>(pose.moveDir);
+        const int ecart = std::abs(md - 128);
+        if (pose.locomotion != 0 && std::min(ecart, 256 - ecart) <= 32)
+        {
+            suivi.imagesEtatRecul = 30;
+            suivi.imageEtatIndex = 0;
+        }
+    }
     // Une marche emise annule la commande « sur place » du pietinement (F-PLY-451) : a relancer au
     // prochain arret.
     suivi.pietinementEmis = false;

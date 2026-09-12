@@ -926,6 +926,9 @@ public native class NetworkGameSystem extends IGameSystem {
     private let m_regardYaw: array<Float>;
     private let m_regardPitch: array<Float>;
     private let m_regardEvent: array<ref<LookAtAddEvent>>;
+    /// Le regard de BRAS DROIT en cours (F-PLY-460), un par avatar. Retire en meme temps que
+    /// celui de la tete : sans ca, chaque mise a jour empilerait un look-at de plus.
+    private let m_regardBras: array<ref<LookAtAddEvent>>;
     // Compte les lignes de trace du pointage deja ecrites — s eteint a 20 (voir plus bas).
     // ⚠️ SANS INITIALISEUR, comme ses quatre voisins. Un `= 0` ici etait le SEUL initialiseur
     // de champ du fichier, et il coincide avec la disparition de l'emetteur d'arme
@@ -959,6 +962,9 @@ public native class NetworkGameSystem extends IGameSystem {
             }
             if IsDefined(this.m_regardEvent[trouve]) {
                 LookAtRemoveEvent.QueueRemoveLookatEvent(puppet, this.m_regardEvent[trouve]);
+            }
+            if trouve < ArraySize(this.m_regardBras) && IsDefined(this.m_regardBras[trouve]) {
+                LookAtRemoveEvent.QueueRemoveLookatEvent(puppet, this.m_regardBras[trouve]);
             }
         }
 
@@ -1075,15 +1081,48 @@ public native class NetworkGameSystem extends IGameSystem {
         // sans bouger le corps » — le seul geste qui sépare `lookDir` du yaw du corps.
         puppet.QueueEvent(ev);
 
+        // -- I1 : LE BRAS DROIT SUIT LA VISEE (F-PLY-460) ------------------------------------
+        //
+        // Les actions de combat des PNJ posent un SECOND regard dont `bodyPart` vaut `RightHand`
+        // (`tweakAIAction.script:1676` le teste ; la recette est `AIActionLookat.Activate`,
+        // `lookAtEvents.script:260-280`). Ce champ n'avait JAMAIS ete pose chez nous : la partie
+        // `Chest` essayee en aout (F-PLY-325) est un autre levier, et il est inerte.
+        //
+        // Arme en main seulement : un bras qui suit le regard sans arme n'a aucun sens, et au
+        // repos ca donnerait une posture de combat permanente (meme regle que le buste).
+        //
+        // Non mesure a l'ecriture : le verdict est visuel (« le canon suit-il le regard ? ») et le
+        // consommateur se relit aussi au tableau noir (`rightArmLookAtLimitReached`).
+        let bras: ref<LookAtAddEvent>;
+        if armeEnMain != TDBID.None() {
+            bras = new LookAtAddEvent();
+            bras.SetStaticTarget(cible);
+            bras.SetStyle(animLookAtStyle.Normal);
+            bras.bodyPart = n"RightHand";
+            bras.request.limits.softLimitDegrees = 360.0;
+            bras.request.limits.hardLimitDegrees = 270.0;
+            bras.request.limits.backLimitDegrees = 210.0;
+            bras.request.calculatePositionInParentSpace = false;
+            bras.request.priority = 100;
+            puppet.QueueEvent(bras);
+            if this.m_pointageTrace <= 20 {
+                this.Tessera_Journal(s"[Visee] \(cle) bras droit vers yaw=\(Cast<Int32>(lookYaw))");
+            }
+        }
+
         if trouve >= 0 {
             this.m_regardYaw[trouve] = lookYaw;
             this.m_regardPitch[trouve] = lookPitch;
             this.m_regardEvent[trouve] = ev;
+            if trouve < ArraySize(this.m_regardBras) {
+                this.m_regardBras[trouve] = bras;
+            }
         } else {
             ArrayPush(this.m_regardCles, cle);
             ArrayPush(this.m_regardYaw, lookYaw);
             ArrayPush(this.m_regardPitch, lookPitch);
             ArrayPush(this.m_regardEvent, ev);
+            ArrayPush(this.m_regardBras, bras);
         }
         return true;
     }
@@ -2554,7 +2593,12 @@ public native class NetworkGameSystem extends IGameSystem {
             return moveMovementType.Sprint;
         }
         if locomotion == 2 {
-            return moveMovementType.Run;
+            // ⚠️ ESSAI DU 2026-09-12 (F-PLY-459 : course jouee a ~1 m/s). Sur le MEME corps, un
+            // ordre `Sprint` rend 3,6 a 5,2 m/s et un ordre `Run` rend 1,0 m/s — une marche. Le
+            // jeu lui-meme rétrograde `Run` hors etat de COMBAT dans le chemin spline
+            // (`aiMoveToCommandHandler.script:295`). On mesure donc ce que donne `Sprint` pour la
+            // course, sans toucher a l'etat de combat (la garde est refusee hors combat).
+            return moveMovementType.Sprint;
         }
         return moveMovementType.Walk;
     }
@@ -2662,6 +2706,9 @@ public native class NetworkGameSystem extends IGameSystem {
         WorldPosition.SetVector4(wpRegard, this.PointDeRegard(puppet.GetWorldPosition(), yaw));
         AIPositionSpec.SetWorldPosition(regard, wpRegard);
         cmd.facingTarget = regard;
+        // ⚠️ ESSAI DU 2026-09-12, SANS EFFET (F-PLY-458) : couper cette rotation ne change rien au
+        // demi-tour (3 executions sur 3 a 0 deg). On revient donc a la pose de CDPR, qui est aussi
+        // celle qu'utilise le manipulateur de la commande (`aiMoveToCommandHandler.script:38`).
         cmd.rotateEntityTowardsFacingTarget = true;
 
         cmd.ignoreNavigation = true;
