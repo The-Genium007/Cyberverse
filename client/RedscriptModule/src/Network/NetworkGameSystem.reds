@@ -1101,53 +1101,21 @@ public native class NetworkGameSystem extends IGameSystem {
         // sans bouger le corps » — le seul geste qui sépare `lookDir` du yaw du corps.
         puppet.QueueEvent(ev);
 
-        // -- I1 : LE BRAS DROIT SUIT LA VISEE (F-PLY-460) ------------------------------------
+        // -- ⛔ LE BRAS DROIT NE SUIT PLUS LA VISEE (verdict de Lucas, 2026-09-12) -----------
         //
-        // Les actions de combat des PNJ posent un SECOND regard dont `bodyPart` vaut `RightHand`
-        // (`tweakAIAction.script:1676` le teste ; la recette est `AIActionLookat.Activate`,
-        // `lookAtEvents.script:260-280`). Ce champ n'avait JAMAIS ete pose chez nous : la partie
-        // `Chest` essayee en aout (F-PLY-325) est un autre levier, et il est inerte.
+        // F-PLY-460 avait fait suivre le regard au bras droit (`bodyPart = 'RightHand'`), puis
+        // F-PLY-472 avait borne ce suivi au preset de CDPR. Le verdict reste NON :
         //
-        // Arme en main seulement : un bras qui suit le regard sans arme n'a aucun sens, et au
-        // repos ca donnerait une posture de combat permanente (meme regle que le buste).
+        //     *« le mec il vise de maniere trop bizarre, il leve le coude et tout. Moi ce que je
+        //      veux c'est qu'il ait sa position de visee de base. Quand le mec sort son arme, il a
+        //      les bras le long du corps et l'arme pendante ; quand il vise, il a l'arme devant
+        //      lui. Et quand le gars va a droite ou a gauche, on fait une rotation du pantin. »*
         //
-        // Non mesure a l'ecriture : le verdict est visuel (« le canon suit-il le regard ? ») et le
-        // consommateur se relit aussi au tableau noir (`rightArmLookAtLimitReached`).
+        // Un regard pose sur une MAIN produit une articulation qui pointe, pas une POSTURE de tir.
+        // Ce que le jeu a pour ca, ce sont deux tenues distinctes selectionnees par des wrappers
+        // (`TesseraPousserVisee`) — et le yaw du corps, deja replique, fait le reste. Le regard
+        // qui reste ici ne concerne plus que la TETE et le buste.
         let bras: ref<LookAtAddEvent>;
-        if armeEnMain != TDBID.None() {
-            bras = new LookAtAddEvent();
-            bras.SetStaticTarget(cible);
-            bras.SetStyle(animLookAtStyle.Normal);
-            bras.bodyPart = n"RightHand";
-            // ── ⛔ « CA LUI TORD LE BRAS SUR L'ARRIERE » (verdict de Lucas, I1, 2026-09-12) ──
-            //
-            // Les trois limites ci-dessous etaient INVENTEES (360 / 270 / 210) : le bras suivait
-            // donc la visee tout autour du corps, jusqu'a ramener l'arme dans le dos. Lucas :
-            // *« on peut lever un peu l'arme, on peut la baisser, mais on ne tord pas le bras »*.
-            //
-            // Valeurs reprises telles quelles du preset de CDPR pour cette partie de corps,
-            // `LookatPreset.RightHand` (dump TweakDB, `lookat_presets/base_values.tweak:106-120`) :
-            // soft 100, hard 110, arriere 180, transition 120 / sortie 100. Au-dela, le bras
-            // cesse de suivre et garde sa pose — l'arme ne peut plus passer derriere le corps.
-            // C'est le domaine accepte du consommateur (ADR 0034), pas une estimation.
-            //
-            // ⚠️ `calculatePositionInParentSpace` reste a `false`, contrairement au preset : notre
-            // cible est un point MONDE, pas un point dans le repere du parent.
-            bras.request.limits.softLimitDegrees = 100.0;
-            bras.request.limits.hardLimitDegrees = 110.0;
-            bras.request.limits.backLimitDegrees = 180.0;
-            bras.request.limits.hardLimitDistance = 1000000.0;
-            bras.request.transitionSpeed = 120.0;
-            bras.request.hasOutTransition = true;
-            bras.request.outTransitionSpeed = 100.0;
-            bras.request.calculatePositionInParentSpace = false;
-            bras.request.priority = 100;
-            puppet.QueueEvent(bras);
-            if this.m_pointageTrace <= 20 {
-                this.Tessera_Journal(s"[Visee] \(cle) bras droit vers yaw=\(Cast<Int32>(lookYaw))");
-            }
-        }
-
         if trouve >= 0 {
             this.m_regardYaw[trouve] = lookYaw;
             this.m_regardPitch[trouve] = lookPitch;
@@ -1885,6 +1853,31 @@ public native class NetworkGameSystem extends IGameSystem {
         return tel.IsPhoneCallActive();
     }
 
+    /// LE JOUEUR LOCAL EST-IL EN TRAIN DE VISER ? (bit 0 de `PlayerState.flags`)
+    ///
+    /// Lucas, 2026-09-12 : *« quand le mec sort son arme, il a les bras le long du corps, l'arme
+    /// pendante ; quand il vise, il a l'arme devant lui »*. Les deux etats sont distincts, et
+    /// jusqu'ici le fil n'en portait qu'un (arme degainee). Le bit 0 existe dans le schema depuis
+    /// le debut et personne ne le remplissait.
+    ///
+    /// L'etat se lit la ou le JEU le lit : le tableau noir de la machine a etats du joueur,
+    /// `PlayerStateMachine.UpperBody`, compare a `gamePSMUpperBodyStates.Aim`
+    /// (`aiActionHelper.script:1904-1907` fait exactement cela, et c'est le seul lecteur officiel).
+    /// Accesseur emprunte au natif, pas devine.
+    public func TesseraViseeActive() -> Bool {
+        let joueur = GetPlayer(GetGameInstance());
+        if !IsDefined(joueur) {
+            return false;
+        }
+        let tableau = GameInstance.GetBlackboardSystem(GetGameInstance())
+            .GetLocalInstanced(joueur.GetEntityID(), GetAllBlackboardDefs().PlayerStateMachine);
+        if !IsDefined(tableau) {
+            return false;
+        }
+        return tableau.GetInt(GetAllBlackboardDefs().PlayerStateMachine.UpperBody)
+            == EnumInt(gamePSMUpperBodyStates.Aim);
+    }
+
     /// Arrête un effet déclaré sur une ENTITÉ distante (le pendant de `TesseraJouerEffetSurEntite`).
     ///
     /// ⚠️ `eye_glow_blue` est une BOUCLE : sans cet arrêt, les yeux resteraient bleus après le
@@ -2355,6 +2348,42 @@ public native class NetworkGameSystem extends IGameSystem {
         }
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(
             puppet, n"WeaponRight", degainee ? 1.0 : 0.0);
+        return true;
+    }
+
+    /// LA MISE EN JOUE — deux tenues distinctes, pas un bras qui pointe (Lucas, 2026-09-12).
+    ///
+    ///     arme rangee   : rien
+    ///     arme degainee : `WeaponRight` seul   -> bras le long du corps, arme pendante
+    ///     en joue       : + `combatLocomotion` -> tenue de tir, arme DEVANT
+    ///                     + `RangedWeapon`
+    ///
+    /// ⭐ POURQUOI CES TROIS NOMS-LA. Ce ne sont pas des noms inventes : c'est le trio EXACT que
+    /// l'entite de l'avatar exige pour charger `ma_gang_rifle_locomotion_combat.anims`
+    /// (`avatar_distant_ma.ent`, priorite 118, `variableNames = [combatLocomotion, WeaponRight,
+    /// RangedWeapon]`). Un wrapper au nom invente ne selectionne rien (F-PLY-450) ; ceux-la sont
+    /// declares par la donnee elle-meme. Et la mesure du 2026-09-12 a montre qu'un wrapper pose
+    /// A CHAUD change bel et bien le jeu d'animation resolu — les durees relues ont bouge.
+    ///
+    /// ⚠️ LE POIDS SE REPOSE, il ne se pose pas une fois : le moteur les remet a zero (meme mesure
+    /// que le pas chasse, F-PLY-438). L'appelant C++ repasse toutes les 0,25 s.
+    ///
+    /// ⚠️ CE QUE CA NE FAIT PAS : orienter le tir. La direction, c'est le yaw du corps, qui voyage
+    /// deja sur le fil — « quand le gars va a droite ou a gauche, on fait une rotation du pantin ».
+    public func TesseraPousserVisee(entityId: EntityID, enJoue: Bool) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let poids = enJoue ? 1.0 : 0.0;
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"combatLocomotion", poids);
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"RangedWeapon", poids);
+        // `WeaponRight` est pose par `TesseraPousserArme` tant que l'arme est degainee ; on le
+        // remet ici parce que la mise en joue peut arriver avant la prochaine passe d'arme.
+        if enJoue {
+            AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"WeaponRight", 1.0);
+        }
         return true;
     }
 
@@ -2875,6 +2904,35 @@ public native class NetworkGameSystem extends IGameSystem {
         // l'entite sur ce seul wrapper. Les trois wrappers de combat restent au vrai combat a mains
         // nues : la garde est refusee hors combat (decision de Lucas, 2026-09-11).
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"TesseraPasLateral", actif ? 1.0 : 0.0);
+        return true;
+    }
+
+    // ── LE RECUL PAR L'ANIMATION, PAS PAR LE PILOTAGE (F-PLY-458 : huit leviers elimines) ──────
+    //
+    // Le clip de marche arriere existe et est adressable (`walk_180`, 1,20 s — F-PLY-469, F-PLY-471)
+    // et AUCUN canal d'ecriture connu ne le selectionne. On retourne donc le probleme : le jeu
+    // derive `tessera_ma_recul.anims` est une copie du jeu civil ou `walk_0` PORTE le clip arriere.
+    // Quand l'avatar recule, on allume l'entree qui choisit ce jeu ; le moteur continue de demander
+    // « marche avant » et joue un pas arriere.
+    //
+    // ⚠️ LE WRAPPER PORTE UN NOM QUI EXISTE DEJA (`combatLocomotion`), et ce n'est pas un detail :
+    // F-PLY-450 a mesure qu'un wrapper au nom invente ne selectionne rien — le graphe ne le declare
+    // pas. Notre entree derivee (priorite 130) est la SEULE a porter ce wrapper seul ; les deux
+    // entrees de combat vanilla en exigent trois cumules, elles restent donc eteintes.
+    //
+    // ⚠️ A REPOSER PERIODIQUEMENT, comme le pas chasse : le moteur remet les poids a zero.
+    public func TesseraReculer(entityId: EntityID, actif: Bool) -> Bool {
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let corps = ent as GameObject;
+        if !IsDefined(corps) {
+            return false;
+        }
+        // ⚠️ `stealthLocomotion` ET NON `combatLocomotion` : ce dernier sert desormais a la MISE EN
+        // JOUE (`TesseraPousserVisee`), et deux consommateurs sur le meme wrapper se marcheraient
+        // dessus — viser ferait reculer, reculer ferait viser. `stealthLocomotion` est declare par
+        // l'entite (entree `ma_gang_unarmed_locomotion_stealth`, priorite 10) : notre entree derivee
+        // est posee a 130, elle gagne quand le wrapper est allume.
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"stealthLocomotion", actif ? 1.0 : 0.0);
         return true;
     }
 

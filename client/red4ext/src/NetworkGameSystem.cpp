@@ -2344,6 +2344,16 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
         {
             flags |= kFlagAppelTelephonique;
         }
+        // ⭐ LE BIT 0 EST ENFIN REMPLI (2026-09-12) — et la regle du commentaire ci-dessus est
+        // respectee, pas contournee : on ne le remplit que parce que le canal de RENDU existe
+        // desormais en face. Mettre en joue n'est PAS « avoir une arme en main » : Lucas veut deux
+        // tenues distinctes (arme pendante / arme devant), donc deux etats sur le fil.
+        bool enJoue = false;
+        Red::CallVirtual(this, "TesseraViseeActive", enJoue);
+        if (enJoue)
+        {
+            flags |= kFlagVisee;
+        }
     }
     const auto pu = cyberpunk_rp::protocol::CreatePositionUpdate(
         builder, &pos, QuantYaw(yaw), locomotion, moveDir, flags,
@@ -8167,45 +8177,6 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         }
     }
 
-    // ── ⭐ QUELS CLIPS CE CORPS SAIT-IL JOUER ? (F-PLY-466, une fois par avatar) ───────────
-    //
-    // L'inventaire des `.anims` se lit hors jeu ; il ne dit pas ce que le moteur a charge pour CETTE
-    // entite. `GetAnimationDuration` le dit : > 0 = clip adressable, 0 = absent, < 0 = composant
-    // introuvable. Une ligne par avatar, a sa premiere image pilotee.
-    {
-        auto& suiviClips = g_suiviAvatars[networkId];
-        if (!suiviClips.clipsReleves)
-        {
-            static const char* const kClips[] = { "walk_0",  "walk_180", "walk_090",
-                                                  "walk_270", "sprint_0", "jog_0",
-                                                  "idle_step_single_090", "idle_to_idle_090",
-                                                  "idle_to_walk_180" };
-            std::string ligne;
-            float premiereDuree = -9.0f;
-            for (const char* nom : kClips)
-            {
-                float duree = -9.0f;
-                Red::CallVirtual(this, "TesseraDureeClip", duree, entityId, Red::CName(nom));
-                char bout[64];
-                std::snprintf(bout, sizeof(bout), "%s=%.2f ", nom, duree);
-                ligne += bout;
-                if (premiereDuree < -8.0f)
-                {
-                    premiereDuree = duree;
-                }
-            }
-            // ⚠️ ON NE MARQUE COMME RELEVE QUE SI LE PANTIN A REPONDU. A la premiere image
-            // pilotee il n'est pas toujours resolvable : la premiere tentative du 2026-09-12 a rendu
-            // -1 partout (« pantin introuvable »), ce qui se lit a tort comme « aucun clip ».
-            if (premiereDuree >= 0.0f)
-            {
-                suiviClips.clipsReleves = true;
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] CLIPS %s",
-                                   static_cast<unsigned long long>(networkId), ligne.c_str());
-            }
-        }
-    }
-
     // ── ⭐ ESSAI : L'ANGLE DE DEPLACEMENT POUSSE AU GRAPHE (F-PLY-458) ─────────────────────
     //
     // Le clip `walk_180` EXISTE dans le jeu qui joue (F-PLY-466) et n'est pas choisi quand l'avatar
@@ -8432,6 +8403,35 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 g_telemetrie.Evenement("arme_posture", networkId,
                                        degainee ? (pousse ? "degainee" : "degainee_refuse")
                                                 : (pousse ? "rangee" : "rangee_refuse"));
+            }
+        }
+
+        // -- LA MISE EN JOUE, DISTINCTE DE L'ARME EN MAIN (Lucas, 2026-09-12) ----------------
+        //
+        // *« Quand le mec sort son arme, il a les bras le long du corps, l'arme pendante. Quand il
+        //  vise, il a l'arme devant lui. »* Deux etats, donc deux tenues : `WeaponRight` seul pour
+        // la premiere (ci-dessus), plus `combatLocomotion` + `RangedWeapon` pour la seconde.
+        //
+        // ⚠️ REPOSE PERIODIQUE, PAS SEULEMENT AU CHANGEMENT — le moteur remet les poids de wrapper
+        // a zero (mesure du pas chasse, F-PLY-438). Sans elle, la tenue de tir tombe au bout de
+        // moins d'une seconde et le defaut se lit comme « ca ne marche pas ».
+        {
+            const bool enJoue = (pose.flags & kFlagVisee) != 0;
+            suiviPosture.depuisViseeS += deltaTime;
+            const bool reposerVisee = enJoue && suiviPosture.depuisViseeS >= 0.25f;
+            if (enJoue != suiviPosture.derniereVisee || reposerVisee)
+            {
+                bool pousse = false;
+                Red::CallVirtual(this, "TesseraPousserVisee", pousse, entityId, enJoue);
+                if (enJoue != suiviPosture.derniereVisee)
+                {
+                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] VISEE %s pose=%d",
+                                       static_cast<unsigned long long>(networkId),
+                                       enJoue ? "EN JOUE" : "repos", pousse ? 1 : 0);
+                    g_telemetrie.Evenement("visee", networkId, enJoue ? "en_joue" : "repos");
+                }
+                suiviPosture.derniereVisee = enJoue;
+                suiviPosture.depuisViseeS = 0.0f;
             }
         }
 
@@ -8903,6 +8903,13 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             bool retire_ok = false;
             Red::CallVirtual(this, "TesseraPasChasse", retire_ok, entityId, false);
             suivi.pasChasse = false;
+        }
+        // Idem pour le jeu derive du recul : a l'arret, l'avatar redevient un marcheur normal.
+        if (suivi.recul)
+        {
+            bool retire_recul = false;
+            Red::CallVirtual(this, "TesseraReculer", retire_recul, entityId, false);
+            suivi.recul = false;
         }
         // L'allure REELLE, pas 0 : l'accroupi immobile passe aussi par ici (F-PLY-422).
         suivi.derniereLocomotion = pose.locomotion;
@@ -9978,6 +9985,48 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             Red::CallVirtual(this, "TesseraPasChasse", pose_ok, entityId, lateral);
             suivi.pasChasse = lateral;
             suivi.depuisPasChasseS = 0.0f;
+        }
+    }
+
+    // ── LE RECUL, PRIS PAR L'ANIMATION (F-PLY-458 : huit leviers de PILOTAGE elimines) ────────
+    //
+    // Le clip arriere existe et repond (`walk_180`, F-PLY-469/471) ; rien de ce qu'on sait ecrire
+    // ne le SELECTIONNE. Le jeu derive `tessera_ma_recul.anims` renverse la question : son `walk_0`
+    // EST le clip arriere. On l'allume pendant un deplacement vers l'arriere (move_dir a +-45 deg
+    // de 128, la meme convention que le lateral), on l'eteint sinon.
+    //
+    // ⚠️ REPOSE PERIODIQUE, comme le pas chasse : le moteur remet les poids de wrapper a zero.
+    // ⚠️ L'EXTINCTION EST AUSSI IMPORTANTE QUE L'ALLUMAGE — un wrapper laisse a 1 ferait marcher
+    // l'avatar A RECULONS pendant qu'il avance, ce qui est pire que le defaut d'origine.
+    {
+        const int md = static_cast<int>(pose.moveDir);
+        const int ecart = std::abs(md - 128);
+        const bool enRecul = pose.locomotion != 0 && std::min(ecart, 256 - ecart) <= 32;
+        suivi.depuisReculS += deltaTime;
+        const bool reposerRecul = enRecul && suivi.depuisReculS >= 0.25f;
+        if (enRecul != suivi.recul || reposerRecul)
+        {
+            bool recul_ok = false;
+            Red::CallVirtual(this, "TesseraReculer", recul_ok, entityId, enRecul);
+            if (enRecul != suivi.recul)
+            {
+                // ⚠️ `pose=1` NE DIT QUE « l'appel a abouti ». Le temoin qui dit si le jeu DERIVE
+                // est reellement selectionne est un clip qui n'existe QUE dans lui :
+                // `walk_0_avant_inutilise` (l'ancienne marche avant, renommee). Duree > 0 = le jeu
+                // derive est charge pour ce pantin ; -1 = il ne l'est pas, et le wrapper n'a rien
+                // selectionne. Sans ce temoin, « il se retourne encore » ne distingue pas
+                // « l'entree n'est pas choisie » de « elle l'est, et c'est le CORPS qui tourne ».
+                float temoin = -9.0f;
+                Red::CallVirtual(this, "TesseraDureeClip", temoin, entityId,
+                                 Red::CName("walk_0_avant_inutilise"));
+                SDK->logger->InfoF(PLUGIN,
+                                   "[avatar %llu] RECUL_ANIM %s (mdir=%u) pose=%d jeu_derive=%.2f",
+                                   static_cast<unsigned long long>(networkId),
+                                   enRecul ? "ALLUME" : "eteint",
+                                   static_cast<unsigned>(pose.moveDir), recul_ok ? 1 : 0, temoin);
+            }
+            suivi.recul = enRecul;
+            suivi.depuisReculS = 0.0f;
         }
     }
 

@@ -338,6 +338,11 @@ struct SuiviAvatar
     /// Temps depuis la derniere pose des wrappers : ils sont REMIS A ZERO peu apres (mesure : latéral
     /// au debut du segment, pivot apres ~0,8 s), donc on les repose tant que dure le lateral.
     float depuisPasChasseS = 0.0f;
+    /// Le jeu d'animation DERIVE du recul est-il selectionne (`combatLocomotion`, F-PLY-458) ?
+    /// Meme discipline que le pas chasse : pose au changement, reposee periodiquement, retiree a
+    /// l'arret — sinon l'avatar marcherait a reculons en avancant.
+    bool recul = false;
+    float depuisReculS = 0.0f;
     /// Temps depuis le dernier `AIRotateToCommand` a l'arret (pivot sur place, F-PLY-443).
     float depuisPivotS = 10.0f;
     /// Piétinement (F-PLY-451) : la commande « sur place » est-elle en cours ? Remis a faux par
@@ -483,6 +488,12 @@ struct SuiviAvatar
     /// `WeaponRight` qu'aux transitions. `false` initial sans risque : un pantin naît les mains
     /// vides, donc rien n'est ecrit dans la frame de sa naissance (F-PLY-119).
     bool derniereArmeDegainee = false;
+
+    /// Cet avatar etait-il EN JOUE au dernier passage (bit 0 du fil) ? Distinct de l'arme degainee :
+    /// arme pendante contre arme devant (Lucas, 2026-09-12). Reposé periodiquement, d'ou le timer —
+    /// le moteur remet les poids de wrapper a zero.
+    bool derniereVisee = false;
+    float depuisViseeS = 0.0f;
 
     /// Derniere valeur lue de `TesseraLireLocomotion` (`action * 10 + exploration`), pour
     /// n'ecrire au journal que les CHANGEMENTS d'etat de la machine de deplacement.
