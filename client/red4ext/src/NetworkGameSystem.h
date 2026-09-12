@@ -343,6 +343,10 @@ struct SuiviAvatar
     /// l'arret — sinon l'avatar marcherait a reculons en avancant.
     bool recul = false;
     float depuisReculS = 0.0f;
+    /// « La tete mene, le corps suit » (Lucas, 2026-09-12) : orientation que le corps GARDE a
+    /// l'arret tant que le regard reste dans le cone `TESSERA_SEUIL_TETE` (defaut 80 deg).
+    float yawTenu = 0.0f;
+    bool yawTenuValide = false;
     /// Temps depuis le dernier `AIRotateToCommand` a l'arret (pivot sur place, F-PLY-443).
     float depuisPivotS = 10.0f;
     /// Piétinement (F-PLY-451) : la commande « sur place » est-elle en cours ? Remis a faux par

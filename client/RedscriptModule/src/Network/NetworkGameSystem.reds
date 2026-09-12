@@ -2374,7 +2374,12 @@ public native class NetworkGameSystem extends IGameSystem {
     /// ⚠️ `etat` EST UN ENTIER, PAS UN BOOLEEN, et c'est une consequence directe du graphe :
     /// `NonCombatAim.state` y est compare a 0, 1, 2 ET 3 (relevé du 2026-09-12). Quelle valeur
     /// correspond a « arme devant » n'est ecrit nulle part — ça se BALAIE. 0 = repos.
-    public func TesseraPousserVisee(entityId: EntityID, etat: Int32) -> Bool {
+    ///
+    /// ⚗️ `groupe` : le trait a pousser. Le graphe offre QUATRE groupes plausibles pour une mise en
+    /// joue (`NonCombatAim.state` 7 conditions, `ShootAction.state` 24, `upperBodyState.state` 14,
+    /// `rightHandItemHandling.itemState` 4) et rien ne dit lequel commande la tenue. L'appelant les
+    /// balaie, un par un, avec leurs valeurs — une seule video les tranche tous.
+    public func TesseraPousserVisee(entityId: EntityID, etat: Int32, groupe: CName) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -2400,7 +2405,7 @@ public native class NetworkGameSystem extends IGameSystem {
         // ⚠️ `AnimFeature_NPCState` n'expose qu'un `Int32 state`, et `ApplyFeature` apparie
         // champ ↔ nœud PAR LE NOM : ça marche ici parce que la propriété visée s'appelle `state`
         // (ce ne sera pas le cas pour le saut, dont la propriété est `explorationType`).
-        this.TesseraPousserTrait(entityId, n"NonCombatAim", etat);
+        this.TesseraPousserTrait(entityId, groupe, etat);
         // `WeaponRight` est pose par `TesseraPousserArme` tant que l'arme est degainee ; on le
         // remet ici parce que la mise en joue peut arriver avant la prochaine passe d'arme.
         if enJoue {

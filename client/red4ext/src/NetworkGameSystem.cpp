@@ -8424,9 +8424,19 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // valeur qui vaut « arme devant » n'est ecrite nulle part, et la deviner une fois de
             // plus coute une session. On la BALAIE : 1, puis 2, puis 3, quatre secondes chacune,
             // pendant que la visee est demandee. Une seule video tranche les trois.
-            const int etat = enJoue
-                ? 1 + static_cast<int>(suiviPosture.depuisBalayageViseeS / 4.0f) % 3
-                : 0;
+            // ⚗️ BALAYAGE DES QUATRE GROUPES DE TRAIT CANDIDATS, avec leurs valeurs. Le graphe
+            // en offre quatre pour une mise en joue et rien ne dit lequel commande la tenue ; les
+            // essayer un par un dans UNE video coute 3 s chacun au lieu d'une session chacun.
+            struct Essai { const char* groupe; int valeur; };
+            static constexpr Essai kEssais[] = {
+                {"NonCombatAim", 2},        {"ShootAction", 1},         {"ShootAction", 2},
+                {"upperBodyState", 4},      {"upperBodyState", 7},      {"upperBodyState", 8},
+                {"upperBodyState", 9},      {"rightHandItemHandling", 1},
+            };
+            const int indice = static_cast<int>(suiviPosture.depuisBalayageViseeS / 3.0f)
+                               % static_cast<int>(std::size(kEssais));
+            const int etat = enJoue ? kEssais[indice].valeur : 0;
+            const char* groupe = enJoue ? kEssais[indice].groupe : "NonCombatAim";
             if (enJoue)
             {
                 suiviPosture.depuisBalayageViseeS += deltaTime;
@@ -8437,18 +8447,20 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             }
             suiviPosture.depuisViseeS += deltaTime;
             const bool reposerVisee = enJoue && suiviPosture.depuisViseeS >= 0.25f;
-            if (etat != suiviPosture.dernierEtatVisee || reposerVisee)
+            const int signature = etat + 100 * indice;
+            if (signature != suiviPosture.dernierEtatVisee || reposerVisee)
             {
                 bool pousse = false;
-                Red::CallVirtual(this, "TesseraPousserVisee", pousse, entityId, etat);
-                if (etat != suiviPosture.dernierEtatVisee)
+                Red::CallVirtual(this, "TesseraPousserVisee", pousse, entityId, etat,
+                                 Red::CName(groupe));
+                if (signature != suiviPosture.dernierEtatVisee)
                 {
-                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] VISEE etat=%d pose=%d",
-                                       static_cast<unsigned long long>(networkId), etat,
+                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] VISEE %s=%d pose=%d",
+                                       static_cast<unsigned long long>(networkId), groupe, etat,
                                        pousse ? 1 : 0);
                     g_telemetrie.Evenement("visee", networkId, enJoue ? "en_joue" : "repos");
                 }
-                suiviPosture.dernierEtatVisee = etat;
+                suiviPosture.dernierEtatVisee = signature;
                 suiviPosture.depuisViseeS = 0.0f;
             }
         }
@@ -9339,6 +9351,64 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suiviImmobile.ciblePassagerPrecedenteValide = false;
         }
 
+        // ── ⭐⭐ LA TETE MENE, LE CORPS SUIT (decision de Lucas, 2026-09-12) ──────────────────
+        //
+        // *« On va utiliser le mouvement de la tete pour compenser le yaw. Quand on sera un peu en
+        //  dessous du seuil de quatre-vingts degres, il faut garder le parametre reglable : quand
+        //  le joueur tourne la souris de droite a gauche, la TETE tourne, et apres le corps
+        //  suit. »*
+        //
+        // Aujourd'hui le corps d'un avatar a l'arret prend le yaw du fil immediatement : il pivote
+        // avec la souris, et la tete n'a rien a compenser — le geste le plus courant en RP (jeter un
+        // oeil a cote) devient une rotation du corps entier.
+        //
+        // Desormais, a l'ARRET, le corps GARDE son orientation tant que le regard reste dans le
+        // cone ; au-dela, il se tourne vers le regard, progressivement (`AIRotateToCommand`), et
+        // c'est la tete qui a mene tout le mouvement.
+        //
+        // ⚠️ Le seuil est REGLABLE sans recompiler : `TESSERA_SEUIL_TETE` (degres, defaut 80). 80
+        // est sous la limite dure du regard de CDPR (110, F-PLY-472) : on demande a la tete un
+        // angle que le moteur accepte de tenir, au lieu d'un angle qu'il ecrete.
+        //
+        // ⚠️ Convention d'axes : `lookYaw` est un cap boussole, le yaw d'entite est un angle
+        // d'Euler, et les deux somment a 360 (mesure du 2026-08-17). L'orientation de corps qui
+        // REGARDE dans la direction du regard est donc `-lookYaw`.
+        static const float kSeuilTeteDeg = []() {
+            const char* v = std::getenv("TESSERA_SEUIL_TETE");
+            const float s = v ? static_cast<float>(std::atof(v)) : 80.0f;
+            return (s > 1.0f && s < 180.0f) ? s : 80.0f;
+        }();
+        float yawCorpsVoulu = pose.yaw;
+        if (pose.lookYaw != 0.0f || pose.lookPitch != 0.0f)
+        {
+            const float yawDuRegard = -pose.lookYaw;
+            if (!suiviImmobile.yawTenuValide)
+            {
+                suiviImmobile.yawTenu = pose.yaw;
+                suiviImmobile.yawTenuValide = true;
+            }
+            const float ecartTete =
+                std::fabs(Tessera::Sync::EcartAngulaire(suiviImmobile.yawTenu, yawDuRegard));
+            if (ecartTete > kSeuilTeteDeg)
+            {
+                // La tete a atteint sa limite : le corps rattrape, et on repart d'un cone neuf.
+                suiviImmobile.yawTenu = yawDuRegard;
+                bool suivreOk = false;
+                Red::CallVirtual(this, "TesseraPivoterAvatar", suivreOk, entityId,
+                                 suiviImmobile.yawTenu);
+                SDK->logger->InfoF(PLUGIN,
+                                   "[avatar %llu] TETE_MENE corps rattrape (ecart=%.0f deg > %.0f) "
+                                   "pivot=%d",
+                                   static_cast<unsigned long long>(networkId), ecartTete,
+                                   kSeuilTeteDeg, suivreOk ? 1 : 0);
+            }
+            yawCorpsVoulu = suiviImmobile.yawTenu;
+        }
+        else
+        {
+            suiviImmobile.yawTenuValide = false;
+        }
+
         // ── LE PIVOT SUR PLACE (F-PLY-442, F-PLY-443) ─────────────────────────────────────────
         //
         // A l'arret, le yaw etait applique par le teleport ci-dessous : le regard SAUTAIT (pointes
@@ -9354,7 +9424,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             && suiviImmobile.depuisPivotS >= kPeriodePivotS)
         {
             bool pivotOk = false;
-            Red::CallVirtual(this, "TesseraPivoterAvatar", pivotOk, entityId, pose.yaw);
+            Red::CallVirtual(this, "TesseraPivoterAvatar", pivotOk, entityId, yawCorpsVoulu);
             suiviImmobile.depuisPivotS = 0.0f;
         }
 
@@ -9413,7 +9483,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // flou etait le FLOU CINETIQUE du jeu, un reglage graphique, identifie par Lucas le
                 // 2026-08-27. F-ASC-037 (« le flou vient du placement image par image ») est donc
                 // refute — on avait attribue a notre code un effet qui ne lui appartenait pas.
-                SetEntityPosition(entityId, positionVoulue, pose.yaw);
+                SetEntityPosition(entityId, positionVoulue, yawCorpsVoulu);
             }
             else
             {
@@ -9437,7 +9507,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // que pour un corps QUI MARCHE, appele a chaque image. Ici le regime est
                 // « immobile » par definition, et la cadence est bornee a une fois toutes les
                 // deux secondes.
-                SetEntityPosition(entityId, positionVoulue, pose.yaw);
+                SetEntityPosition(entityId, positionVoulue, yawCorpsVoulu);
             }
         }
 
