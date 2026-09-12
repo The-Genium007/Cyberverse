@@ -478,6 +478,33 @@ public:
 
     [[nodiscard]] std::size_t Nombre() const noexcept { return m_nombre; }
 
+    /// ⭐ LES ENTRÉES DU DERNIER ÉCHANTILLON REÇU, SANS LE RETARD D'INTERPOLATION.
+    ///
+    /// La POSITION se rend en retard (`kDelaiInterpolationS`) parce qu'interpoler exige d'avoir
+    /// déjà l'échantillon suivant. Les ENTRÉES (allure, direction du déplacement, orientation du
+    /// corps, regard), elles, ne servent qu'à FORMER L'ORDRE de marche — et cet ordre vise un point
+    /// calculé depuis la position COURANTE de l'avatar (`PiloterAvatar`), jamais depuis la position
+    /// reçue. Les retarder de 100 ms coûte donc 100 ms sur chaque démarrage, chaque changement de
+    /// direction et chaque changement d'allure, sans rien apporter.
+    ///
+    /// ⚠️ Anticiper l'ORDRE, jamais la POSITION : extrapoler la position ajouterait des recalages
+    /// à l'arrêt, et le tampon le fait déjà en secours quand le fil se tait.
+    [[nodiscard]] bool DernieresEntrees(std::uint8_t& locomotion, std::uint8_t& moveDir, float& yaw,
+                                        float& lookYaw, float& lookPitch) const noexcept
+    {
+        if (m_nombre == 0)
+        {
+            return false;
+        }
+        const Pose& p = At(m_nombre - 1).pose;
+        locomotion = p.locomotion;
+        moveDir = p.moveDir;
+        yaw = p.yaw;
+        lookYaw = p.lookYaw;
+        lookPitch = p.lookPitch;
+        return true;
+    }
+
     /// Âge du dernier échantillon reçu, en secondes, à l'instant `tempsRendu`.
     ///
     /// C'est la mesure de SANTÉ DU FIL pour cette entité, et elle est distincte de

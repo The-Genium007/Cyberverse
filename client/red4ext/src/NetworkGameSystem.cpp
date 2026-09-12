@@ -7758,6 +7758,28 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
         {
             continue;
         }
+        // ⭐ LES ENTRÉES SE LISENT EN TÊTE DE TAMPON (recherche réactivité, 2026-09-12).
+        //
+        // `Echantillonner` rend une pose vieille de `kDelaiInterpolationS` (100 ms) : c'est le prix
+        // de l'interpolation, et il est juste POUR LA POSITION. Mais la même pose portait aussi les
+        // entrées, et l'ordre de marche qu'on en tire n'a aucune raison d'attendre : il vise un
+        // point calculé depuis la position courante de l'avatar. On prend donc les entrées du
+        // dernier échantillon reçu, en laissant la position interpolée intacte.
+        {
+            std::uint8_t locoTete = pose.locomotion;
+            std::uint8_t mdirTete = pose.moveDir;
+            float yawTete = pose.yaw;
+            float lookYawTete = pose.lookYaw;
+            float lookPitchTete = pose.lookPitch;
+            if (tampon.DernieresEntrees(locoTete, mdirTete, yawTete, lookYawTete, lookPitchTete))
+            {
+                pose.locomotion = locoTete;
+                pose.moveDir = mdirTete;
+                pose.yaw = yawTete;
+                pose.lookYaw = lookYawTete;
+                pose.lookPitch = lookPitchTete;
+            }
+        }
         PiloterAvatar(networkId, entite->second, pose, deltaTime);
     }
 
@@ -10000,7 +10022,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     suivi.viseeY = visee.Y;
     suivi.viseeValide = true;
     // Depart vif (F-PLY-446) : course (2) et sprint (3) sans phase Start.
-    const bool useStart = !(g_departVif && (pose.locomotion == 2 || pose.locomotion == 3));
+    // ⚠️ ETENDU A LA MARCHE le 2026-09-12 (F-PLY-458). Pendant la phase `Start`, le pantin
+    // s'oriente vers sa DESTINATION : c'est un candidat pour le demi-tour au recul, et il ne se
+    // testait pas — l'interrupteur ne coupait `Start` qu'en course et en sprint.
+    const bool useStart = !g_departVif;
     if (Red::CallVirtual(this, "TesseraSuivreAvatarAvecDepart", enRoute, entityId, visee,
                          static_cast<int32_t>(pose.locomotion), pose.yaw, useStart)
         && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
