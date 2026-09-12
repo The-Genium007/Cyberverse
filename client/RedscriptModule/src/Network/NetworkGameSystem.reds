@@ -2420,7 +2420,7 @@ public native class NetworkGameSystem extends IGameSystem {
         return TesseraHabillerLeCorps(entityId, passe);
     }
 
-    public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool) -> Bool {
+    public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool, phase: Int32) -> Bool {
         let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -2449,6 +2449,27 @@ public native class NetworkGameSystem extends IGameSystem {
         // `state`, mais on ne peut pas le viser par son nom sans viser tous les autres.
         AnimationControllerComponent.SetInputInt(puppet, n"action", enVol ? 1 : 2);
         AnimationControllerComponent.SetInputInt(puppet, n"explorationType", enVol ? 2 : 0);
+
+        // ── ⭐⭐ ET LE TRAIT, QUI EST LE SEUL CANAL QUE LES TRANSITIONS LISENT ───────────────
+        //
+        // Le commentaire ci-dessus disait « pas d'`ApplyFeature` ici, c'est une contrainte » parce
+        // que `animAnimFeature_NPCExploration` n'est declaree dans aucun script DECOMPILE. C'etait
+        // vrai — et incomplet : **Codeware la declare** (`Codeware.Global.reds`, parmi onze classes
+        // de traits d'animation). Elle est donc constructible depuis redscript, et l'obligation de
+        // verification du `CLAUDE.md` (« avant d'ecrire du code maison, regarder si l'un des trois
+        // frameworks couvre deja le besoin ») valait ici aussi.
+        //
+        // Pourquoi ça compte : sur les 348 conditions de transition du graphe, **aucune** ne lit un
+        // noeud d'entree (F-PLY-485). Les deux `SetInputInt` ci-dessus ne peuvent donc PAS faire
+        // changer d'etat la machine — elles ne font que ponderer un melange. Les six conditions qui
+        // declenchent le saut lisent `exploration.explorationType` en tant que TRAIT.
+        //
+        // `state` porte la PHASE (`startup` / `loop` / `recover` — les trois existent dans le jeu
+        // d'exploration, F-PLY-475). Son domaine n'est ecrit nulle part : l'appelant le balaie.
+        let trait = new animAnimFeature_NPCExploration();
+        trait.explorationType = enVol ? 2 : 0;   // moveExplorationType : Jump = 2, None = 0
+        trait.state = phase;
+        AnimationControllerComponent.ApplyFeature(puppet, n"exploration", trait);
         return true;
     }
 

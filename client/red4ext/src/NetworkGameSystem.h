@@ -498,6 +498,8 @@ struct SuiviAvatar
     /// dit laquelle vaut « arme devant ». On les essaie 4 s chacune pendant que la visee dure.
     int dernierEtatVisee = -1;
     float depuisBalayageViseeS = 0.0f;
+    /// Balayage de la PHASE de franchissement (`exploration.state`) : une valeur par saut.
+    int phaseFranchissement = -1;
 
     /// Derniere valeur lue de `TesseraLireLocomotion` (`action * 10 + exploration`), pour
     /// n'ecrire au journal que les CHANGEMENTS d'etat de la machine de deplacement.

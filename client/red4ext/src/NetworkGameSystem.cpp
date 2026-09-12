@@ -6162,7 +6162,7 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
         if (event->action() == kActionSaut)
         {
             bool pousse = false;
-            Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true);
+            Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true, 0);
             g_telemetrie.Evenement("action_recue", event->actor(),
                                    pousse ? "saut" : "saut_refuse");
         }
@@ -8705,11 +8705,26 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // seconde ; le pousser a chaque frame ferait 60 ecritures de graphe pour un geste qui en
         // demande deux -- et c'est le regime qui a fait tomber le jeu deux fois le 2026-08-06.
         const bool enVolMaintenant = pose.locomotion == 6;
+        // ⚗️ BALAYAGE DE LA PHASE (`exploration.state`) — le jeu d'exploration porte `startup`,
+        // `loop` et `recover` (F-PLY-475) et rien ne dit quelle valeur designe laquelle. On change
+        // de valeur a CHAQUE decollage : saut 1 -> phase 0, saut 2 -> phase 1, etc. Une video de
+        // quatre sauts couvre le domaine, et le journal dit laquelle etait posee a chaque saut.
         if (suiviPosture.dernierEnVol != enVolMaintenant)
         {
             suiviPosture.dernierEnVol = enVolMaintenant;
+            if (enVolMaintenant)
+            {
+                suiviPosture.phaseFranchissement = (suiviPosture.phaseFranchissement + 1) % 4;
+            }
             bool franchi = false;
-            Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, enVolMaintenant);
+            Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, enVolMaintenant,
+                             suiviPosture.phaseFranchissement);
+            if (enVolMaintenant)
+            {
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT phase=%d pose=%d",
+                                   static_cast<unsigned long long>(networkId),
+                                   suiviPosture.phaseFranchissement, franchi ? 1 : 0);
+            }
             g_telemetrie.Evenement("franchissement", networkId,
                                    enVolMaintenant ? (franchi ? "decollage" : "decollage_refuse")
                                                    : (franchi ? "sol" : "sol_refuse"));
