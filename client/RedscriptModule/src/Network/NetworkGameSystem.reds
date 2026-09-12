@@ -2759,6 +2759,26 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // L'ANGLE DE DEPLACEMENT POUSSE AU GRAPHE (essai du 2026-09-12, F-PLY-458)
+    //
+    // Le jeu par defaut PORTE `walk_180` (F-PLY-466) : quand l'avatar se retourne au lieu de
+    // reculer, le clip existe et n'est pas choisi. Le graphe expose `directionAngle` et
+    // `desiredYaw` — c'est typiquement ce qui melange walk_0 / walk_090 / walk_180 / walk_270.
+    // Aucun des deux n'a jamais ete pousse depuis chez nous.
+    //
+    // ⚠️ Pari contre F-PLY-343 (« ce qui RENSEIGNE une machine d'etat ne passe pas ») : si c'est
+    // inerte, la mesure le dira en une execution, et l'entree de registre sera ecrite.
+    public func TesseraPousserDirection(entityId: EntityID, angle: Float) -> Bool {
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let corps = ent as GameObject;
+        if !IsDefined(corps) {
+            return false;
+        }
+        AnimationControllerComponent.SetInputFloat(corps, n"directionAngle", angle);
+        AnimationControllerComponent.SetInputFloat(corps, n"desiredYaw", angle);
+        return true;
+    }
+
     // LA DISPONIBILITE D'UN CLIP, DEPUIS LE JEU (F-PLY-466)
     //
     // L'inventaire des `.anims` se lit hors jeu, mais il ne dit pas ce que le moteur a REELLEMENT

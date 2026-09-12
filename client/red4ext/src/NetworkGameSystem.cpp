@@ -8156,6 +8156,28 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         }
     }
 
+    // ── ⭐ ESSAI : L'ANGLE DE DEPLACEMENT POUSSE AU GRAPHE (F-PLY-458) ─────────────────────
+    //
+    // Le clip `walk_180` EXISTE dans le jeu qui joue (F-PLY-466) et n'est pas choisi quand l'avatar
+    // se retourne. On pousse donc au graphe l'angle du deplacement RELATIF AU REGARD — 0 devant,
+    // 180 derriere — par les entrees `directionAngle` et `desiredYaw`, jamais essayees.
+    //
+    // Sur changement de plus de 5 deg : pousser a chaque image couterait un appel script par image
+    // et par avatar, pour une valeur qui ne bouge qu'aux virages.
+    if (pose.locomotion != 0)
+    {
+        auto& suiviDir = g_suiviAvatars[networkId];
+        const float angle = static_cast<float>(pose.moveDir) * (360.0f / 256.0f);
+        if (std::fabs(Tessera::Sync::EcartAngulaire(suiviDir.dernierAngleDirection, angle)) > 5.0f)
+        {
+            suiviDir.dernierAngleDirection = angle;
+            bool pousse = false;
+            Red::CallVirtual(this, "TesseraPousserDirection", pousse, entityId, angle);
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] DIRECTION angle=%.0f pousse=%d",
+                               static_cast<unsigned long long>(networkId), angle, pousse ? 1 : 0);
+        }
+    }
+
     // ── ⭐ RECUL : L'ETAT DU MOTEUR IMAGE PAR IMAGE (F-PLY-458) ────────────────────────────
     //
     // Le strafe est pose sur ~99 % des images et l'avatar se retourne quand meme : ce qui distingue
