@@ -2759,6 +2759,25 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // LA DISPONIBILITE D'UN CLIP, DEPUIS LE JEU (F-PLY-466)
+    //
+    // L'inventaire des `.anims` se lit hors jeu, mais il ne dit pas ce que le moteur a REELLEMENT
+    // charge pour CETTE entite. `GetAnimationDuration` le dit : une duree > 0 = le clip est
+    // adressable ici et maintenant, 0 = il ne l'est pas. C'est le seul controle qui ferme l'ecart
+    // entre « le fichier contient le clip » et « l'avatar peut le jouer ».
+    public func TesseraDureeClip(entityId: EntityID, nom: CName) -> Float {
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let puppet = ent as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return -1.0;
+        }
+        let ctrl = puppet.GetAnimationControllerComponent();
+        if !IsDefined(ctrl) {
+            return -2.0;
+        }
+        return ctrl.GetAnimationDuration(nom);
+    }
+
     // LE PAS CHASSE (F-PLY-437, F-PLY-438) — pose ou retire les TROIS wrappers du jeu de combat.
     //
     // Les jeux detendus de l'avatar n'ont pas de clips lateraux (walk_090 / walk_270) ; l'entite ne

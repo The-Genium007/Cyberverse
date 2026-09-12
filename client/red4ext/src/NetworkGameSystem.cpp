@@ -8128,6 +8128,34 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     }
 
 
+    // ── ⭐ QUELS CLIPS CE CORPS SAIT-IL JOUER ? (F-PLY-466, une fois par avatar) ───────────
+    //
+    // L'inventaire des `.anims` se lit hors jeu ; il ne dit pas ce que le moteur a charge pour CETTE
+    // entite. `GetAnimationDuration` le dit : > 0 = clip adressable, 0 = absent, < 0 = composant
+    // introuvable. Une ligne par avatar, a sa premiere image pilotee.
+    {
+        auto& suiviClips = g_suiviAvatars[networkId];
+        if (!suiviClips.clipsReleves)
+        {
+            suiviClips.clipsReleves = true;
+            static const char* const kClips[] = { "walk_0",  "walk_180", "walk_090",
+                                                  "walk_270", "sprint_0", "jog_0",
+                                                  "idle_step_single_090", "idle_to_idle_090",
+                                                  "idle_to_walk_180" };
+            std::string ligne;
+            for (const char* nom : kClips)
+            {
+                float duree = -9.0f;
+                Red::CallVirtual(this, "TesseraDureeClip", duree, entityId, Red::CName(nom));
+                char bout[64];
+                std::snprintf(bout, sizeof(bout), "%s=%.2f ", nom, duree);
+                ligne += bout;
+            }
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] CLIPS %s",
+                               static_cast<unsigned long long>(networkId), ligne.c_str());
+        }
+    }
+
     // ── ⭐ RECUL : L'ETAT DU MOTEUR IMAGE PAR IMAGE (F-PLY-458) ────────────────────────────
     //
     // Le strafe est pose sur ~99 % des images et l'avatar se retourne quand meme : ce qui distingue
