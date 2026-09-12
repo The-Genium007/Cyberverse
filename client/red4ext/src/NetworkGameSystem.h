@@ -504,6 +504,9 @@ struct SuiviAvatar
     float depuisBalayageViseeS = 0.0f;
     /// Balayage de la PHASE de franchissement (`exploration.state`) : une valeur par saut.
     int phaseFranchissement = -1;
+    /// Evenement externe du vol : `ActionLoop` se demande une fois, ~0,2 s apres le decollage.
+    float depuisDecollageS = 0.0f;
+    bool boucleVolDemandee = false;
 
     /// Derniere valeur lue de `TesseraLireLocomotion` (`action * 10 + exploration`), pour
     /// n'ecrire au journal que les CHANGEMENTS d'etat de la machine de deplacement.

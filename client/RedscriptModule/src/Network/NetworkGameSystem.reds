@@ -2351,6 +2351,28 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    /// ── ⭐⭐ L'ÉVÉNEMENT EXTERNE : le cinquième canal, et le graphe en écoute NEUF ───────────
+    ///
+    /// Le dépouillement du graphe (F-PLY-485) a classé les conditions de transition en cinq
+    /// familles. Quatre ont été essayées ; celle-ci ne l'avait jamais été. Les noms que le graphe
+    /// écoute, relevés dans la donnée, ne sont pas des devinettes :
+    ///
+    ///     hit (16) · Reload (3) · Shoot (3) · PlayBlock (2) · PlayParry (1)
+    ///     ActionStartup (1) · ActionLoop (1) · ActionRecovery (1) · RepeatActionLoop (1)
+    ///
+    /// ⭐ Les trois derniers portent EXACTEMENT les suffixes des clips de franchissement
+    /// (`jump_walk_startup` / `_loop` / `_recover`, F-PLY-475). C'est la correspondance la plus
+    /// franche qu'on ait trouvée entre un nom de la donnée d'animation et un nom du graphe.
+    public func TesseraPousserEvenementAnim(entityId: EntityID, nom: CName) -> Bool {
+        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        AnimationControllerComponent.PushEvent(puppet, nom);
+        return true;
+    }
+
     /// LA MISE EN JOUE — deux tenues distinctes, pas un bras qui pointe (Lucas, 2026-09-12).
     ///
     ///     arme rangee   : rien

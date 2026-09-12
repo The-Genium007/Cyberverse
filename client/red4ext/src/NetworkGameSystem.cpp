@@ -8731,15 +8731,36 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             bool franchi = false;
             Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, enVolMaintenant,
                              suiviPosture.phaseFranchissement);
+            // ⭐ ET L'EVENEMENT EXTERNE, le cinquieme canal (F-PLY-485) : le graphe ecoute
+            // `ActionStartup` / `ActionLoop` / `ActionRecovery`, qui portent exactement les suffixes
+            // des clips de franchissement (`jump_walk_startup` / `_loop` / `_recover`, F-PLY-475).
+            // Au decollage on demande le DEPART, a l'atterrissage la RECEPTION.
+            bool evenementOk = false;
+            Red::CallVirtual(this, "TesseraPousserEvenementAnim", evenementOk, entityId,
+                             Red::CName(enVolMaintenant ? "ActionStartup" : "ActionRecovery"));
+            suiviPosture.depuisDecollageS = 0.0f;
+            suiviPosture.boucleVolDemandee = false;
             if (enVolMaintenant)
             {
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT phase=%d pose=%d",
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT phase=%d pose=%d evenement=%d",
                                    static_cast<unsigned long long>(networkId),
-                                   suiviPosture.phaseFranchissement, franchi ? 1 : 0);
+                                   suiviPosture.phaseFranchissement, franchi ? 1 : 0,
+                                   evenementOk ? 1 : 0);
             }
             g_telemetrie.Evenement("franchissement", networkId,
                                    enVolMaintenant ? (franchi ? "decollage" : "decollage_refuse")
                                                    : (franchi ? "sol" : "sol_refuse"));
+        }
+        else if (enVolMaintenant && !suiviPosture.boucleVolDemandee)
+        {
+            suiviPosture.depuisDecollageS += deltaTime;
+            if (suiviPosture.depuisDecollageS >= 0.2f)
+            {
+                suiviPosture.boucleVolDemandee = true;
+                bool boucleOk = false;
+                Red::CallVirtual(this, "TesseraPousserEvenementAnim", boucleOk, entityId,
+                                 Red::CName("ActionLoop"));
+            }
         }
     }
     // ══════════════════════════════════════════════════════════════════════════════════════════
