@@ -8137,12 +8137,12 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         auto& suiviClips = g_suiviAvatars[networkId];
         if (!suiviClips.clipsReleves)
         {
-            suiviClips.clipsReleves = true;
             static const char* const kClips[] = { "walk_0",  "walk_180", "walk_090",
                                                   "walk_270", "sprint_0", "jog_0",
                                                   "idle_step_single_090", "idle_to_idle_090",
                                                   "idle_to_walk_180" };
             std::string ligne;
+            float premiereDuree = -9.0f;
             for (const char* nom : kClips)
             {
                 float duree = -9.0f;
@@ -8150,9 +8150,59 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 char bout[64];
                 std::snprintf(bout, sizeof(bout), "%s=%.2f ", nom, duree);
                 ligne += bout;
+                if (premiereDuree < -8.0f)
+                {
+                    premiereDuree = duree;
+                }
             }
-            SDK->logger->InfoF(PLUGIN, "[avatar %llu] CLIPS %s",
-                               static_cast<unsigned long long>(networkId), ligne.c_str());
+            // ⚠️ ON NE MARQUE COMME RELEVE QUE SI LE PANTIN A REPONDU. A la premiere image
+            // pilotee il n'est pas toujours resolvable : la premiere tentative du 2026-09-12 a rendu
+            // -1 partout (« pantin introuvable »), ce qui se lit a tort comme « aucun clip ».
+            if (premiereDuree >= 0.0f)
+            {
+                suiviClips.clipsReleves = true;
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] CLIPS %s",
+                                   static_cast<unsigned long long>(networkId), ligne.c_str());
+            }
+        }
+    }
+
+    // ── ⭐ QUELS CLIPS CE CORPS SAIT-IL JOUER ? (F-PLY-466, une fois par avatar) ───────────
+    //
+    // L'inventaire des `.anims` se lit hors jeu ; il ne dit pas ce que le moteur a charge pour CETTE
+    // entite. `GetAnimationDuration` le dit : > 0 = clip adressable, 0 = absent, < 0 = composant
+    // introuvable. Une ligne par avatar, a sa premiere image pilotee.
+    {
+        auto& suiviClips = g_suiviAvatars[networkId];
+        if (!suiviClips.clipsReleves)
+        {
+            static const char* const kClips[] = { "walk_0",  "walk_180", "walk_090",
+                                                  "walk_270", "sprint_0", "jog_0",
+                                                  "idle_step_single_090", "idle_to_idle_090",
+                                                  "idle_to_walk_180" };
+            std::string ligne;
+            float premiereDuree = -9.0f;
+            for (const char* nom : kClips)
+            {
+                float duree = -9.0f;
+                Red::CallVirtual(this, "TesseraDureeClip", duree, entityId, Red::CName(nom));
+                char bout[64];
+                std::snprintf(bout, sizeof(bout), "%s=%.2f ", nom, duree);
+                ligne += bout;
+                if (premiereDuree < -8.0f)
+                {
+                    premiereDuree = duree;
+                }
+            }
+            // ⚠️ ON NE MARQUE COMME RELEVE QUE SI LE PANTIN A REPONDU. A la premiere image
+            // pilotee il n'est pas toujours resolvable : la premiere tentative du 2026-09-12 a rendu
+            // -1 partout (« pantin introuvable »), ce qui se lit a tort comme « aucun clip ».
+            if (premiereDuree >= 0.0f)
+            {
+                suiviClips.clipsReleves = true;
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] CLIPS %s",
+                                   static_cast<unsigned long long>(networkId), ligne.c_str());
+            }
         }
     }
 
@@ -9946,22 +9996,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // de mouvement n'existe que tant que la commande tourne, on la repose donc a chaque
             // passage. ponytail: un appel script par image et par avatar en marche ; espacer
             // (ecart de yaw > 2 deg) si le profilage le montre.
-            // ⚠️ BANDE MORTE DE 2 DEG (2026-09-12). La cible de strafe etait reposee a CHAQUE
-            // image : ~275 appels par segment, dont ~99 % acceptes — et l'avatar se retournait
-            // quand meme (F-PLY-458), machine bloquee en `Start` sur 30 images sur 30. On teste
-            // donc l'inverse : poser une fois par segment, puis seulement quand le regard bouge.
-            const bool premierDuSegment = suivi.dernierYawStrafe > 1e8f;
-            if (premierDuSegment
-                || std::fabs(Tessera::Sync::EcartAngulaire(suivi.dernierYawStrafe, pose.yaw)) > 2.0f)
+            // ⛔ BANDE MORTE DE 2 DEG : ESSAYEE PUIS RETIREE (2026-09-12). Elle ne posait plus la
+            // cible qu'UNE fois par segment — et la trace `politique=` montre que cette unique pose
+            // tombe pendant que la politique est encore `Undefined`/au repos : `ok=0`, la consigne
+            // n'atteint jamais rien. Avant elle : ~275 poses par segment, 99 % acceptees, et un vrai
+            // recul une fois sur trois. La derive n'avait rien vu ; le compteur de reussite, si.
+            bool regardOk = false;
+            Red::CallVirtual(this, "TesseraRegardDeMarcheAvecOffset", regardOk, entityId, pose.yaw,
+                             0.0f);
+            ++suivi.regardAppels;
+            if (regardOk)
             {
-                bool regardOk = false;
-                Red::CallVirtual(this, "TesseraRegardDeMarche", regardOk, entityId, pose.yaw);
-                suivi.dernierYawStrafe = pose.yaw;
-                ++suivi.regardAppels;
-                if (regardOk)
-                {
-                    ++suivi.regardReussis;
-                }
+                ++suivi.regardReussis;
             }
             return;
         }
@@ -10059,10 +10105,12 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     }
     ++suivi.commandesEmises;
     // Bilan du segment qui se termine : le regard de marche a-t-il ete pose (recul) ou jamais ?
-    SDK->logger->InfoF(PLUGIN, "[avatar %llu] REGARD_MARCHE segment appels=%u ok=%u -> nouvelle "
-                               "commande loco=%u mdir=%u yaw=%.1f",
+    int32_t etatPolitique = -9;
+    Red::CallVirtual(this, "TesseraEtatPolitique", etatPolitique, entityId);
+    SDK->logger->InfoF(PLUGIN, "[avatar %llu] REGARD_MARCHE segment appels=%u ok=%u politique=%d -> "
+                               "nouvelle commande loco=%u mdir=%u yaw=%.1f",
                        static_cast<unsigned long long>(networkId), suivi.regardAppels,
-                       suivi.regardReussis, static_cast<unsigned>(pose.locomotion),
+                       suivi.regardReussis, etatPolitique, static_cast<unsigned>(pose.locomotion),
                        static_cast<unsigned>(pose.moveDir), pose.yaw);
     suivi.regardAppels = 0;
     suivi.regardReussis = 0;

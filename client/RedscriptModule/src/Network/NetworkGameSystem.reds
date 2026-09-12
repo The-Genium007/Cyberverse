@@ -2733,6 +2733,17 @@ public native class NetworkGameSystem extends IGameSystem {
     // 100 m devant selon le yaw : assez loin pour que la direction ne bouge pas quand l'avatar avance
     // ou recule vers le point. ⚠️ Le pas chasse n'est PAS obtenu par ce levier (F-PLY-429).
     public func TesseraRegardDeMarche(entityId: EntityID, yaw: Float) -> Bool {
+        return this.TesseraRegardDeMarcheAvecOffset(entityId, yaw, 0.0);
+    }
+
+    // ⭐ ESSAI DU 2026-09-12 — `SetStrafingRotationOffset`, jamais appele chez nous.
+    //
+    // La politique de mouvement expose une ROTATION DU REPERE DE STRAFE
+    // (`movePoliciesComponent.script:88`). Pour un recul, c'est exactement 180 deg : le corps garde
+    // son cap pendant que le deplacement part a l'oppose. La cible de strafe (position a 100 m) est
+    // posee a ~99 % des images et l'avatar se retourne quand meme (F-PLY-458) ; cet angle-ci agit
+    // sur la meme politique, mais par un autre champ.
+    public func TesseraRegardDeMarcheAvecOffset(entityId: EntityID, yaw: Float, offset: Float) -> Bool {
         let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
         let puppet = ent as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -2750,6 +2761,13 @@ public native class NetworkGameSystem extends IGameSystem {
         let ici = puppet.GetWorldPosition();
         let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
         politique.SetStrafingPosition(new Vector4(ici.X + avant.X * 100.0, ici.Y + avant.Y * 100.0, ici.Z, 1.0));
+        // ⛔ `SetDestinationOrientation(quaternion du yaw)` ESSAYE LE 2026-09-12 : INERTE
+        // (3 executions, recul a 0 deg, rien d'autre degrade). C'est pourtant le seul champ de la
+        // politique qui nomme l'orientation d'arrivee, et CDPR s'en sert (`movePoliciesComponent
+        // .script:336`). Huitieme levier sans effet sur ce pantin — voir F-PLY-458.
+        // ⛔ `SetStrafingRotationOffset(angle du deplacement)` essaye le 2026-09-12 : INERTE
+        // (3 executions, recul a 0 deg). L'appel reste, a 0, pour documenter l'essai sans agir.
+        politique.SetStrafingRotationOffset(offset);
         // Pas d'EVITEMENT (F-PLY-441) : pres d'un joueur (~2 m) l'evitement de collision faisait pivoter
         // l'avatar au milieu d'un pas chasse (droite 52 % -> 72 % lateral, gauche 85 % -> 100 %, une fois
         // coupe). Un avatar replique suit le chemin REEL d'un joueur : il n'a rien a contourner.
@@ -2759,24 +2777,30 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
-    // L'ANGLE DE DEPLACEMENT POUSSE AU GRAPHE (essai du 2026-09-12, F-PLY-458)
+    // ⛔ `directionAngle` / `desiredYaw` POUSSES AU GRAPHE : INERTES (F-PLY-468, 2026-09-12).
+    // Les deux variantes d'ecriture (simple et repliquee) partent et sont acceptees ; le recul reste
+    // a 0 deg sur 5 executions. La fonction est retiree : ne pas la reecrire sans une raison neuve.
+
+    // L'ETAT DE LA POLITIQUE DE MOUVEMENT (F-PLY-458)
     //
-    // Le jeu par defaut PORTE `walk_180` (F-PLY-466) : quand l'avatar se retourne au lieu de
-    // reculer, le clip existe et n'est pas choisi. Le graphe expose `directionAngle` et
-    // `desiredYaw` — c'est typiquement ce qui melange walk_0 / walk_090 / walk_180 / walk_270.
-    // Aucun des deux n'a jamais ete pousse depuis chez nous.
-    //
-    // ⚠️ Pari contre F-PLY-343 (« ce qui RENSEIGNE une machine d'etat ne passe pas ») : si c'est
-    // inerte, la mesure le dira en une execution, et l'entree de registre sera ecrite.
-    public func TesseraPousserDirection(entityId: EntityID, angle: Float) -> Bool {
+    // La cible de strafe est posee a ~99 % des images et l'avatar ne recule qu'une fois sur trois.
+    // `IsTopPolicyEvaluated` dit si la politique du dessus a DEJA ete evaluee : une ecriture sur une
+    // politique pas encore evaluee peut etre remplacee avant d'agir. Rend
+    // action + 100 * evaluee + 1000 * au_repos, ou -1 / -2 si rien n'est joignable.
+    public func TesseraEtatPolitique(entityId: EntityID) -> Int32 {
         let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
-        let corps = ent as GameObject;
-        if !IsDefined(corps) {
-            return false;
+        let puppet = ent as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return -1;
         }
-        AnimationControllerComponent.SetInputFloat(corps, n"directionAngle", angle);
-        AnimationControllerComponent.SetInputFloat(corps, n"desiredYaw", angle);
-        return true;
+        let politiques = puppet.GetMovePolicesComponent();
+        if !IsDefined(politiques) {
+            return -2;
+        }
+        let action = EnumInt(politiques.GetCurrentLocomotionAction());
+        let evaluee = politiques.IsTopPolicyEvaluated() ? 1 : 0;
+        let repos = politiques.IsInIdle() ? 1 : 0;
+        return action + 100 * evaluee + 1000 * repos;
     }
 
     // LA DISPONIBILITE D'UN CLIP, DEPUIS LE JEU (F-PLY-466)
@@ -2789,11 +2813,11 @@ public native class NetworkGameSystem extends IGameSystem {
         let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
         let puppet = ent as ScriptedPuppet;
         if !IsDefined(puppet) {
-            return -1.0;
+            return -7.0;   // ⚠️ pas -1 : le moteur rend -1 pour « clip inconnu » (mesure du 2026-09-12)
         }
         let ctrl = puppet.GetAnimationControllerComponent();
         if !IsDefined(ctrl) {
-            return -2.0;
+            return -8.0;
         }
         return ctrl.GetAnimationDuration(nom);
     }
