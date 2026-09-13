@@ -2460,40 +2460,42 @@ public native class NetworkGameSystem extends IGameSystem {
         if !IsDefined(puppet) {
             return false;
         }
-        let enJoue = etat > 0;
-        // ⛔ PLUS DE TRIO `combatLocomotion` + `RangedWeapon` ICI (2026-09-13). Ce trio sélectionne
-        // la locomotion de combat au FUSIL (`ma_gang_rifle_locomotion_combat`, priorité 118) — pas
-        // la couche de visée au pistolet. Celle-ci est pondérée par `Wea_Handgun`/`Wea_Revolver`,
-        // posé désormais par la recette d'équipement complète (`TesseraPousserArme`). Garder le trio
-        // aurait mélangé deux leviers dans la même mesure : un seul facteur par essai.
-        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"combatLocomotion", 0.0);
+        // ── ⭐⭐⭐ LA RECETTE DU JEU POUR « TENIR QUELQU'UN EN JOUE » (2026-09-13) ──────────────
+        //
+        // Les actions d'IA `AimAtPose` et `ReprimandAskAgainToLeave` (TweakDB,
+        // `ai/actions/library/reactionsactions.tweak`) sont exactement le geste que Lucas décrit :
+        // un PNJ qui garde quelqu'un en joue. Leur recette, lue chez le consommateur :
+        //
+        //   · `animData.animFeature = "NonCombatAim"`, SANS `animSlot` — donc, dans
+        //     `tweakAIAction.script:1445-1449`, un `ApplyFeatureToReplicate` du trait ;
+        //   · la classe du trait est **`AnimFeature_AIAction`** (`state`, `stateDuration`, …),
+        //     et `state` vaut la PHASE de l'action : 1 démarrage, 2 boucle, 3 sortie, 0 inactif
+        //     (`EAIActionPhase`, `tweakAIAction.script:1-7`, rempli ligne 1466) ;
+        //   · `animationWrapperOverrides = ["combatLocomotion"]` pendant l'action.
+        //
+        // ⛔ Ce que nous faisions jusqu'ici, et pourquoi ça ne pouvait pas marcher : la classe
+        // `AnimFeature_NPCState`, la variante `ApplyFeature` (non répliquée), une valeur FIXE au lieu
+        // d'une séquence de phases — et la couche de visée pondérée à zéro, faute de `Wea_Handgun`
+        // (F-PLY-492). Quatre écarts au contrat, un seul symptôme.
+        //
+        // ⭐ Et c'est aussi la réponse à la question de réactivité : les phases de démarrage et de
+        // sortie de ces actions durent ~0,2 s dans la donnée. C'est l'APPELANT (C++) qui les
+        // séquence, donc c'est lui qui décide à quel point le geste est interruptible.
+        //
+        // `groupe` reste un paramètre pour pouvoir essayer une autre action du même patron
+        // (`ShootAction`, `CallSquad`…) sans recompiler le C++.
+        let enAction = etat > 0;
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"RangedWeapon", 0.0);
-        if enJoue {
-            // Reposé à chaque passe (toutes les 0,25 s) : le moteur remet les poids à zéro (F-PLY-438).
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"combatLocomotion",
+            enAction ? 1.0 : 0.0);
+        if enAction {
+            // Reposés à chaque passe : le moteur remet les poids de wrapper à zéro (F-PLY-438).
             AnimationControllerComponent.SetAnimWrapperWeight(puppet, n"Wea_Handgun", 1.0);
-        }
-
-        // ── ⭐⭐ ET LE TRAIT `NonCombatAim`, QUI EST LE LEVIER QUE LE GRAPHE LIT VRAIMENT ────
-        //
-        // Dépouillement du graphe livré (2026-09-12) : **aucune** des 348 conditions de transition
-        // ne lit un nœud d'ENTRÉE. Elles lisent des TRAITS (203), des WRAPPERS (73), des fins
-        // d'animation, des événements ou le temps. Écrire une entrée (`SetInput*`) ne fait que
-        // pondérer un mélange DANS l'état courant — ça ne fait jamais changer d'état.
-        //
-        // Et `NonCombatAim.state` est cité par **7** conditions de transition : c'est exactement
-        // « l'animation qui existe pour pointer quelqu'un » que Lucas décrit. Les wrappers
-        // ci-dessus choisissent le JEU de clips (tenue d'arme au poing) ; ce trait choisit l'ÉTAT.
-        // Les deux sont complémentaires, pas redondants.
-        //
-        // ⚠️ `AnimFeature_NPCState` n'expose qu'un `Int32 state`, et `ApplyFeature` apparie
-        // champ ↔ nœud PAR LE NOM : ça marche ici parce que la propriété visée s'appelle `state`
-        // (ce ne sera pas le cas pour le saut, dont la propriété est `explorationType`).
-        this.TesseraPousserTrait(entityId, groupe, etat);
-        // `WeaponRight` est pose par `TesseraPousserArme` tant que l'arme est degainee ; on le
-        // remet ici parce que la mise en joue peut arriver avant la prochaine passe d'arme.
-        if enJoue {
             AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"WeaponRight", 1.0);
         }
+        let trait = new AnimFeature_AIAction();
+        trait.state = etat;
+        AnimationControllerComponent.ApplyFeatureToReplicate(puppet, groupe, trait);
         return true;
     }
 

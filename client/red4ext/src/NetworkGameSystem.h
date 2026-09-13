@@ -509,8 +509,10 @@ struct SuiviAvatar
     float depuisViseeS = 0.0f;
     /// Balayage des valeurs de `NonCombatAim.state` : le graphe les compare a 0,1,2,3 et rien ne
     /// dit laquelle vaut « arme devant ». On les essaie 4 s chacune pendant que la visee dure.
-    int dernierEtatVisee = -1;
-    float depuisBalayageViseeS = 0.0f;
+    /// Phase de l'action de mise en joue rejouee (`EAIActionPhase` : 0 inactif, 1 demarrage,
+    /// 2 boucle, 3 sortie) et temps passe dans cette phase.
+    int phaseVisee = 0;
+    float depuisPhaseViseeS = 0.0f;
     /// Balayage de la PHASE de franchissement (`exploration.state`) : une valeur par saut.
     int phaseFranchissement = -1;
     /// Evenement externe du vol : `ActionLoop` se demande une fois, ~0,2 s apres le decollage.

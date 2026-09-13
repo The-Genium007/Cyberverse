@@ -8445,61 +8445,72 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             }
         }
 
-        // -- LA MISE EN JOUE, DISTINCTE DE L'ARME EN MAIN (Lucas, 2026-09-12) ----------------
+        // -- LA MISE EN JOUE : la recette `AimAtPose` du jeu, sequencee PAR PHASES (2026-09-13) --
         //
         // *« Quand le mec sort son arme, il a les bras le long du corps, l'arme pendante. Quand il
-        //  vise, il a l'arme devant lui. »* Deux etats, donc deux tenues : `WeaponRight` seul pour
-        // la premiere (ci-dessus), plus `combatLocomotion` + `RangedWeapon` pour la seconde.
+        //  vise, il a l'arme devant lui. »* (Lucas, 2026-09-12)
         //
-        // ⚠️ REPOSE PERIODIQUE, PAS SEULEMENT AU CHANGEMENT — le moteur remet les poids de wrapper
-        // a zero (mesure du pas chasse, F-PLY-438). Sans elle, la tenue de tir tombe au bout de
-        // moins d'une seconde et le defaut se lit comme « ca ne marche pas ».
+        // Le jeu tient quelqu'un en joue par une ACTION a phases (`AimAtPose`, trait `NonCombatAim`
+        // de classe `AnimFeature_AIAction`, voir `TesseraPousserVisee`). On rejoue sa machine :
+        //
+        //     visee demandee   ->  DEMARRAGE (1) pendant kDemarrageS  ->  BOUCLE (2) tant qu'elle dure
+        //     visee relachee   ->  SORTIE (3) pendant kSortieS        ->  INACTIF (0)
+        //
+        // ⏱️ REACTIVITE, et c'est la question de fond de Lucas : les phases de demarrage et de sortie
+        // des actions de ce patron durent ~0,2 s dans la donnee (`ReprimandAskAgainToLeave*`, 0,233 s
+        // et 0,2 s). On les borne donc a 0,25 s et 0,2 s — un geste qui s'engage et se relache vite,
+        // pas une sequence qu'il faut laisser finir. Et une visee relachee PENDANT le demarrage
+        // passe directement a la sortie : elle n'attend pas la boucle.
+        //
+        // ⚠️ REPOSE PERIODIQUE (0,25 s) : le moteur remet les poids de wrapper a zero (F-PLY-438).
         {
-            const bool enJoue = (pose.flags & kFlagVisee) != 0;
-            // ── ⚗️ BALAYAGE DES VALEURS DE `NonCombatAim.state` (2026-09-12) ────────────────
-            //
-            // Premiere mesure : les trois wrappers + `NonCombatAim.state = 1` laissent l'arme
-            // PENDANTE sur toute la video. Or le graphe compare ce trait a 0, 1, 2 ET 3 : la
-            // valeur qui vaut « arme devant » n'est ecrite nulle part, et la deviner une fois de
-            // plus coute une session. On la BALAIE : 1, puis 2, puis 3, quatre secondes chacune,
-            // pendant que la visee est demandee. Une seule video tranche les trois.
-            // ⚗️ BALAYAGE DES QUATRE GROUPES DE TRAIT CANDIDATS, avec leurs valeurs. Le graphe
-            // en offre quatre pour une mise en joue et rien ne dit lequel commande la tenue ; les
-            // essayer un par un dans UNE video coute 3 s chacun au lieu d'une session chacun.
-            struct Essai { const char* groupe; int valeur; };
-            static constexpr Essai kEssais[] = {
-                {"NonCombatAim", 2},        {"ShootAction", 1},         {"ShootAction", 2},
-                {"upperBodyState", 4},      {"upperBodyState", 7},      {"upperBodyState", 8},
-                {"upperBodyState", 9},      {"rightHandItemHandling", 1},
-            };
-            const int indice = static_cast<int>(suiviPosture.depuisBalayageViseeS / 3.0f)
-                               % static_cast<int>(std::size(kEssais));
-            const int etat = enJoue ? kEssais[indice].valeur : 0;
-            const char* groupe = enJoue ? kEssais[indice].groupe : "NonCombatAim";
-            if (enJoue)
+            static constexpr float kDemarrageS = 0.25f;
+            static constexpr float kSortieS = 0.20f;
+            const bool viseeDemandee = (pose.flags & kFlagVisee) != 0;
+            int phase = suiviPosture.phaseVisee;
+            suiviPosture.depuisPhaseViseeS += deltaTime;
+            if (viseeDemandee)
             {
-                suiviPosture.depuisBalayageViseeS += deltaTime;
+                if (phase == 0 || phase == 3)
+                {
+                    phase = 1;
+                    suiviPosture.depuisPhaseViseeS = 0.0f;
+                }
+                else if (phase == 1 && suiviPosture.depuisPhaseViseeS >= kDemarrageS)
+                {
+                    phase = 2;
+                    suiviPosture.depuisPhaseViseeS = 0.0f;
+                }
             }
             else
             {
-                suiviPosture.depuisBalayageViseeS = 0.0f;
+                if (phase == 1 || phase == 2)
+                {
+                    phase = 3;
+                    suiviPosture.depuisPhaseViseeS = 0.0f;
+                }
+                else if (phase == 3 && suiviPosture.depuisPhaseViseeS >= kSortieS)
+                {
+                    phase = 0;
+                    suiviPosture.depuisPhaseViseeS = 0.0f;
+                }
             }
             suiviPosture.depuisViseeS += deltaTime;
-            const bool reposerVisee = enJoue && suiviPosture.depuisViseeS >= 0.25f;
-            const int signature = etat + 100 * indice;
-            if (signature != suiviPosture.dernierEtatVisee || reposerVisee)
+            const bool reposerVisee = phase != 0 && suiviPosture.depuisViseeS >= 0.25f;
+            if (phase != suiviPosture.phaseVisee || reposerVisee)
             {
                 bool pousse = false;
-                Red::CallVirtual(this, "TesseraPousserVisee", pousse, entityId, etat,
-                                 Red::CName(groupe));
-                if (signature != suiviPosture.dernierEtatVisee)
+                Red::CallVirtual(this, "TesseraPousserVisee", pousse, entityId, phase,
+                                 Red::CName("NonCombatAim"));
+                if (phase != suiviPosture.phaseVisee)
                 {
-                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] VISEE %s=%d pose=%d",
-                                       static_cast<unsigned long long>(networkId), groupe, etat,
+                    static const char* const kNoms[] = {"inactif", "DEMARRAGE", "BOUCLE", "SORTIE"};
+                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] VISEE phase=%s pose=%d",
+                                       static_cast<unsigned long long>(networkId), kNoms[phase],
                                        pousse ? 1 : 0);
-                    g_telemetrie.Evenement("visee", networkId, enJoue ? "en_joue" : "repos");
+                    g_telemetrie.Evenement("visee", networkId, kNoms[phase]);
                 }
-                suiviPosture.dernierEtatVisee = signature;
+                suiviPosture.phaseVisee = phase;
                 suiviPosture.depuisViseeS = 0.0f;
             }
         }
