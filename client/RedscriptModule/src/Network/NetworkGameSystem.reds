@@ -1935,6 +1935,12 @@ public native class NetworkGameSystem extends IGameSystem {
             AnimationControllerComponent.SetAnimWrapperWeight(puppet, StringToName(nom), 0.0);
             i += 1;
         }
+        // Le marqueur de regard naît ICI, avant la première marche : créé par la première commande, il
+        // n'est pas encore résolu quand elle part, et l'avatar marchait ~2 s au yaw d'apparition (F-PLY-505).
+        // Seulement s'il n'existe pas : le replacer ici au yaw du corps contredirait la commande en cours.
+        if !ArrayContains(this.m_marqueurCles, EntityID.GetHash(entityId)) {
+            this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), puppet.GetWorldYaw());
+        }
         return true;
     }
 
