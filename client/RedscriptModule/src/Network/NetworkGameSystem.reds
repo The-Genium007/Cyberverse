@@ -1935,9 +1935,10 @@ public native class NetworkGameSystem extends IGameSystem {
             AnimationControllerComponent.SetAnimWrapperWeight(puppet, StringToName(nom), 0.0);
             i += 1;
         }
-        // Le marqueur de regard naît ICI, avant la première marche : créé par la première commande, il
-        // n'est pas encore résolu quand elle part, et l'avatar marchait ~2 s au yaw d'apparition (F-PLY-505).
-        // Seulement s'il n'existe pas : le replacer ici au yaw du corps contredirait la commande en cours.
+        // Le marqueur de regard naît dès l'apparition, pour être résolu quand part la première marche
+        // (sinon ~2 s au yaw d'apparition, F-PLY-505). Seulement s'il n'existe pas : le replacer ici au
+        // yaw du corps contredirait la commande en cours. ⚠️ Ne vaut que depuis que le replacement passe
+        // par `AITeleportCommand` — avec `Teleport` seul, ce marqueur restait figé à yaw 0.
         if !ArrayContains(this.m_marqueurCles, EntityID.GetHash(entityId)) {
             this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), puppet.GetWorldYaw());
         }
@@ -2884,6 +2885,9 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    private let m_marqueurResolus: Int32;
+    private let m_marqueurTeleports: Int32;
+    private let m_marqueurRates: Int32;
     private let m_marqueurCles: array<Uint32>;
     private let m_marqueurIds: array<EntityID>;
 
@@ -2891,19 +2895,35 @@ public native class NetworkGameSystem extends IGameSystem {
     /// de son regard. Créée au premier appel, replacée à chaque commande de marche (une commande
     /// part au plus sur changement d'entrée ou tous les ~2 m : à 30 m, l'erreur d'angle reste < 4°).
     public func TesseraMarqueurDeRegard(entityId: EntityID, ici: Vector4, yaw: Float) -> EntityID {
-        // ⚠️ `-yaw`, MESURE le 2026-09-13. Avec `yaw`, en pas de cote (yaw 90) la sonde relevait le corps a
-        // -90 en mouvement et a +90 a l'arret : le marqueur etait pose du MAUVAIS cote pour tout yaw
-        // lateral. 0 et 180 sont symetriques, d'ou un recul qui semblait juste. Apres : +90 des deux cotes.
-        // (`PointDeRegard` porte la meme formule, mais ce point est ignore par la commande — F-PLY-498.)
-        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), -yaw);
+        // ⛔ `+yaw`, et NE PAS « corriger » le signe (2026-09-13). Un essai en `-yaw`, décidé sur la sonde
+        // (corps relevé à -90 en mouvement contre +90 à l'arrêt), a fait marcher l'avatar DE PROFIL, face
+        // au déplacement, en pas de côté (vidéo `182428-campagne-A2`). Avec `+yaw` : dos à la caméra,
+        // pas de côté réel. L'écart de la sonde entre mouvement et arrêt reste à expliquer (F-PLY-505).
+        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
         let cible = new Vector4(ici.X + avant.X * 30.0, ici.Y + avant.Y * 30.0, ici.Z, 1.0);
         let cle = EntityID.GetHash(entityId);
         let i = 0;
         while i < ArraySize(this.m_marqueurCles) {
             if Equals(this.m_marqueurCles[i], cle) {
-                let obj = GameInstance.FindEntityByID(GetGameInstance(), this.m_marqueurIds[i]) as GameObject;
+                let obj = TesseraCorpsDeLEntite(this.m_marqueurIds[i]) as GameObject;
                 if IsDefined(obj) {
+                    // Sonde : ecart entre le marqueur et sa nouvelle place, AVANT replacement. Petit si les
+                    // replacements precedents ont pris ; il alterne 59 m / 1 m s'ils sont ignores.
+                    this.m_marqueurTeleports += 1;
+                    let ou = obj.GetWorldPosition();
+                    if this.m_marqueurTeleports <= 20 {
+                        this.Tessera_Journal("[Marqueur] ecart avant replacement=" + FloatToStringPrec(Vector4.Distance(ou, cible), 2) + " m (n=" + IntToString(this.m_marqueurTeleports) + ") yaw=" + FloatToStringPrec(yaw, 0));
+                    }
+                    // ⛔ NI `TeleportationFacility.Teleport` NI `SetWorldTransform` NE DEPLACENT ce marqueur
+                    // (mesure du 2026-09-13, A6 : l'ecart alterne 59 m / 1 m — il reste a sa premiere place).
+                    // C'est un PNJ avec une IA : on le deplace comme les avatars, par `AITeleportCommand`.
+                    let pantin = obj as ScriptedPuppet;
+                    if IsDefined(pantin) {
+                        this.TeleportPuppet(pantin, cible, 0.0);
+                    }
                     GameInstance.GetTeleportationFacility(GetGameInstance()).Teleport(obj, cible, new EulerAngles(0.0, 0.0, 0.0));
+                } else {
+                    this.Tessera_Journal("[Marqueur] INTROUVABLE au replacement");
                 }
                 return this.m_marqueurIds[i];
             }
@@ -3035,9 +3055,18 @@ public native class NetworkGameSystem extends IGameSystem {
         // cible. F-PLY-450 (Q2) avait prévu ce montage, mais la sonde ne passait jamais le marqueur.
         if marqueur {
             let idMarqueur = this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), yaw);
-            let objMarqueur = GameInstance.FindEntityByID(GetGameInstance(), idMarqueur) as GameObject;
+            // DES d'abord : le marqueur est une entité du DynamicEntitySystem (`FindEntityByID` seul peut
+            // rendre nil sur une entité vivante, F-PNJ-088). Un marqueur non résolu laisse la cible de
+            // regard vide, et le corps se tourne vers sa destination : on le COMPTE pour le voir.
+            let objMarqueur = TesseraCorpsDeLEntite(idMarqueur) as GameObject;
             if IsDefined(objMarqueur) {
                 AIPositionSpec.SetEntity(regard, objMarqueur);
+                this.m_marqueurResolus += 1;
+            } else {
+                this.m_marqueurRates += 1;
+            }
+            if (this.m_marqueurResolus + this.m_marqueurRates) % 200 == 1 {
+                this.Tessera_Journal(s"[Marqueur] resolus=\(this.m_marqueurResolus) rates=\(this.m_marqueurRates)");
             }
         }
         cmd.facingTarget = regard;
