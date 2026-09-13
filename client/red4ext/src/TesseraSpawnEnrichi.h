@@ -100,4 +100,9 @@ struct Resultat
 Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob,
                 const RED4ext::Vector4& aPosition, bool aCorpsMasculin = true,
                 std::uint64_t aRecordServeur = 0);
+
+/// Rend un corps enrichi au spawner du mode photo, qui le detruit — la seule suppression qui marche
+/// pour ces corps (`DeleteEntity` est sans effet). `false` + `aDiag` si ce n'est pas un corps enrichi
+/// ou si la liste du spawner ne se relit pas. Voir le `.cpp` pour le chemin natif et la mesure.
+bool Supprimer(RED4ext::ent::EntityID aEntite, std::string& aDiag);
 }  // namespace Tessera::SpawnEnrichi

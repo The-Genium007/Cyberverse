@@ -1132,4 +1132,56 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     r.attente = true;   // l'appel est parti : on cherchera aux passages suivants
     return r;
 }
+
+// ── ⭐⭐⭐ RENDRE UN CORPS AU SPAWNER DU MODE PHOTO (2026-09-13) ─────────────────────────────────
+//
+// POURQUOI. `DynamicEntitySystem.DeleteEntity` ne supprime pas un corps enrichi (F-PNJ-090) : il ne
+// lui appartient pas. Chaque joueur parti laissait donc son corps vivant, et au-dela de CINQ corps
+// vivants le spawner rend des corps CASSES — pose de reference, sans animation, vetements detaches
+// (mesure : cinq sauts d'affilee, les deux premiers animes, les trois suivants figes). En multijoueur,
+// c'est le sixieme joueur croise dans une session qui apparait casse.
+//
+// ⭐ LE CHEMIN DU JEU LUI-MEME. Quand le mode photo vide un emplacement de pantin (`FUN_141d34a00`),
+// il appelle `FUN_14065cefc(systemePhotomode + 0x390, entite)`. Cette fonction cherche l'entite dans
+// la liste du spawner (poignees de 0x10 octets en `+0x10`, compte en `+0x1c`), l'en retire, et la
+// marque pour destruction (`FUN_1408b5540` : drapeau `|= 8` en `entite + 0x15c`). Rien d'autre.
+//
+// ⚠️ GARDE : on relit la liste AVANT d'appeler, et on n'appelle que si l'entite y figure. La fonction
+// ne fait rien d'autre dans ce cas, mais un spawner illisible ou un compte aberrant arretent tout.
+constexpr std::uint64_t kRvaRendreAuSpawner = 0x65CEFCull;
+
+bool Supprimer(RED4ext::ent::EntityID aEntite, std::string& aDiag)
+{
+    auto* pms = SystemeParNom("gamePhotoModeSystem");
+    if (pms == nullptr) { aDiag = "systeme photomode INJOIGNABLE"; return false; }
+    const auto entite = Cyberverse::Utils::GetDynamicEntity(aEntite);
+    if (!entite.has_value() || entite.value() == nullptr) { aDiag = "entite IRRESOLVABLE"; return false; }
+    const auto ptr = reinterpret_cast<std::uintptr_t>(entite.value().GetPtr());
+    const auto spawner = reinterpret_cast<std::uintptr_t>(pms) + kOffsetSpawner;
+    if (!EsthetiqueV::Lisible(spawner + 0x10, 0x10)) { aDiag = "liste du spawner ILLISIBLE"; return false; }
+    const auto tableau = *reinterpret_cast<std::uintptr_t*>(spawner + 0x10);
+    const auto compte = *reinterpret_cast<std::uint32_t*>(spawner + 0x1c);
+    if (compte > 4096 || (compte > 0 && !EsthetiqueV::Lisible(tableau, std::size_t(compte) * 0x10)))
+    {
+        aDiag = "liste du spawner INCOHERENTE (compte " + std::to_string(compte) + ")";
+        return false;
+    }
+    bool present = false;
+    for (std::uint32_t i = 0; i < compte && !present; ++i)
+    {
+        present = *reinterpret_cast<std::uintptr_t*>(tableau + std::size_t(i) * 0x10) == ptr;
+    }
+    if (!present)
+    {
+        aDiag = "entite ABSENTE de la liste du spawner (" + std::to_string(compte) + " corps) — pas un corps enrichi";
+        return false;
+    }
+    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    using Rendre_t = void (*)(void* aSpawner, void* aEntite);
+    reinterpret_cast<Rendre_t>(base + kRvaRendreAuSpawner)(reinterpret_cast<void*>(spawner),
+                                                           reinterpret_cast<void*>(ptr));
+    const auto apres = *reinterpret_cast<std::uint32_t*>(spawner + 0x1c);
+    aDiag = "rendu au spawner : " + std::to_string(compte) + " -> " + std::to_string(apres) + " corps";
+    return apres + 1 == compte;
+}
 }  // namespace Tessera::SpawnEnrichi

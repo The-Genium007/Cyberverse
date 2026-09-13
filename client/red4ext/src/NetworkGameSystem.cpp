@@ -4168,6 +4168,12 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 int32_t eteints = -1;
                 Red::CallVirtual(this, "TesseraEteindreCorps", eteints, it->second);
             }
+            {
+                std::string diagSuppr;
+                const bool rendu = Tessera::SpawnEnrichi::Supprimer(it->second, diagSuppr);
+                SDK->logger->InfoF(PLUGIN, "[despawn %llu] %s", it->first, diagSuppr.c_str());
+                (void)rendu;
+            }
             if (!Red::CallVirtual(this, "DestroyTransientEntity", it->second))
             {
                 SDK->logger->Warn(PLUGIN, "Echec despawn avatar reseau");
@@ -4198,6 +4204,10 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             {
                 int32_t eteints = -1;
                 Red::CallVirtual(this, "TesseraEteindreCorps", eteints, sursis->second);
+                {   // corps enrichi : seul le spawner du mode photo le detruit (F-PLY-507)
+                    std::string diagSuppr;
+                    Tessera::SpawnEnrichi::Supprimer(sursis->second, diagSuppr);
+                }
                 Red::CallVirtual(this, "DestroyTransientEntity", sursis->second);
                 g_ancienCorpsEnSursis.erase(sursis);
                 SDK->logger->InfoF(PLUGIN,
@@ -5804,6 +5814,10 @@ void NetworkGameSystem::ReparerRoster()
             if (Red::CallVirtual(this, "TesseraQuelquUnIci", occupe, ici, 0.6f, remplacant->second)
                 && occupe)
             {
+                {   // corps enrichi : seul le spawner du mode photo le detruit (F-PLY-507)
+                    std::string diagSuppr;
+                    Tessera::SpawnEnrichi::Supprimer(remplacant->second, diagSuppr);
+                }
                 Red::CallVirtual(this, "DestroyTransientEntity", remplacant->second);
                 SDK->logger->InfoF(PLUGIN,
                     "Roster : place de %llu occupee par un autre — notre remplacant retire", id);
@@ -5906,6 +5920,10 @@ void NetworkGameSystem::DetruireTousLesRemplacants(const char* raison)
     for (const auto& [id, entite] : g_remplacants)
     {
         (void)id;
+        {   // corps enrichi : seul le spawner du mode photo le detruit (F-PLY-507)
+            std::string diagSuppr;
+            Tessera::SpawnEnrichi::Supprimer(entite, diagSuppr);
+        }
         Red::CallVirtual(this, "DestroyTransientEntity", entite);
     }
     g_remplacants.clear();
@@ -5991,6 +6009,10 @@ void NetworkGameSystem::NettoyerRemplacants(float deltaTime)
             const float dz = inscrit->second.z - pos.Z;
             if (std::sqrt(dx * dx + dy * dy + dz * dz) > kPurgeM)
             {
+                {   // corps enrichi : seul le spawner du mode photo le detruit (F-PLY-507)
+                    std::string diagSuppr;
+                    Tessera::SpawnEnrichi::Supprimer(entite, diagSuppr);
+                }
                 Red::CallVirtual(this, "DestroyTransientEntity", entite);
                 ++g_statsRoster.purgesDistance;
                 it = g_remplacants.erase(it);
@@ -6856,6 +6878,10 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
                 // a deja ete remplace : il n'a plus rien a garantir, on l'eteint tout de suite.
                 int32_t vieux = -1;
                 Red::CallVirtual(this, "TesseraEteindreCorps", vieux, dejaEnSursis->second);
+                {   // corps enrichi : seul le spawner du mode photo le detruit (F-PLY-507)
+                    std::string diagSuppr;
+                    Tessera::SpawnEnrichi::Supprimer(dejaEnSursis->second, diagSuppr);
+                }
                 Red::CallVirtual(this, "DestroyTransientEntity", dejaEnSursis->second);
                 SDK->logger->InfoF(PLUGIN,
                     "[visage %llu] second changement avant nettoyage : l'ancien sursis est eteint "
@@ -7843,6 +7869,10 @@ void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
         {
             int32_t vieux = -1;
             Red::CallVirtual(this, "TesseraEteindreCorps", vieux, sursis->second);
+            {   // corps enrichi : seul le spawner du mode photo le detruit (F-PLY-507)
+                std::string diagSuppr;
+                Tessera::SpawnEnrichi::Supprimer(sursis->second, diagSuppr);
+            }
             Red::CallVirtual(this, "DestroyTransientEntity", sursis->second);
             g_ancienCorpsEnSursis.erase(sursis);
         }
@@ -8738,6 +8768,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                 int32_t eteints = -1;
                                 Red::CallVirtual(this, "TesseraEteindreCorps", eteints,
                                                  sursis->second);
+                                {   // corps enrichi : seul le spawner du mode photo le detruit (F-PLY-507)
+                                    std::string diagSuppr;
+                                    Tessera::SpawnEnrichi::Supprimer(sursis->second, diagSuppr);
+                                }
                                 Red::CallVirtual(this, "DestroyTransientEntity", sursis->second);
                                 g_ancienCorpsEnSursis.erase(sursis);
                                 SDK->logger->InfoF(PLUGIN,
