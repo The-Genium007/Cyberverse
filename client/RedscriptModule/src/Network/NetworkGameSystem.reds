@@ -1892,6 +1892,25 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    /// LE JOUEUR LOCAL VIENT-IL D'ENGAGER UN SAUT ? — l'INTENTION, avant le décollage.
+    ///
+    /// `JumpEvents.OnEnter` écrit `PlayerStateMachine.Locomotion = Jump` dans la même image que
+    /// l'impulsion (`locomotionTransitions.script:5245-5247`), donc avant que `IsOnGround` ne bascule.
+    /// Même tableau noir, même lecture que `TesseraViseeActive` — l'accesseur que le jeu emprunte.
+    public func TesseraSautEngage() -> Bool {
+        let joueur = GetPlayer(GetGameInstance());
+        if !IsDefined(joueur) {
+            return false;
+        }
+        let tableau = GameInstance.GetBlackboardSystem(GetGameInstance())
+            .GetLocalInstanced(joueur.GetEntityID(), GetAllBlackboardDefs().PlayerStateMachine);
+        if !IsDefined(tableau) {
+            return false;
+        }
+        return tableau.GetInt(GetAllBlackboardDefs().PlayerStateMachine.Locomotion)
+            == EnumInt(gamePSMLocomotionStates.Jump);
+    }
+
     public func TesseraJouerEffetSurEntite(cible: EntityID, effet: CName) -> Bool {
         let corps = TesseraCorpsDeLEntite(cible) as GameObject;
         if !IsDefined(corps) {
@@ -2346,8 +2365,42 @@ public native class NetworkGameSystem extends IGameSystem {
         if !IsDefined(puppet) {
             return false;
         }
-        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(
-            puppet, n"WeaponRight", degainee ? 1.0 : 0.0);
+        let poids = degainee ? 1.0 : 0.0;
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"WeaponRight", poids);
+
+        // ── ⭐⭐ LA RECETTE COMPLÈTE DE CDPR : on n'en posait qu'UN quart ─────────────────────
+        //
+        // Quand un PNJ équipe une arme en main droite, le jeu fait QUATRE choses
+        // (`NPCPuppet.SetAnimWrapperBasedOnEquippedItem`, `NPCPuppet.script:1074-1088`) :
+        //   1. `WeaponRight`                          — ce qu'on faisait, seul (arme pendante) ;
+        //   2. le wrapper du TYPE d'arme              — `Wea_Handgun` pour un pistolet ;
+        //   3. le wrapper de l'ÉTIQUETTE de l'item    — propre au modèle ;
+        //   4. le trait `rightHandItemHandling`       — `AnimFeature_EquipUnequipItem { itemState=2 }`,
+        //                                               en `ApplyFeatureToReplicate`.
+        //
+        // Et le point 2 est exactement ce qui manquait à la MISE EN JOUE. Dépouillement du graphe
+        // livré (2026-09-13) : la machine à états qui joue `aim_ovr_startup` / `aim_ovr_walk` /
+        // `aim_ovr_recover` — la visée qui se superpose à la marche — est pondérée par un
+        // `animAnimNode_WrapperValue` dont les noms sont **`Wea_Handgun` OU `Wea_Revolver`**. Poids
+        // nul = couche invisible, quelle que soit la valeur des traits : c'est l'explication
+        // littérale de F-PLY-486 (huit couples de traits balayés, arme toujours pendante). Et les
+        // clips eux-mêmes vivent dans `ma_gang_handgunboth_action_combat.anims`, que l'entité ne
+        // charge qu'avec… `Wea_Handgun`.
+        //
+        // On n'imite pas la recette : on APPELLE celle du jeu, l'accesseur que le natif emprunte.
+        let npc = puppet as NPCPuppet;
+        let arme = this.Tessera_ArmeDeLEntite(entityId);
+        if IsDefined(npc) && TDBID.IsValid(arme) {
+            NPCPuppet.SetAnimWrapperBasedOnEquippedItem(npc, t"AttachmentSlots.WeaponRight",
+                ItemID.FromTDBID(arme), poids);
+        }
+        if !degainee {
+            // ponytail: on n'éteint que les deux types qui pilotent la couche de visée au pistolet ;
+            // les autres types d'arme (fusil, fusil à pompe…) s'éteindront via la recette ci-dessus
+            // tant que le record est lisible — à mémoriser par entité si ce n'est pas le cas.
+            AnimationControllerComponent.SetAnimWrapperWeight(puppet, n"Wea_Handgun", 0.0);
+            AnimationControllerComponent.SetAnimWrapperWeight(puppet, n"Wea_Revolver", 0.0);
+        }
         return true;
     }
 
@@ -2408,9 +2461,17 @@ public native class NetworkGameSystem extends IGameSystem {
             return false;
         }
         let enJoue = etat > 0;
-        let poids = enJoue ? 1.0 : 0.0;
-        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"combatLocomotion", poids);
-        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"RangedWeapon", poids);
+        // ⛔ PLUS DE TRIO `combatLocomotion` + `RangedWeapon` ICI (2026-09-13). Ce trio sélectionne
+        // la locomotion de combat au FUSIL (`ma_gang_rifle_locomotion_combat`, priorité 118) — pas
+        // la couche de visée au pistolet. Celle-ci est pondérée par `Wea_Handgun`/`Wea_Revolver`,
+        // posé désormais par la recette d'équipement complète (`TesseraPousserArme`). Garder le trio
+        // aurait mélangé deux leviers dans la même mesure : un seul facteur par essai.
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"combatLocomotion", 0.0);
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"RangedWeapon", 0.0);
+        if enJoue {
+            // Reposé à chaque passe (toutes les 0,25 s) : le moteur remet les poids à zéro (F-PLY-438).
+            AnimationControllerComponent.SetAnimWrapperWeight(puppet, n"Wea_Handgun", 1.0);
+        }
 
         // ── ⭐⭐ ET LE TRAIT `NonCombatAim`, QUI EST LE LEVIER QUE LE GRAPHE LIT VRAIMENT ────
         //
@@ -3158,6 +3219,75 @@ public native class NetworkGameSystem extends IGameSystem {
         let cmd = new AIHoldPositionCommand();
         cmd.duration = 1.0;
         controller.SendCommand(cmd);
+        return true;
+    }
+
+    // Tient une posture annoncée par le serveur sur un avatar DISTANT.
+    //
+    // Le fil `sustained` ne transporte aujourd'hui que la famille. Le banc H10
+    // est donc résolu par sa position de catalogue, avec la même portée de 3 m
+    // que l'arbitre serveur. Les autres emplacements sont refusés franchement
+    // jusqu'à ce que leur NodeRef rejoigne le catalogue client.
+    //
+    // F-PLY-430 a mesuré les deux préconditions : un vrai NodeRef et l'absence
+    // simultanée de commandes de marche et de corrections de position.
+    public func TesseraTenirPostureAvatar(entityId: EntityID, sustained: Uint32, position: Vector4) -> Bool {
+        if sustained != 1001u {
+            return false;
+        }
+        let dx = position.X - -1403.941;
+        let dy = position.Y - 1279.122;
+        let dz = position.Z - 123.101;
+        if dx * dx + dy * dy + dz * dz > 9.0 {
+            return false;
+        }
+
+        let entity = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        if !IsDefined(entity) {
+            entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        }
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let controller = puppet.GetAIControllerComponent();
+        if !IsDefined(controller) {
+            return false;
+        }
+
+        controller.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
+        controller.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
+        controller.CancelOrInterruptCommand(n"AITeleportCommand", true, false);
+
+        let cmd = new AIUseWorkspotCommand();
+        cmd.workspotNode = CreateNodeRef("$/03_night_city/c_watson/little_china/loc_megabuilding_a_prefab4KCU2IQ/loc_megabuilding_a_env_prefab7JTEUXY/megabuilding_a_environment_main_vs_mb_prefabZZTIINY/vs_apartment_floor_prefabW6EJ43Y/deco_prefabFKU4HJQ/deco_small_prefab2GG7PPI/decoset_bench_a_ent_v3_002_prefabIRY4REI/crowd_ws_bench");
+        cmd.moveToWorkspot = true;
+        cmd.jumpToEntry = true;
+        let parti: Bool = controller.SendCommand(cmd);
+        controller.ForceTickNextFrame();
+        return parti;
+    }
+
+    public func TesseraQuitterPostureAvatar(entityId: EntityID) -> Bool {
+        let entity = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        if !IsDefined(entity) {
+            entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        }
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let controller = puppet.GetAIControllerComponent();
+        if !IsDefined(controller) {
+            return false;
+        }
+
+        controller.CancelOrInterruptCommand(n"AIUseWorkspotCommand", true, false);
+        let workspots = GameInstance.GetWorkspotSystem(GetGameInstance());
+        if IsDefined(workspots) && workspots.IsActorInWorkspot(puppet) {
+            workspots.StopInDevice(puppet);
+        }
+        controller.ForceTickNextFrame();
         return true;
     }
 

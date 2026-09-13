@@ -343,6 +343,11 @@ struct SuiviAvatar
     /// l'arret — sinon l'avatar marcherait a reculons en avancant.
     bool recul = false;
     float depuisReculS = 0.0f;
+    /// Instrument de reactivite (2026-09-13) : dernier cap commande, et fenetre a pleine cadence
+    /// ouverte apres un changement franc de cap. Voir `tools/game-harness/mesure-reactivite.py`.
+    float capReac = 0.0f;
+    bool capReacValide = false;
+    float fenetreReacS = 0.0f;
     /// « La tete mene, le corps suit » (Lucas, 2026-09-12) : orientation que le corps GARDE a
     /// l'arret tant que le regard reste dans le cone `TESSERA_SEUIL_TETE` (defaut 80 deg).
     float yawTenu = 0.0f;
@@ -480,6 +485,10 @@ struct SuiviAvatar
     /// taire la premiere transition d'un avatar qui naît deja assis. Meme piege que le -1 de
     /// l'accroupissement, et meme famille que le `Bool` non initialise de `UiKitPosture.reds`.
     std::uint32_t derniereSustained = 0xFFFFFFFFu;
+    /// Vrai uniquement si le lecteur redscript a effectivement remis le pantin au workspot.
+    /// `sustained` peut nommer une famille encore inconnue ou un emplacement hors catalogue :
+    /// dans ces cas, la locomotion réseau doit continuer au lieu de figer un avatar debout.
+    bool postureWorkspotAppliquee = false;
 
     /// L'avatar etait-il EN VOL au dernier passage ? Sert a ne pousser l'animation de
     /// franchissement qu'aux deux transitions -- decollage et atterrissage -- et jamais entre les

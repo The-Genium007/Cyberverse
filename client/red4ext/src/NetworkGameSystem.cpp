@@ -915,6 +915,8 @@ constexpr auto kIntervallePasseHabillage = std::chrono::milliseconds(250);
 // secondes pour que le serveur percute et renvoie aux autres joueurs ».
 constexpr auto kDelaiAvantRhabillage = std::chrono::milliseconds(150);
 bool g_localEtaitEnLair = false;
+/// Le saut en cours a-t-il deja ete emis ? L'intention ET le decollage peuvent le signaler : un seul envoi.
+bool g_localSautEmis = false;
 
 /// Dernier masque d'etats de locomotion releve sur la population NATIVE autour du
 /// joueur. -2 = jamais releve (-1 est une valeur legitime : joueur injoignable).
@@ -2266,8 +2268,29 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
     static constexpr std::uint8_t kLocoEnLair = 6;
     static constexpr std::uint8_t kActionSaut = 0;   // eACTION_JUMP (WorldPacketsServerBound.h)
     const bool enLairMaintenant = locomotion == kLocoEnLair;
-    if (enLairMaintenant && !g_localEtaitEnLair)
+    // ── ⏱️ L'INTENTION, PAS LE DECOLLAGE (2026-09-13) ────────────────────────────────────────
+    //
+    // Un observateur ne peut pas voir une flexion de saut s'il apprend le saut APRES le decollage
+    // (F-PLY-475) : aucune animation distante n'est plus reactive que l'information qu'elle recoit.
+    // On emet donc des que la machine a etats du joueur ENTRE dans le saut — `JumpEvents.OnEnter`
+    // pose `PlayerStateMachine.Locomotion = Jump` dans la meme image que l'impulsion
+    // (`locomotionTransitions.script:5245-5247`) — au lieu d'attendre que `IsOnGround` bascule.
+    //
+    // ⚠️ LE GAIN EST PETIT, ET C'EST LA DONNEE DU JEU QUI LE DIT : le saut du joueur n'a PAS de
+    // flexion, l'impulsion part a l'appui. L'intention precede donc le decollage de quelques images
+    // seulement. Une flexion cote observateur devra de toute facon se COMPRESSER ou se jouer pendant
+    // la montee — ce gain-ci ne la rendra pas « a l'heure » a lui seul.
+    bool sautEngage = false;
+    Red::CallVirtual(this, "TesseraSautEngage", sautEngage);
+    const bool sautCommence = (sautEngage || enLairMaintenant) && !g_localSautEmis;
+    if (!sautEngage && !enLairMaintenant)
     {
+        g_localSautEmis = false;   // retour au sol : le prochain saut pourra partir
+    }
+    if (sautCommence)
+    {
+        g_localSautEmis = true;
+        g_telemetrie.Evenement("saut_source", 0, sautEngage ? "intention" : "decollage");
         flatbuffers::FlatBufferBuilder bAction(128);
         const auto rapport = cyberpunk_rp::protocol::CreatePlayerActionReport(
             bAction, kActionSaut, /*param=*/0u);
@@ -8367,10 +8390,6 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // de Lucas — reposait donc sur un canal a zero consommateur, et vingt tests verts cote
         // serveur n'en disaient rien.
         //
-        // Ce bloc-ci ne fait pas encore JOUER la posture sur l'avatar : poser une pose sur un
-        // pantin distant reste ouvert. Il rend le canal OBSERVABLE, ce qui est la condition pour
-        // que la suite soit mesurable au lieu d'etre supposee.
-        //
         // Meme discipline que l'accroupissement juste au-dessus : SUR CHANGEMENT, jamais en
         // continu — une ecriture par avatar et par frame a fait tomber le jeu deux fois le
         // 2026-08-06.
@@ -8378,10 +8397,30 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         {
             const std::uint32_t precedente = suiviPosture.derniereSustained;
             suiviPosture.derniereSustained = pose.sustained;
+            bool appliquee = false;
+            if (pose.sustained == 0)
+            {
+                // La sentinelle initiale ne correspond à aucune posture à quitter.
+                if (precedente != 0xFFFFFFFFu)
+                {
+                    Red::CallVirtual(this, "TesseraQuitterPostureAvatar", appliquee, entityId);
+                }
+                suiviPosture.postureWorkspotAppliquee = false;
+            }
+            else
+            {
+                Red::CallVirtual(this, "TesseraTenirPostureAvatar", appliquee, entityId,
+                                 pose.sustained, positionVoulue);
+                suiviPosture.postureWorkspotAppliquee = appliquee;
+            }
             char detail[64];
             std::snprintf(detail, sizeof(detail), "%u->%u",
                           precedente == 0xFFFFFFFFu ? 0u : precedente, pose.sustained);
             g_telemetrie.Evenement("sustained", networkId, detail);
+            SDK->logger->InfoF(PLUGIN,
+                               "[Posture] avatar=%llu sustained=%u appliquee=%d pos=%.2f,%.2f,%.2f",
+                               static_cast<unsigned long long>(networkId), pose.sustained,
+                               appliquee ? 1 : 0, pose.x, pose.y, pose.z);
         }
 
         // -- L'ARME EN MAIN, SUR CHANGEMENT (F-PLY-138 : une COUCHE, pas un etat) -----------
@@ -8921,6 +8960,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                     g_porteurParAvatar.count(networkId) != 0 ? 1 : 0);
             }
         }
+    }
+
+    // Une posture tenue rend la position au workspot. Les couches ci-dessus continuent d'être
+    // suivies, mais aucune correction ni commande de locomotion ne doit éjecter le pantin du
+    // nœud — précondition mesurée par F-PLY-430. La sortie `sustained=0` annule d'abord le
+    // workspot, puis le pilotage normal reprend dans cette même image.
+    if (g_suiviAvatars[networkId].postureWorkspotAppliquee)
+    {
+        auto& suivi = g_suiviAvatars[networkId];
+        suivi.commande = false;
+        suivi.viseeValide = false;
+        return;
     }
 
     // ── IMMOBILE : rien a animer ───────────────────────────────────────────────────────────
@@ -9723,6 +9774,43 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // 7 m de mouvement libre deviennent normaux. C'est la seule variable de l'equation
             // que je n'ai jamais lue.
             depuisPlace = s.depuisPlaceS;
+        }
+    }
+
+    // ── ⏱️ L'INSTRUMENT DE REACTIVITE : combien de temps entre l'ordre de direction et le corps ──
+    //
+    // La question de Lucas (2026-09-13) : « il ne faut pas que ce soit mou — combien de temps entre
+    // le changement de direction et le switch d'animation ? » La ligne `rx` est echantillonnee a
+    // 10 Hz : +-50 ms de resolution, inutilisable pour une reponse qui se compte en centaines de ms.
+    //
+    // On ouvre donc une FENETRE a pleine cadence, 1,5 s, a chaque changement franc de cap commande
+    // (> 60 deg, en mouvement) : un evenement `direction` date l'ordre, puis un evenement `reac` par
+    // image porte la position RENDUE et le cap commande. `tools/game-harness/mesure-reactivite.py`
+    // en tire la latence jusqu'a ce que le corps avance VRAIMENT dans la nouvelle direction.
+    //
+    // Rare par construction (seulement apres un changement de cap), donc sans cout en marche droite.
+    {
+        auto& reac = g_suiviAvatars[networkId];
+        const float capCommande = -pose.yaw + static_cast<float>(pose.moveDir) * (360.0f / 256.0f);
+        if (pose.locomotion != 0 && reac.capReacValide
+            && std::fabs(Tessera::Sync::EcartAngulaire(reac.capReac, capCommande)) > 60.0f)
+        {
+            reac.fenetreReacS = 1.5f;
+            char detail[64];
+            std::snprintf(detail, sizeof(detail), "%.1f>%.1f", reac.capReac, capCommande);
+            g_telemetrie.Evenement("direction", networkId, detail);
+        }
+        if (pose.locomotion != 0)
+        {
+            reac.capReac = capCommande;
+            reac.capReacValide = true;
+        }
+        if (reac.fenetreReacS > 0.0f)
+        {
+            reac.fenetreReacS -= deltaTime;
+            char detail[64];
+            std::snprintf(detail, sizeof(detail), "%.3f,%.3f,%.1f", position.X, position.Y, capCommande);
+            g_telemetrie.Evenement("reac", networkId, detail);
         }
     }
 
