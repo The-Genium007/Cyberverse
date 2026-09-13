@@ -10490,7 +10490,22 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ⚠️ A verifier au compteur, pas au rendu (lecon du 2026-09-12) : `enRoute` doit rester a ~99 %
     // d'acceptation. Si la reemission sans depart etait refusee, la marche s'arreterait au lieu de
     // se lisser — et la derive le dirait avant l'oeil.
-    const bool useStart = !g_departVif && !suivi.commande;
+    // DEPART VIF (mesure du 2026-09-13, `TESSERA_DEPART_VIF=0` coupe) : sur le vrai corps, un sprint depuis
+    // l'arret met ~0,7 s a atteindre 5 m/s (palier a 2,3 m/s = phase de depart), la derive monte a 1,7 m et
+    // le netcode recale. SANS phase de depart : 0,4-0,6 m. La course (commandee en Sprint, voir
+    // `AllureDepuisLocomotion`) GARDE la sienne : sans elle elle file a 5,3 m/s et la derive monte a 1,6 m.
+    static const bool kDepartVif = []() {
+        const char* v = std::getenv("TESSERA_DEPART_VIF");
+        return v == nullptr || v[0] != '0';   // allume par defaut : derive 1,7 -> 0,4 m
+    }();
+    // Pas de cote : sa phase de depart (idle_to_walk_090) roule ~1 s a 0,8 m/s avant le cycle a 2 m/s,
+    // et la derive monte a 1,1 m. Meme remede, mesure dans la foulee.
+    const int mdLat = static_cast<int>(pose.moveDir);
+    const bool enLateral = pose.locomotion == 1
+        && (std::min(std::abs(mdLat - 64), 256 - std::abs(mdLat - 64)) <= 32
+            || std::min(std::abs(mdLat - 192), 256 - std::abs(mdLat - 192)) <= 32);
+    const bool departVif = g_departVif || (kDepartVif && (pose.locomotion == 3 || enLateral));
+    const bool useStart = !departVif && !suivi.commande;
     // ⭐ Marqueur de regard (2026-09-13) : la cible de regard de la commande devient une ENTITE posee
     // droit devant l'avatar, sur son axe de regard — le seul type que le manipulateur transmet
     // (`TesseraMarqueurDeRegard`). Coupable par `TESSERA_REGARD_MARQUEUR=0` pour l'A/B.

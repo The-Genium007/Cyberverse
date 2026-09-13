@@ -2885,7 +2885,11 @@ public native class NetworkGameSystem extends IGameSystem {
     /// de son regard. Créée au premier appel, replacée à chaque commande de marche (une commande
     /// part au plus sur changement d'entrée ou tous les ~2 m : à 30 m, l'erreur d'angle reste < 4°).
     public func TesseraMarqueurDeRegard(entityId: EntityID, ici: Vector4, yaw: Float) -> EntityID {
-        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
+        // ⚠️ `-yaw`, MESURE le 2026-09-13. Avec `yaw`, en pas de cote (yaw 90) la sonde relevait le corps a
+        // -90 en mouvement et a +90 a l'arret : le marqueur etait pose du MAUVAIS cote pour tout yaw
+        // lateral. 0 et 180 sont symetriques, d'ou un recul qui semblait juste. Apres : +90 des deux cotes.
+        // (`PointDeRegard` porte la meme formule, mais ce point est ignore par la commande — F-PLY-498.)
+        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), -yaw);
         let cible = new Vector4(ici.X + avant.X * 30.0, ici.Y + avant.Y * 30.0, ici.Z, 1.0);
         let cle = EntityID.GetHash(entityId);
         let i = 0;
