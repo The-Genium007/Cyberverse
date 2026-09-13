@@ -1714,6 +1714,18 @@ public native class NetworkGameSystem extends IGameSystem {
     }
 
     public func DestroyTransientEntity(entityId: EntityID) {
+        // Le marqueur de regard part avec son avatar : sans ça, chaque réapparition en laisse un.
+        let cle = EntityID.GetHash(entityId);
+        let i = 0;
+        while i < ArraySize(this.m_marqueurCles) {
+            if Equals(this.m_marqueurCles[i], cle) {
+                GameInstance.GetDynamicEntitySystem().DeleteEntity(this.m_marqueurIds[i]);
+                ArrayErase(this.m_marqueurCles, i);
+                ArrayErase(this.m_marqueurIds, i);
+            } else {
+                i += 1;
+            }
+        }
         GameInstance.GetDynamicEntitySystem().DeleteEntity(entityId);
     }
 
@@ -1892,6 +1904,40 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    /// ── ⭐⭐⭐ LA LOCOMOTION D'UN AVATAR DOIT ÊTRE LA MÊME SUR TOUS LES CLIENTS ─────────────────
+    ///
+    /// À l'apparition, `NPCPuppet.OnGameAttached` appelle `SetRandomAnimWrappersForLocomotion`
+    /// (`NPCPuppet.script:387, 1126-1250`) : un wrapper `LocomotionCycle01..14` TIRÉ AU HASARD, plus un
+    /// wrapper d'archétype selon les étiquettes visuelles de l'apparence. L'entité de l'avatar déclare,
+    /// dans ses composants `male_anim_*`, une entrée de locomotion par couple (cycle, archétype) —
+    /// takemura, corpo, saul, maelstrom, foule triste, douleur… Mesure du 2026-09-13 : un avatar dont
+    /// le jeu civil était remplacé par une GLISSADE a continué de marcher normalement, et la durée relue
+    /// de `walk_0` a changé d'une apparition à l'autre (6,33 s puis 3,40 s).
+    ///
+    /// Deux conséquences, et chacune suffirait :
+    ///   · **en multijoueur, chaque observateur tire son propre style pour le même joueur** — le même
+    ///     avatar marche différemment sur deux écrans ;
+    ///   · **le recul dépend du tirage** : certains de ces jeux n'ont pas de `walk_180`, et l'avatar se
+    ///     retourne. C'est le candidat le plus solide pour le « recul intermittent » de F-PLY-458.
+    ///
+    /// On éteint donc les quatorze cycles : aucune entrée `male_anim_*` ne peut plus s'allumer, et
+    /// c'est le jeu civil non gaté de « Special Locomotion Setup » (priorité 129) qui joue, partout,
+    /// de façon identique. Appelé par le C++ à la première image pilotée, puis reposé.
+    public func TesseraLocomotionDeterministe(entityId: EntityID) -> Bool {
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
+        let puppet = entity as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let i = 1;
+        while i <= 14 {
+            let nom = i < 10 ? "LocomotionCycle0" + IntToString(i) : "LocomotionCycle" + IntToString(i);
+            AnimationControllerComponent.SetAnimWrapperWeight(puppet, StringToName(nom), 0.0);
+            i += 1;
+        }
+        return true;
+    }
+
     /// LE JOUEUR LOCAL VIENT-IL D'ENGAGER UN SAUT ? — l'INTENTION, avant le décollage.
     ///
     /// `JumpEvents.OnEnter` écrit `PlayerStateMachine.Locomotion = Jump` dans la même image que
@@ -2002,7 +2048,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // le serveur annonçait la position du tick suivant ; il vaut `false` depuis qu'il annonce une
     // destination à 10 m, pour que le moteur navigue par les trottoirs et respecte les feux.
     public func MoveNetworkEntityTo(entityId: EntityID, position: Vector4, locomotion: Int32) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2153,7 +2199,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // cette passe — l'ÉCHELLE. Les deux défauts qui se masquaient, et ce qui gêne encore
     // l'hypothèse, sont dans le corps de la fonction.
     public func TesseraPousserPosture(entityId: EntityID, accroupi: Bool) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2300,7 +2346,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // ⚠️ NE PAS APPELER PAR FRAME. Une écriture de graphe par avatar et par frame est le régime
     // qui a fait tomber le jeu deux fois le 2026-08-06 : les appelants poussent SUR CHANGEMENT.
     public func TesseraPousserTrait(entityId: EntityID, groupe: CName, valeur: Int32) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2360,7 +2406,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // partiel assumé, pas un oubli — et il vaut mieux qu'un avatar au repos pendant que son joueur
     // vise.
     public func TesseraPousserArme(entityId: EntityID, degainee: Bool) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2417,7 +2463,7 @@ public native class NetworkGameSystem extends IGameSystem {
     /// (`jump_walk_startup` / `_loop` / `_recover`, F-PLY-475). C'est la correspondance la plus
     /// franche qu'on ait trouvée entre un nom de la donnée d'animation et un nom du graphe.
     public func TesseraPousserEvenementAnim(entityId: EntityID, nom: CName) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2455,7 +2501,7 @@ public native class NetworkGameSystem extends IGameSystem {
     /// `rightHandItemHandling.itemState` 4) et rien ne dit lequel commande la tenue. L'appelant les
     /// balaie, un par un, avec leurs valeurs — une seule video les tranche tous.
     public func TesseraPousserVisee(entityId: EntityID, etat: Int32, groupe: CName) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2511,7 +2557,7 @@ public native class NetworkGameSystem extends IGameSystem {
     }
 
     public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool, phase: Int32) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2658,7 +2704,7 @@ public native class NetworkGameSystem extends IGameSystem {
         // Le C++ n'a pas besoin de changer : sa branche d'échec teste `zTete <= 0.0f`, donc les
         // trois sentinelles ressortent telles quelles dans `hauteur_echec`, et son `%.2f` les
         // affiche. Aucun rebuild de DLL — donc aucune collision avec l'agent qui tient le jeu.
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return -1;
@@ -2769,7 +2815,7 @@ public native class NetworkGameSystem extends IGameSystem {
     }
 
     public func TesseraLireLocomotion(entityId: EntityID) -> Int32 {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return -1;
@@ -2803,13 +2849,74 @@ public native class NetworkGameSystem extends IGameSystem {
         return moveMovementType.Walk;
     }
 
+    // ── SONDE : nos jeux d'animation DÉRIVÉS sont-ils seulement CHARGEABLES ? (2026-09-13) ──────
+    //
+    // Témoins du jour : l'entrée civile redirigée vers un `.anims` sous `tessera\…` disparaît bien,
+    // mais le fichier ne joue pas — même une copie VANILLA octet pour octet. On lit ce que le dépôt de
+    // ressources en dit (existe / chargé / échec), le gabarit réel de l'avatar, et on garde un jeton de
+    // chargement : si c'est une course au chargement asynchrone, le jeton la gagne pour la suite.
+    private let m_jetonsAnims: array<ref<ResourceToken>>;
+
+    public func TesseraSondeAnims(entityId: EntityID) -> Bool {
+        let depot = GameInstance.GetResourceDepot();
+        if ArraySize(this.m_jetonsAnims) == 0 {
+            ArrayPush(this.m_jetonsAnims, depot.LoadResource(r"tessera\\animations\\npc\\tessera_temoin_ivre.anims"));
+            ArrayPush(this.m_jetonsAnims, depot.LoadResource(r"tessera\\animations\\npc\\tessera_ma_pas_lateral.anims"));
+            ArrayPush(this.m_jetonsAnims, depot.LoadResource(r"base\\animations\\npc\\generic_characters\\male_average\\locomotion\\crowd\\ma_drunk_crowd_locomotion.anims"));
+        }
+        let etats = "";
+        for jeton in this.m_jetonsAnims {
+            etats += IsDefined(jeton) ? s"[fini=\(jeton.IsFinished()) charge=\(jeton.IsLoaded()) echec=\(jeton.IsFailed())]" : "[nul]";
+        }
+        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
+        let gabarit = IsDefined(ent) ? ResRef.GetHash(ent.GetTemplatePath()) : 0ul;
+        let ivre = depot.ResourceExists(r"tessera\\animations\\npc\\tessera_temoin_ivre.anims");
+        let lateral = depot.ResourceExists(r"tessera\\animations\\npc\\tessera_ma_pas_lateral.anims");
+        let ma = ResRef.GetHash(r"tessera\\characters\\entities\\avatar_distant_ma.ent");
+        let wa = ResRef.GetHash(r"tessera\\characters\\entities\\avatar_distant_wa.ent");
+        this.Tessera_Journal(s"[SondeAnims] existe ivre=\(ivre) lateral=\(lateral) jetons \(etats) gabarit=\(gabarit) ma=\(ma) wa=\(wa)");
+        return true;
+    }
+
+    private let m_marqueurCles: array<Uint32>;
+    private let m_marqueurIds: array<EntityID>;
+
+    /// Le marqueur de regard d'un avatar : une entité invisible tenue à 30 m devant lui, dans l'axe
+    /// de son regard. Créée au premier appel, replacée à chaque commande de marche (une commande
+    /// part au plus sur changement d'entrée ou tous les ~2 m : à 30 m, l'erreur d'angle reste < 4°).
+    public func TesseraMarqueurDeRegard(entityId: EntityID, ici: Vector4, yaw: Float) -> EntityID {
+        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
+        let cible = new Vector4(ici.X + avant.X * 30.0, ici.Y + avant.Y * 30.0, ici.Z, 1.0);
+        let cle = EntityID.GetHash(entityId);
+        let i = 0;
+        while i < ArraySize(this.m_marqueurCles) {
+            if Equals(this.m_marqueurCles[i], cle) {
+                let obj = GameInstance.FindEntityByID(GetGameInstance(), this.m_marqueurIds[i]) as GameObject;
+                if IsDefined(obj) {
+                    GameInstance.GetTeleportationFacility(GetGameInstance()).Teleport(obj, cible, new EulerAngles(0.0, 0.0, 0.0));
+                }
+                return this.m_marqueurIds[i];
+            }
+            i += 1;
+        }
+        let id = this.SpawnTransientEntity(t"Character.invisible_npc", cible, new Quaternion(0.0, 0.0, 0.0, 1.0));
+        ArrayPush(this.m_marqueurCles, cle);
+        ArrayPush(this.m_marqueurIds, id);
+        this.Tessera_Journal(s"[Marqueur] regard de \(cle) : entite creee a 30 m devant");
+        return id;
+    }
+
     // Signature a 4 arguments conservee : `ElevatorBridge.reds` (tessera-elevators) l'appelle.
     public func TesseraSuivreAvatar(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float) -> Bool {
         return this.TesseraSuivreAvatarAvecDepart(entityId, visee, locomotion, yaw, true);
     }
 
     public func TesseraSuivreAvatarAvecDepart(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float, useStart: Bool) -> Bool {
-        let entity = GameInstance.GetDynamicEntitySystem().GetEntity(entityId);
+        return this.TesseraSuivreAvatarRegard(entityId, visee, locomotion, yaw, useStart, false);
+    }
+
+    public func TesseraSuivreAvatarRegard(entityId: EntityID, visee: Vector4, locomotion: Int32, yaw: Float, useStart: Bool, marqueur: Bool) -> Bool {
+        let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
             return false;
@@ -2905,6 +3012,24 @@ public native class NetworkGameSystem extends IGameSystem {
         let wpRegard: WorldPosition;
         WorldPosition.SetVector4(wpRegard, this.PointDeRegard(puppet.GetWorldPosition(), yaw));
         AIPositionSpec.SetWorldPosition(regard, wpRegard);
+        // ── ⭐⭐ LE MARQUEUR DE REGARD : une ENTITÉ droit devant, dans l'axe du regard (2026-09-13) ──
+        //
+        // Le manipulateur de la commande ne transmet `facingTarget` au comportement QUE si c'est une
+        // entité (`aiMoveToCommandHandler.script:42-48`). Un point monde est ignoré : le corps se
+        // tourne vers sa destination, et c'est exactement le demi-tour du recul.
+        //
+        // F-PLY-426 a essayé l'entité du JOUEUR et mesuré un blocage en `IdleTurn` — mais le joueur
+        // était sur le côté : la politique pivotait sans fin vers lui pendant que le netcode imposait
+        // une autre orientation. Ici l'entité est posée À 30 m DEVANT l'avatar, SUR SON PROPRE AXE DE
+        // REGARD : il n'y a rien à pivoter, c'est le cas canonique du PNJ qui strafe autour d'une
+        // cible. F-PLY-450 (Q2) avait prévu ce montage, mais la sonde ne passait jamais le marqueur.
+        if marqueur {
+            let idMarqueur = this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), yaw);
+            let objMarqueur = GameInstance.FindEntityByID(GetGameInstance(), idMarqueur) as GameObject;
+            if IsDefined(objMarqueur) {
+                AIPositionSpec.SetEntity(regard, objMarqueur);
+            }
+        }
         cmd.facingTarget = regard;
         // ⚠️ ESSAI DU 2026-09-12, SANS EFFET (F-PLY-458) : couper cette rotation ne change rien au
         // demi-tour (3 executions sur 3 a 0 deg). On revient donc a la pose de CDPR, qui est aussi
@@ -3037,6 +3162,31 @@ public native class NetworkGameSystem extends IGameSystem {
         // l'entite sur ce seul wrapper. Les trois wrappers de combat restent au vrai combat a mains
         // nues : la garde est refusee hors combat (decision de Lucas, 2026-09-11).
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"TesseraPasLateral", actif ? 1.0 : 0.0);
+        return true;
+    }
+
+    // Variante de MESURE (2026-09-13) : les trois wrappers du jeu de combat, pour savoir si le pas de
+    // côté apparaît maintenant que la cible de regard est une entité. Toutes les campagnes latérales
+    // d'avant passaient un POINT, ignoré par la commande : le corps faisait face à sa destination et le
+    // « pas chassé » ne pouvait être qu'une avancée (F-PLY-457). Garde de combat attendue.
+    public func TesseraPasChasseCombat(entityId: EntityID, actif: Bool) -> Bool {
+        return this.TesseraPasChasseWrappers(entityId, actif, true);
+    }
+
+    // Sans `MeleeWeapon` : suspect de la garde (il gate aussi les entrées photomode idle, F-PLY-454).
+    public func TesseraPasChasseSansMelee(entityId: EntityID, actif: Bool) -> Bool {
+        return this.TesseraPasChasseWrappers(entityId, actif, false);
+    }
+
+    public func TesseraPasChasseWrappers(entityId: EntityID, actif: Bool, melee: Bool) -> Bool {
+        let corps = GameInstance.FindEntityByID(GetGameInstance(), entityId) as GameObject;
+        if !IsDefined(corps) {
+            return false;
+        }
+        let poids = actif ? 1.0 : 0.0;
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"MeleeWeapon", melee ? poids : 0.0);
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"combatLocomotion", poids);
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(corps, n"WeaponRight", poids);
         return true;
     }
 

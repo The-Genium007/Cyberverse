@@ -616,8 +616,32 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
     // EN SILENCE, et l'avatar se rendrait en passant generique — indiscernable d'une panne reseau.
     const std::string record = std::string(aCorpsMasculin ? kRecordEnrichi : kRecordEnrichiFeminin);
     (void)&RecordPourCarnation;
+    // ⛔ ET SEULEMENT S'IL EST DE LA FAMILLE `_Marche_` (2026-09-13). Un personnage sans
+    // `options_apparence` recoit du serveur un record de PASSANT (`Character.CitizenRichFemale`) :
+    // passe tel quel a la voie enrichie, il donnait un V... sur un gabarit de FOULE
+    // (`citizen__ep1_rich_wa.ent`, lu par `GetTemplatePath`), avec le style de marche tire au
+    // hasard de la foule et aucune de nos entrees d'animation. Le fantome de campagne etait dans ce
+    // cas depuis toujours.
+    const bool recordServeurDeLaFamille = [&]() {
+        if (aRecordServeur == 0) { return false; }
+        for (const char* base : {kRecordEnrichi, kRecordEnrichiFeminin})
+        {
+            if (RED4ext::TweakDBID(base).value == aRecordServeur) { return true; }
+            for (const char* t : {"01_ca_pale", "01_ca_pale_00_warm_ivory", "02_ca_limestone",
+                                  "02_ca_limestone_00_beige", "03_ca_senna", "03_ca_senna_00_amber",
+                                  "03_ca_senna_01_honey", "03_ca_senna_02_band", "04_ca_almond",
+                                  "04_ca_almond_00_umber", "05_bl_espresso", "06_bl_dark"})
+            {
+                if (RED4ext::TweakDBID((std::string(base) + "_" + t).c_str()).value == aRecordServeur)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }();
     const std::uint64_t aRecord =
-        aRecordServeur != 0 ? aRecordServeur : RED4ext::TweakDBID(record.c_str()).value;
+        recordServeurDeLaFamille ? aRecordServeur : RED4ext::TweakDBID(record.c_str()).value;
 
     // ── LES DEUX OBJETS DU JEU ──────────────────────────────────────────────────────────────────
     auto* pms = SystemeParNom("gamePhotoModeSystem");

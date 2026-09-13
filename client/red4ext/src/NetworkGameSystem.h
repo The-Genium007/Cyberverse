@@ -345,6 +345,11 @@ struct SuiviAvatar
     float depuisReculS = 0.0f;
     /// Instrument de reactivite (2026-09-13) : dernier cap commande, et fenetre a pleine cadence
     /// ouverte apres un changement franc de cap. Voir `tools/game-harness/mesure-reactivite.py`.
+    /// Locomotion deterministe (2026-09-13) : temps de vie de l'avatar et prochaine pose des
+    /// cycles eteints (voir `TesseraLocomotionDeterministe`).
+    float vieS = 0.0f;
+    float prochaineLocoDeterministeS = 0.0f;
+    bool locoDeterministeAnnoncee = false;
     float capReac = 0.0f;
     bool capReacValide = false;
     float fenetreReacS = 0.0f;

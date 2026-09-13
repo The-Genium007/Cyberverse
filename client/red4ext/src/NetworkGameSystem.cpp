@@ -4160,6 +4160,14 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         if (echu)
         {
             g_absentsDepuis.erase(it->first);
+            // ⛔ UN CORPS ENRICHI NE SE SUPPRIME PAS (F-PNJ-090) : `DeleteEntity` reussit sans rien
+            // faire, et un joueur parti laissait une STATUE a sa derniere place — cinq de suite en
+            // campagne le 2026-09-13, comptees comme « PNJ ambiant » par le recensement. On l'eteint
+            // d'abord, comme le fait deja le changement de visage ; sur la voie sure c'est sans effet.
+            {
+                int32_t eteints = -1;
+                Red::CallVirtual(this, "TesseraEteindreCorps", eteints, it->second);
+            }
             if (!Red::CallVirtual(this, "DestroyTransientEntity", it->second))
             {
                 SDK->logger->Warn(PLUGIN, "Echec despawn avatar reseau");
@@ -8161,6 +8169,40 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     }
 
 
+    // ── ⭐⭐⭐ UN STYLE DE MARCHE IDENTIQUE SUR TOUS LES CLIENTS (2026-09-13) ─────────────────────
+    //
+    // `NPCPuppet.OnGameAttached` tire un `LocomotionCycleNN` AU HASARD a l'apparition : chaque
+    // observateur donnait au meme joueur un style de marche different, et le recul dependait du tirage
+    // (voir `TesseraLocomotionDeterministe`). On eteint les quatorze cycles plusieurs fois pendant les
+    // cinq premieres secondes de vie de l'avatar : le pantin n'est pas toujours resolvable a sa
+    // premiere image, et `OnGameAttached` peut passer APRES notre premiere ecriture.
+    //
+    // ⚠️ Pas a chaque image : une ecriture de graphe par avatar et par image a deja fait tomber le
+    // jeu (2026-08-06). Dix poses espacees de 0,5 s suffisent.
+    {
+        auto& vie = g_suiviAvatars[networkId];
+        vie.vieS += deltaTime;
+        if (vie.vieS <= 5.0f && vie.vieS >= vie.prochaineLocoDeterministeS)
+        {
+            vie.prochaineLocoDeterministeS = vie.vieS + 0.5f;
+            bool deterministe = false;
+            Red::CallVirtual(this, "TesseraLocomotionDeterministe", deterministe, entityId);
+            // Sonde de gabarit et de chargement (F-PLY-499/500) : `TESSERA_SONDE_ANIMS=1` seulement.
+            static const bool kSondeAnims = std::getenv("TESSERA_SONDE_ANIMS") != nullptr;
+            if (kSondeAnims && (!vie.locoDeterministeAnnoncee || vie.vieS > 4.4f))
+            {
+                bool sonde = false;
+                Red::CallVirtual(this, "TesseraSondeAnims", sonde, entityId);
+            }
+            if (deterministe && !vie.locoDeterministeAnnoncee)
+            {
+                vie.locoDeterministeAnnoncee = true;
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] LOCO_DETERMINISTE cycles aleatoires eteints (t=%.1fs)",
+                                   static_cast<unsigned long long>(networkId), vie.vieS);
+            }
+        }
+    }
+
     // ── ⭐ QUELS CLIPS CE CORPS SAIT-IL JOUER ? (F-PLY-466, une fois par avatar) ───────────
     //
     // L'inventaire des `.anims` se lit hors jeu ; il ne dit pas ce que le moteur a charge pour CETTE
@@ -10191,7 +10233,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // a mains nues en porte, et l'entite le selectionne par trois wrappers cumulatifs. On les pose
     // pendant un deplacement LATERAL (move_dir a +-45 deg de 64 ou 192), on les retire sinon. Le prix
     // est la garde de combat pendant le pas chasse — seul jeu livre qui les porte (F-PLY-439).
-    if (g_marcheSansRelance && g_pasLateral)
+    //
+    // ⭐⭐ ALLUME PAR DEFAUT (2026-09-13). Les trois wrappers de combat, plus l'archive avatar livree dont
+    // l'entree de combat pointe sur le jeu DERIVE (jambes de combat, haut du corps detendu) : pas de
+    // cote a 90° des deux cotes, SANS garde — et le temoin vanilla, meme banc, leve la garde. Ca ne
+    // marchait jamais avant pour deux raisons, toutes deux levees : la cible de regard etait un POINT
+    // (ignore, F-PLY-498) et le `.anims` derive n'etait pas declare dans `resolvedDependencies`.
+    // `TESSERA_LATERAL=off` coupe ; `sansmelee` = combatLocomotion + WeaponRight (mesure : pas de lateral).
+    static const int kLateralMode = []() {
+        const char* v = std::getenv("TESSERA_LATERAL");
+        if (v == nullptr) return 1;
+        const std::string s(v);
+        return s == "off" ? 0 : s == "sansmelee" ? 2 : 1;
+    }();
+    const bool kLateralCombat = kLateralMode != 0;
+    if (g_marcheSansRelance && (g_pasLateral || kLateralCombat))
     {
         const int md = static_cast<int>(pose.moveDir);
         const auto ecartA = [](int a, int b) { const int d = std::abs(a - b); return std::min(d, 256 - d); };
@@ -10205,7 +10261,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         if (lateral != suivi.pasChasse || reposer)
         {
             bool pose_ok = false;
-            Red::CallVirtual(this, "TesseraPasChasse", pose_ok, entityId, lateral);
+            Red::CallVirtual(this, kLateralMode == 2 ? "TesseraPasChasseSansMelee" : kLateralCombat ? "TesseraPasChasseCombat" : "TesseraPasChasse", pose_ok,
+                             entityId, lateral);
             suivi.pasChasse = lateral;
             suivi.depuisPasChasseS = 0.0f;
         }
@@ -10224,7 +10281,15 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     {
         const int md = static_cast<int>(pose.moveDir);
         const int ecart = std::abs(md - 128);
-        const bool enRecul = pose.locomotion != 0 && std::min(ecart, 256 - ecart) <= 32;
+        // ⛔ COUPE PAR DEFAUT (2026-09-13). Ce wrapper servait a selectionner le jeu DERIVE du recul.
+        // Mesure du jour : avec le MARQUEUR de regard, le recul marche SANS jeu derive (angle 180°,
+        // 0,95 m/s) — et ce wrapper, pose sur l'archive livree, allume le jeu FURTIF vanilla : l'avatar
+        // reculait accroupi. `TESSERA_RECUL_DERIVE=1` le rallume pour une archive derivee.
+        static const bool kReculDerive = []() {
+            const char* v = std::getenv("TESSERA_RECUL_DERIVE");
+            return v != nullptr && v[0] == '1';
+        }();
+        const bool enRecul = kReculDerive && pose.locomotion != 0 && std::min(ecart, 256 - ecart) <= 32;
         suivi.depuisReculS += deltaTime;
         const bool reposerRecul = enRecul && suivi.depuisReculS >= 0.25f;
         if (enRecul != suivi.recul || reposerRecul)
@@ -10426,8 +10491,15 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // d'acceptation. Si la reemission sans depart etait refusee, la marche s'arreterait au lieu de
     // se lisser — et la derive le dirait avant l'oeil.
     const bool useStart = !g_departVif && !suivi.commande;
-    if (Red::CallVirtual(this, "TesseraSuivreAvatarAvecDepart", enRoute, entityId, visee,
-                         static_cast<int32_t>(pose.locomotion), pose.yaw, useStart)
+    // ⭐ Marqueur de regard (2026-09-13) : la cible de regard de la commande devient une ENTITE posee
+    // droit devant l'avatar, sur son axe de regard — le seul type que le manipulateur transmet
+    // (`TesseraMarqueurDeRegard`). Coupable par `TESSERA_REGARD_MARQUEUR=0` pour l'A/B.
+    static const bool kRegardMarqueur = []() {
+        const char* v = std::getenv("TESSERA_REGARD_MARQUEUR");
+        return v == nullptr || v[0] != '0';
+    }();
+    if (Red::CallVirtual(this, "TesseraSuivreAvatarRegard", enRoute, entityId, visee,
+                         static_cast<int32_t>(pose.locomotion), pose.yaw, useStart, kRegardMarqueur)
         && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
     {
         // ── L'INSTRUMENT ───────────────────────────────────────────────────────────────────
