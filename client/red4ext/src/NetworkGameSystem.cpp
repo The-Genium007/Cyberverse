@@ -9593,13 +9593,22 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // puis cible de strafe reposee a chaque periode : la politique change, et le yaw du joueur
         // aussi. Le moteur tourne le corps en `IdleTurn` et le cale en `Reposition`, pieds en
         // mouvement ; le yaw ne passe donc plus par le teleport de placement.
-        const bool pietinementSurPlace = g_marcheSansRelance && g_pietinement && !pivotSurPlace
+        // `TESSERA_PIETINEMENT=marqueur` (2026-09-13) : le piétinement passe par le marqueur de regard.
+        static const bool kPietinementMarqueur = []() {
+            const char* v = std::getenv("TESSERA_PIETINEMENT");
+            return v != nullptr && std::string(v) == "marqueur";
+        }();
+        const bool pietinementSurPlace = g_marcheSansRelance && (g_pietinement || kPietinementMarqueur) && !pivotSurPlace
             && !passager && !ciblePortee && deriveFinale <= bandeMorte;
         if (pietinementSurPlace && !g_suspendreCorrections && suiviImmobile.depuisPivotS >= kPeriodePivotS)
         {
             bool pietinementOk = false;
-            const bool relancer = !suiviImmobile.pietinementEmis;
-            Red::CallVirtual(this, "TesseraPietinerAvatar", pietinementOk, entityId, pose.yaw, relancer);
+            // Marqueur : la commande « sur place » ne reste pas active (action Undefined relevee le
+            // 2026-09-13) ; on la reemet toutes les 4 periodes (~1,2 s) le temps de comprendre.
+            const bool relancer = !suiviImmobile.pietinementEmis
+                || (kPietinementMarqueur && suiviImmobile.pietinementAppels % 4 == 3);
+            Red::CallVirtual(this, kPietinementMarqueur ? "TesseraPietinerMarqueur" : "TesseraPietinerAvatar",
+                             pietinementOk, entityId, kPietinementMarqueur ? yawCorpsVoulu : pose.yaw, relancer);
             suiviImmobile.pietinementEmis = true;
             suiviImmobile.depuisPivotS = 0.0f;
             // ── L'INSTRUMENT (F-PLY-454) ─────────────────────────────────────────────────────────
@@ -9642,7 +9651,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // flou etait le FLOU CINETIQUE du jeu, un reglage graphique, identifie par Lucas le
                 // 2026-08-27. F-ASC-037 (« le flou vient du placement image par image ») est donc
                 // refute — on avait attribue a notre code un effet qui ne lui appartenait pas.
-                SetEntityPosition(entityId, positionVoulue, yawCorpsVoulu);
+                SetEntityPosition(entityId, positionVoulue, pietinementSurPlace ? yawActuel : yawCorpsVoulu);
             }
             else
             {
@@ -9666,7 +9675,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // que pour un corps QUI MARCHE, appele a chaque image. Ici le regime est
                 // « immobile » par definition, et la cadence est bornee a une fois toutes les
                 // deux secondes.
-                SetEntityPosition(entityId, positionVoulue, yawCorpsVoulu);
+                SetEntityPosition(entityId, positionVoulue, pietinementSurPlace ? yawActuel : yawCorpsVoulu);
             }
         }
 

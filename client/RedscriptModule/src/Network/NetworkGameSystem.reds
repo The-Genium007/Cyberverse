@@ -3335,6 +3335,48 @@ public native class NetworkGameSystem extends IGameSystem {
         return this.TesseraRegardDeMarche(entityId, yaw);
     }
 
+    // ── LE PIETINEMENT PAR LE MARQUEUR DE REGARD (2026-09-13) ──────────────────────────────────
+    //
+    // F-PLY-449 : une commande de marche « sur place » avec une ENTITE pour cible de regard fait
+    // tourner le corps en `IdleTurn` puis `Reposition`, pieds en mouvement, sur 360°. La version par
+    // cible de strafe n'a jamais agi dans le netcode (`ok=0`, F-PLY-455/456). Le marqueur de regard,
+    // lui, existe et se déplace enfin (F-PLY-506) : on le pose dans le yaw voulu et le corps le suit.
+    // `relancer` : la commande a été annulée (marche, téléport) et doit être réémise.
+    public func TesseraPietinerMarqueur(entityId: EntityID, yaw: Float, relancer: Bool) -> Bool {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        let idMarqueur = this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), yaw);
+        if !relancer {
+            return true;
+        }
+        let marqueur = TesseraCorpsDeLEntite(idMarqueur) as GameObject;
+        let controller = puppet.GetAIControllerComponent();
+        if !IsDefined(marqueur) || !IsDefined(controller) {
+            return false;
+        }
+        controller.CancelOrInterruptCommand(n"AIRotateToCommand", true, false);
+        controller.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
+        controller.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
+        let ici: AIPositionSpec;
+        AIPositionSpec.SetEntity(ici, puppet);
+        let regard: AIPositionSpec;
+        AIPositionSpec.SetEntity(regard, marqueur);
+        let cmd = new AIMoveToCommand();
+        cmd.movementTarget = ici;
+        cmd.facingTarget = regard;
+        cmd.rotateEntityTowardsFacingTarget = true;
+        cmd.movementType = moveMovementType.Walk;
+        cmd.ignoreNavigation = true;
+        cmd.finishWhenDestinationReached = false;
+        cmd.desiredDistanceFromTarget = 0.0;
+        cmd.useStart = true;
+        cmd.useStop = true;
+        controller.SendCommand(cmd);
+        return true;
+    }
+
     // FIGE un avatar sur place : annule sa marche en cours et le tient immobile.
     //
     // ── POURQUOI CETTE FONCTION EXISTE ─────────────────────────────────────────────────────
