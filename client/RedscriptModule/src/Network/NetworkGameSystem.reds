@@ -1764,6 +1764,17 @@ public native class NetworkGameSystem extends IGameSystem {
     public func DestroyTransientEntity(entityId: EntityID) {
         // Le marqueur de regard part avec son avatar : sans ça, chaque réapparition en laisse un.
         let cle = EntityID.GetHash(entityId);
+        this.TesseraQuitterGesteAvatar(entityId);
+        let g = 0;
+        while g < ArraySize(this.m_porteurCles) {
+            if Equals(this.m_porteurCles[g], cle) {
+                GameInstance.GetDynamicEntitySystem().DeleteEntity(this.m_porteurIds[g]);
+                ArrayErase(this.m_porteurCles, g);
+                ArrayErase(this.m_porteurIds, g);
+            } else {
+                g += 1;
+            }
+        }
         let i = 0;
         while i < ArraySize(this.m_marqueurCles) {
             if Equals(this.m_marqueurCles[i], cle) {
@@ -3527,6 +3538,226 @@ public native class NetworkGameSystem extends IGameSystem {
     //
     // F-PLY-430 a mesuré les deux préconditions : un vrai NodeRef et l'absence
     // simultanée de commandes de marche et de corrections de position.
+    // ── ⭐ LES GESTES D'AVATAR PAR `sustained` (codes 1 a 999, 2026-09-14) ─────────────────────────
+    //
+    // `EmoteReport` pose `PlayerState.sustained` sans le valider et le serveur le rediffuse dans chaque
+    // snapshot : l'etat est AUTO-CICATRISANT, un joueur qui arrive voit le geste en cours. Les postures
+    // du monde vivent a partir de 1000 (`postures.rs`) ; les gestes prennent la plage basse.
+    //
+    //   1-4   geste SUR PLACE : workspot PNJ joue par un porteur spawne sur l'avatar (F-PLY-514).
+    //         Le netcode suspend les commandes et corrections de cet avatar tant qu'il est tenu.
+    //   11-13 objet EN MAIN pendant la marche : poids de wrapper d'un jeu de foule deja present dans
+    //         l'entite (F-PLY-515). Aucune suspension, la locomotion continue.
+    //
+    // Decision de Lucas (2026-09-14) : boire = « boire une canette » des PNJ ; a terme l'objet se tient
+    // en main (11) tant qu'il n'est pas consomme, puis on le boit (1).
+    private let m_gesteCles: array<Uint32>;
+    private let m_gesteCodes: array<Uint32>;
+    private let m_gestePorteurs: array<EntityID>;
+    private let m_gesteJoues: array<Bool>;
+    private let m_gesteAttente: array<Int32>;
+    // ⛔ LE PORTEUR NE MEURT PAS A LA FIN DU GESTE (mesure 2026-09-14, KF1/KF3) : le supprimer dans la
+    // meme image que `StopInDevice` faisait DISPARAITRE l'avatar jusqu'au geste suivant. Et un porteur
+    // REUTILISE ne rejoue pas (KF1, second cycle debout). Donc : un porteur NEUF par geste, l'ancien
+    // detruit au geste suivant ou avec l'avatar (`DestroyTransientEntity`).
+    private let m_porteurCles: array<Uint32>;
+    private let m_porteurIds: array<EntityID>;
+
+    private func TesseraPorteurDeGeste(entityId: EntityID, puppet: ref<ScriptedPuppet>) -> EntityID {
+        let cle = EntityID.GetHash(entityId);
+        let workspotsP = GameInstance.GetWorkspotSystem(GetGameInstance());
+        if IsDefined(workspotsP) && workspotsP.IsActorInWorkspot(puppet) {
+            workspotsP.StopNpcInWorkspot(puppet);
+            this.Tessera_Journal("[Geste] sortie lente inachevee : StopNpcInWorkspot");
+        }
+        let i = 0;
+        while i < ArraySize(this.m_porteurCles) {
+            if Equals(this.m_porteurCles[i], cle) {
+                GameInstance.GetDynamicEntitySystem().DeleteEntity(this.m_porteurIds[i]);
+                ArrayErase(this.m_porteurCles, i);
+                ArrayErase(this.m_porteurIds, i);
+            } else {
+                i += 1;
+            }
+        }
+        let spec = new DynamicEntitySpec();
+        spec.templatePath = r"tessera\\posture\\gestes.ent";
+        spec.position = puppet.GetWorldPosition();
+        // ⛔ PAS `new EulerAngles(0.0, 0.0, yaw)` (mesure 2026-09-14, bissection K1V) : avec cette orientation le
+        // corps entre en workspot, anime, et reste INVISIBLE pendant tout le geste ; sans orientation, ou posee
+        // par le harnais Lua, il rend. On nomme donc le champ au lieu de se fier a l'ordre du constructeur.
+        let angles: EulerAngles;
+        angles.Yaw = puppet.GetWorldYaw() + 180.0;
+        spec.orientation = EulerAngles.ToQuat(angles);
+        spec.alwaysSpawned = true;
+        spec.persistState = false;
+        spec.persistSpawn = false;
+        spec.tags = [n"Tessera.Geste"];
+        let id = GameInstance.GetDynamicEntitySystem().CreateEntity(spec);
+        ArrayPush(this.m_porteurCles, cle);
+        ArrayPush(this.m_porteurIds, id);
+        return id;
+    }
+
+    private func TesseraGesteComposant(code: Uint32) -> CName {
+        switch code {
+            case 1u: return n"geste_boire";
+            case 2u: return n"geste_fumer";
+            case 3u: return n"geste_telephoner";
+            case 4u: return n"geste_saluer";
+        }
+        return n"None";
+    }
+
+    private func TesseraGesteWrapper(code: Uint32) -> CName {
+        switch code {
+            case 11u: return n"CanLocomotion";
+            case 12u: return n"CigaretteLocomotion";
+            case 13u: return n"CellphoneTalkingLocomotion";
+        }
+        return n"None";
+    }
+
+    private func TesseraGesteIndex(entityId: EntityID) -> Int32 {
+        let cle = EntityID.GetHash(entityId);
+        let i = 0;
+        while i < ArraySize(this.m_gesteCles) {
+            if Equals(this.m_gesteCles[i], cle) { return i; }
+            i += 1;
+        }
+        return -1;
+    }
+
+    /// Rend `true` si le geste est un WORKSPOT (le netcode doit alors suspendre ce corps et appeler
+    /// `TesseraGesteTick` jusqu'a ce que le porteur, cree de facon differee, ait joue).
+    public func TesseraJouerGesteAvatar(entityId: EntityID, code: Uint32) -> Bool {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            this.Tessera_Journal(s"[Geste] code=\(code) corps introuvable");
+            return false;
+        }
+        this.TesseraQuitterGesteAvatar(entityId);
+        let wrapper = this.TesseraGesteWrapper(code);
+        if NotEquals(wrapper, n"None") {
+            AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, wrapper, 1.0);
+            ArrayPush(this.m_gesteCles, EntityID.GetHash(entityId));
+            ArrayPush(this.m_gesteCodes, code);
+            ArrayPush(this.m_gestePorteurs, new EntityID());
+            ArrayPush(this.m_gesteJoues, true);
+            ArrayPush(this.m_gesteAttente, 0);
+            this.Tessera_Journal(s"[Geste] code=\(code) wrapper=\(NameToString(wrapper)) pose");
+            return false;
+        }
+        if Equals(this.TesseraGesteComposant(code), n"None") {
+            this.Tessera_Journal(s"[Geste] code=\(code) inconnu du catalogue client");
+            return false;
+        }
+        // ⚠️ AUCUNE annulation de commande d'IA ici (2026-09-14) : le temoin qui rend (K1, harnais) n'en fait
+        // pas, et la version qui annulait `AITeleportCommand` rendait l'avatar INVISIBLE pendant le geste.
+        let porteur = new EntityID();   // cree par `TesseraGesteRappel` (mode 2), releve par le tick
+        GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(TesseraGesteRappel.Creer(entityId, new EntityID(), n"None", 2), 0.0, false);
+        ArrayPush(this.m_gesteCles, EntityID.GetHash(entityId));
+        ArrayPush(this.m_gesteCodes, code);
+        ArrayPush(this.m_gestePorteurs, porteur);
+        ArrayPush(this.m_gesteJoues, false);
+        ArrayPush(this.m_gesteAttente, 0);
+        this.Tessera_Journal(s"[Geste] code=\(code) porteur demande");
+        return true;
+    }
+
+    // Instrument (2026-09-14) : l'avatar est « en workspot » mais invisible quand le NETCODE joue le geste.
+    public func TesseraGesteDiag(entityId: EntityID) -> String {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        let i = this.TesseraGesteIndex(entityId);
+        let d = s"index=\(i) corps=\(IsDefined(puppet))";
+        if IsDefined(puppet) {
+            let pos = puppet.GetWorldPosition();
+            d += s" pos=\(pos.X),\(pos.Y),\(pos.Z) yaw=\(puppet.GetWorldYaw()) app=\(NameToString(puppet.GetCurrentAppearanceName()))";
+            d += s" workspot=\(GameInstance.GetWorkspotSystem(GetGameInstance()).IsActorInWorkspot(puppet)) attache=\(puppet.IsAttached())";
+        }
+        if i >= 0 {
+            let porteur = GameInstance.GetDynamicEntitySystem().GetEntity(this.m_gestePorteurs[i]);
+            d += s" porteur=\(EntityID.GetHash(this.m_gestePorteurs[i])) existe=\(IsDefined(porteur))";
+            if IsDefined(porteur) {
+                let pp = porteur.GetWorldPosition();
+                d += s" porteurpos=\(pp.X),\(pp.Y),\(pp.Z)";
+            }
+        }
+        this.Tessera_Journal("[Geste] diag " + d);
+        return d;
+    }
+
+    // Bissection (2026-09-14) : le porteur du netcode, joue ensuite par le harnais.
+    public func TesseraGestePorteurSeul(entityId: EntityID) -> EntityID {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        return IsDefined(puppet) ? this.TesseraPorteurDeGeste(entityId, puppet) : new EntityID();
+    }
+
+    public func TesseraGesteCreerPorteur(entityId: EntityID) -> Void {
+        let i = this.TesseraGesteIndex(entityId);
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        if i < 0 || !IsDefined(puppet) {
+            return;
+        }
+        this.m_gestePorteurs[i] = this.TesseraPorteurDeGeste(entityId, puppet);
+        this.Tessera_Journal(s"[Geste] porteur cree par le DelaySystem");
+    }
+
+    /// Joue le workspot des que le porteur existe. Rend `true` quand c'est fait (ou sans objet).
+    public func TesseraGesteTick(entityId: EntityID) -> Bool {
+        let i = this.TesseraGesteIndex(entityId);
+        if i < 0 || this.m_gesteJoues[i] {
+            return true;
+        }
+        let porteur = GameInstance.GetDynamicEntitySystem().GetEntity(this.m_gestePorteurs[i]) as GameObject;
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        if !IsDefined(porteur) || !IsDefined(puppet) {
+            return false;
+        }
+        // Laisser au porteur ~1 s pour monter ses composants avant de jouer (le harnais joue ~3 s apres).
+        this.m_gesteAttente[i] += 1;
+        if this.m_gesteAttente[i] < 60 || !IsDefined(porteur.FindComponentByName(this.TesseraGesteComposant(this.m_gesteCodes[i]))) {
+            return false;
+        }
+        // Joue par le `DelaySystem`, hors du tick natif. (L'invisibilite qui l'avait motive venait en fait de
+        // l'orientation du porteur — voir `TesseraPorteurDeGeste` ; l'indirection est gardee, elle est sans cout.)
+        GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(TesseraGesteRappel.Creer(entityId, this.m_gestePorteurs[i], this.TesseraGesteComposant(this.m_gesteCodes[i]), 1), 0.0, false);
+        this.m_gesteJoues[i] = true;
+        this.Tessera_Journal(s"[Geste] code=\(this.m_gesteCodes[i]) joue sur le porteur");
+        return true;
+    }
+
+    public func TesseraQuitterGesteAvatar(entityId: EntityID) -> Bool {
+        let i = this.TesseraGesteIndex(entityId);
+        if i < 0 {
+            return false;
+        }
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        let wrapper = this.TesseraGesteWrapper(this.m_gesteCodes[i]);
+        if IsDefined(puppet) {
+            if NotEquals(wrapper, n"None") {
+                AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, wrapper, 0.0);
+            } else {
+                // ⛔ `StopInDevice` NE SORT PAS un PNJ (mesure 2026-09-14, KF1 : `IsActorInWorkspot` encore
+                // `true` 8 s apres). Sortie LENTE d'abord — l'animation de fin du geste, la canette qui
+                // redescend (idee de Lucas) ; la sortie dure `StopNpcInWorkspot` se fait au geste suivant.
+                let workspots = GameInstance.GetWorkspotSystem(GetGameInstance());
+                if IsDefined(workspots) && workspots.IsActorInWorkspot(puppet) {
+                    // ⚠️ `SendSlowExitSignal` essaye le 2026-09-14 (KF1 203943) : l'avatar DISPARAIT pendant
+                    // toute la pause, et reste « en workspot ». Sortie DURE, porteur garde jusqu'au geste suivant.
+                    GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(TesseraGesteRappel.Creer(entityId, new EntityID(), n"None", 0), 0.0, false);
+                }
+            }
+        }
+        this.Tessera_Journal(s"[Geste] code=\(this.m_gesteCodes[i]) quitte");
+        ArrayErase(this.m_gesteCles, i);
+        ArrayErase(this.m_gesteCodes, i);
+        ArrayErase(this.m_gestePorteurs, i);
+        ArrayErase(this.m_gesteJoues, i);
+        ArrayErase(this.m_gesteAttente, i);
+        return true;
+    }
+
     public func TesseraTenirPostureAvatar(entityId: EntityID, sustained: Uint32, position: Vector4) -> Bool {
         if sustained != 1001u {
             return false;
@@ -3656,3 +3887,42 @@ public class TesseraVerifieCadavre extends DelayCallback {
 
 @addMethod(GameInstance)
 public static native func GetNetworkGameSystem() -> ref<NetworkGameSystem>
+
+// Rejoue un ordre de workspot d'un geste d'avatar sur la boucle de script du jeu (voir `TesseraGesteTick`).
+public class TesseraGesteRappel extends DelayCallback {
+    let avatar: EntityID;
+    let porteur: EntityID;
+    let composant: CName;
+    let mode: Int32;   // 0 sortie · 1 jouer · 2 creer le porteur
+
+    public static func Creer(avatar: EntityID, porteur: EntityID, composant: CName, mode: Int32) -> ref<TesseraGesteRappel> {
+        let r = new TesseraGesteRappel();
+        r.avatar = avatar;
+        r.porteur = porteur;
+        r.composant = composant;
+        r.mode = mode;
+        return r;
+    }
+
+    public func Call() -> Void {
+        let puppet = TesseraCorpsDeLEntite(this.avatar) as ScriptedPuppet;
+        let workspots = GameInstance.GetWorkspotSystem(GetGameInstance());
+        if !IsDefined(puppet) || !IsDefined(workspots) {
+            return;
+        }
+        if this.mode == 2 {
+            GameInstance.GetNetworkGameSystem().TesseraGesteCreerPorteur(this.avatar);
+            return;
+        }
+        if this.mode == 1 {
+            let objet = GameInstance.GetDynamicEntitySystem().GetEntity(this.porteur) as GameObject;
+            if IsDefined(objet) {
+                workspots.PlayInDeviceSimple(objet, puppet, false, this.composant);
+            }
+        } else {
+            if workspots.IsActorInWorkspot(puppet) {
+                workspots.StopNpcInWorkspot(puppet);
+            }
+        }
+    }
+}

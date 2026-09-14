@@ -2308,6 +2308,7 @@ public:
     bool Tessera_JoueurLocalPorte();
     bool Tessera_AvatarPorteParPlateforme(uint32_t entiteHash, bool actif);
     bool Tessera_SuspendreCorrections(bool actif);
+    bool Tessera_SignalerGeste(uint32_t code, bool debut);
 
     /// Bascule le pilotage par les ENTREES (ADR 0032). Voir `g_pilotageParEntrees`.
     bool Tessera_PilotageParEntrees(bool actif);
@@ -3189,6 +3190,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_JoueurLocalPorte);
     RTTI_METHOD(Tessera_AvatarPorteParPlateforme);
     RTTI_METHOD(Tessera_SuspendreCorrections);
+    RTTI_METHOD(Tessera_SignalerGeste);
     RTTI_METHOD(Tessera_PilotageParEntrees);
     RTTI_METHOD(Tessera_MarcheSansRelance);
     RTTI_METHOD(Tessera_PasLateral);

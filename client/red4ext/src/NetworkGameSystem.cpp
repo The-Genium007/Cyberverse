@@ -680,6 +680,12 @@ std::set<uint64_t> g_visageEnReconstruction;
 /// releve pas, on le reconstruit. DIFFERE apres la boucle de rendu, qui itere
 /// `m_networkedEntitiesLookup` — effacer depuis `PiloterAvatar` invaliderait son iterateur.
 std::set<uint64_t> g_avatarsARelever;
+// Gestes d'avatar (sustained 1-999, 2026-09-14) dont le porteur de workspot n'a pas encore joue.
+std::set<uint64_t> g_gestesEnAttente;
+// Avatars tenus dans un geste de workspot : pilotes comme sous `suspendre|on` + `corrections|off`, le temoin
+// qui rend (K1) — aucune commande ni correction ne doit sortir le corps du porteur.
+std::set<uint64_t> g_avatarsEnGeste;
+static bool EstCodeGeste(std::uint32_t code) { return code >= 1u && code < 1000u; }
 
 // ⭐ LE PLAN DE BITS DE `PositionUpdate.flags` — voir le commentaire a l'emission pour le
 // raisonnement complet. Une seule declaration, pour que l'emetteur et le recepteur ne puissent
@@ -1618,6 +1624,26 @@ bool NetworkGameSystem::Tessera_AvatarPorteParPlateforme(uint32_t entiteHash, bo
         g_yawVouluAttache.erase(entiteHash);
     }
     return g_avatarsAttachesPlateforme.count(entiteHash) != 0;
+}
+
+// ⭐ Emet un GESTE TENU du joueur local (2026-09-14) : `EmoteReport{emote, start}`, que le serveur pose
+// dans `PlayerState.sustained` et rediffuse (auto-cicatrisant). Fiable : un debut ou une fin perdus
+// laisseraient les autres joueurs voir un geste qui n'existe plus.
+bool NetworkGameSystem::Tessera_SignalerGeste(uint32_t code, bool debut)
+{
+    if (m_pInterface == nullptr || m_hConnection == k_HSteamNetConnection_Invalid)
+    {
+        return false;
+    }
+    flatbuffers::FlatBufferBuilder b(64);
+    const auto rapport = cyberpunk_rp::protocol::CreateEmoteReport(b, code, debut);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        b, cyberpunk_rp::protocol::ClientMsg_EmoteReport, rapport.Union());
+    b.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, b.GetBufferPointer(), b.GetSize(),
+                                          k_nSteamNetworkingSend_Reliable, nullptr);
+    SDK->logger->InfoF(PLUGIN, "[Geste] emis code=%u debut=%d", code, debut ? 1 : 0);
+    return true;
 }
 
 bool NetworkGameSystem::Tessera_SuspendreCorrections(bool actif)
@@ -7912,6 +7938,27 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // instrument muet se denonce lui-meme.
     GuetterResolution(networkId, entityId, pose);
 
+    // Suspension LOCALE a cet avatar pendant un geste de workspot : memes interrupteurs que la mesure qui rend
+    // (K1), restitues en sortie de fonction quel que soit le chemin de retour.
+    struct SuspensionLocale
+    {
+        bool corrections;
+        bool commandes;
+        explicit SuspensionLocale(bool actif) : corrections(g_suspendreCorrections), commandes(g_suspendreCommandes)
+        {
+            if (actif)
+            {
+                g_suspendreCorrections = true;
+                g_suspendreCommandes = true;
+            }
+        }
+        ~SuspensionLocale()
+        {
+            g_suspendreCorrections = corrections;
+            g_suspendreCommandes = commandes;
+        }
+    } suspensionGeste(g_avatarsEnGeste.count(networkId) != 0);
+
     // ── LA BOUCLE PROUVEE, ET SEULEMENT ELLE ───────────────────────────────────────────────
     //
     // Mesuree en jeu le 2026-07-23 (backlog Q6/Q6b, sondes `loco_active`/`loco_lag`/`loco_hybrid`,
@@ -8481,13 +8528,35 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             const std::uint32_t precedente = suiviPosture.derniereSustained;
             suiviPosture.derniereSustained = pose.sustained;
             bool appliquee = false;
+            // ⭐ GESTES (1-999) : un porteur de workspot ou un poids de wrapper, jamais un emplacement
+            // du monde. On quitte le geste precedent avant tout autre etat.
+            const bool precedentEtaitGeste = precedente != 0xFFFFFFFFu && EstCodeGeste(precedente);
+            if (precedentEtaitGeste)
+            {
+                bool quitte = false;
+                Red::CallVirtual(this, "TesseraQuitterGesteAvatar", quitte, entityId);
+                g_gestesEnAttente.erase(networkId);
+                g_avatarsEnGeste.erase(networkId);
+            }
             if (pose.sustained == 0)
             {
                 // La sentinelle initiale ne correspond à aucune posture à quitter.
-                if (precedente != 0xFFFFFFFFu)
+                if (precedente != 0xFFFFFFFFu && !precedentEtaitGeste)
                 {
                     Red::CallVirtual(this, "TesseraQuitterPostureAvatar", appliquee, entityId);
                 }
+                suiviPosture.postureWorkspotAppliquee = false;
+            }
+            else if (EstCodeGeste(pose.sustained))
+            {
+                bool workspot = false;
+                Red::CallVirtual(this, "TesseraJouerGesteAvatar", workspot, entityId, pose.sustained);
+                if (workspot)
+                {
+                    g_gestesEnAttente.insert(networkId);
+                    g_avatarsEnGeste.insert(networkId);
+                }
+                appliquee = workspot;
                 suiviPosture.postureWorkspotAppliquee = false;
             }
             else
@@ -9086,6 +9155,15 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // suivies, mais aucune correction ni commande de locomotion ne doit éjecter le pantin du
     // nœud — précondition mesurée par F-PLY-430. La sortie `sustained=0` annule d'abord le
     // workspot, puis le pilotage normal reprend dans cette même image.
+    if (g_gestesEnAttente.count(networkId) != 0)
+    {
+        bool joue = false;
+        Red::CallVirtual(this, "TesseraGesteTick", joue, entityId);
+        if (joue)
+        {
+            g_gestesEnAttente.erase(networkId);
+        }
+    }
     if (g_suiviAvatars[networkId].postureWorkspotAppliquee)
     {
         auto& suivi = g_suiviAvatars[networkId];
