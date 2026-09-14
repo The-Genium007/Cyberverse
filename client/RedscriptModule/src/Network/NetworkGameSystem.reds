@@ -1943,7 +1943,13 @@ public native class NetworkGameSystem extends IGameSystem {
         // yaw du corps contredirait la commande en cours. ⚠️ Ne vaut que depuis que le replacement passe
         // par `AITeleportCommand` — avec `Teleport` seul, ce marqueur restait figé à yaw 0.
         if !ArrayContains(this.m_marqueurCles, EntityID.GetHash(entityId)) {
-            this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), puppet.GetWorldYaw());
+            // ⚠️ PAS `GetWorldYaw()` : la sonde a relevé un yaw d'entité de signe OPPOSÉ à la convention
+            // de `RotByAngleXY` sur un yaw latéral (+90 contre -90, F-PLY-505/506). On repart du VECTEUR
+            // avant du corps, converti dans la convention du marqueur (avant = (-sin, cos)), pour poser
+            // le marqueur devant l'avatar quel que soit le signe. Hypothèse sur le demi-tour vu par
+            // Lucas en pas de côté (homme, 204144) — non mesuré.
+            let avant = puppet.GetWorldForward();
+            this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), Rad2Deg(AtanF(-avant.X, avant.Y)));
         }
         return true;
     }
