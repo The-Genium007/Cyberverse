@@ -985,6 +985,17 @@ bool NetworkGameSystem::Tessera_DepartVif(bool actif)
 // Les pointes a l'arret sont des evenements rares qui dominent le max ; l'effet n'est pas etabli
 // (F-PLY-454). La regle de Lucas vaut pour ce qui est VALIDE, et ceci ne l'est pas encore.
 bool g_pietinement = false;
+// ⭐ PIETINEMENT PAR LE MARQUEUR DE REGARD — ALLUME PAR DEFAUT depuis le 2026-09-14 (verdict de Lucas sur
+// B1M : « parfait »). A l'arret, le corps tourne en deplacant les pieds vers le yaw voulu.
+// `TESSERA_PIETINEMENT=off` coupe.
+static bool PietinementMarqueurActif()
+{
+    static const bool actif = []() {
+        const char* v = std::getenv("TESSERA_PIETINEMENT");
+        return v == nullptr || std::string(v) != "off";
+    }();
+    return actif;
+}
 
 bool NetworkGameSystem::Tessera_Pietinement(bool actif)
 {
@@ -9606,7 +9617,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // qui avance image par image. On oriente donc le corps par `AIRotateToCommand` vers le
                 // yaw INTERMEDIAIRE, toutes les 0,15 s — une suite de petites rotations au lieu d'une.
                 suiviImmobile.depuisRattrapageS += deltaTime;
-                if (suiviImmobile.depuisRattrapageS >= 0.15f || !suiviImmobile.rattrapageEnCours)
+                // Avec le piétinement, c'est LUI qui tourne le corps vers ce yaw, pieds en mouvement : une
+                // `AIRotateToCommand` par-dessus casserait sa commande « sur place ».
+                if (!PietinementMarqueurActif()
+                    && (suiviImmobile.depuisRattrapageS >= 0.15f || !suiviImmobile.rattrapageEnCours))
                 {
                     suiviImmobile.depuisRattrapageS = 0.0f;
                     bool pivotOk = false;
@@ -9645,11 +9659,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // puis cible de strafe reposee a chaque periode : la politique change, et le yaw du joueur
         // aussi. Le moteur tourne le corps en `IdleTurn` et le cale en `Reposition`, pieds en
         // mouvement ; le yaw ne passe donc plus par le teleport de placement.
-        // `TESSERA_PIETINEMENT=marqueur` (2026-09-13) : le piétinement passe par le marqueur de regard.
-        static const bool kPietinementMarqueur = []() {
-            const char* v = std::getenv("TESSERA_PIETINEMENT");
-            return v != nullptr && std::string(v) == "marqueur";
-        }();
+        const bool kPietinementMarqueur = PietinementMarqueurActif();
         const bool pietinementSurPlace = g_marcheSansRelance && (g_pietinement || kPietinementMarqueur) && !pivotSurPlace
             && !passager && !ciblePortee && deriveFinale <= bandeMorte;
         if (pietinementSurPlace && !g_suspendreCorrections && suiviImmobile.depuisPivotS >= kPeriodePivotS)
