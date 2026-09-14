@@ -8847,15 +8847,34 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // `loop` et `recover` (F-PLY-475) et rien ne dit quelle valeur designe laquelle. On change
         // de valeur a CHAQUE decollage : saut 1 -> phase 0, saut 2 -> phase 1, etc. Une video de
         // quatre sauts couvre le domaine, et le journal dit laquelle etait posee a chaque saut.
+        // ⭐⭐ LA SEQUENCE DU GRAPHE, LUE HORS JEU (2026-09-13) — elle remplace le balayage de phase.
+        //
+        // L'etat `exploration` de `humanoid.animgraph` choisit ses clips par des noeuds `IntInput` du
+        // groupe `exploration` : `explorationType` (Jump = 2), `movementType` (marche / course) et
+        // `state`, un `Switch` a TROIS entrees `jump_walk_startup` / `_loop` / `_recover`. Le
+        // balayage posait UNE valeur de 0 a 3 par saut : chaque saut ne jouait qu'une phase, figee —
+        // d'ou le « on dirait qu'il grimpe » de Lucas. La sequence vraie : 0 au decollage, 1 en vol,
+        // 2 a la reception, puis `None`.
+        static constexpr float kReceptionS = 0.7f;   // jump_walk_recover = 0,77 s
+        if (suiviPosture.receptionEnCours && !enVolMaintenant)
+        {
+            suiviPosture.depuisAtterrissageS += deltaTime;
+            if (suiviPosture.depuisAtterrissageS >= kReceptionS)
+            {
+                suiviPosture.receptionEnCours = false;
+                bool fin = false;
+                Red::CallVirtual(this, "TesseraPousserFranchissement", fin, entityId, false, 0);
+            }
+        }
         if (suiviPosture.dernierEnVol != enVolMaintenant)
         {
             suiviPosture.dernierEnVol = enVolMaintenant;
-            if (enVolMaintenant)
-            {
-                suiviPosture.phaseFranchissement = (suiviPosture.phaseFranchissement + 1) % 4;
-            }
+            suiviPosture.phaseFranchissement = enVolMaintenant ? 0 : 2;
+            suiviPosture.receptionEnCours = !enVolMaintenant;
+            suiviPosture.depuisAtterrissageS = 0.0f;
             bool franchi = false;
-            Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, enVolMaintenant,
+            // A la reception, le type RESTE `Jump` (sinon on quitte l'etat avant `_recover`).
+            Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, true,
                              suiviPosture.phaseFranchissement);
             // ⭐ ET L'EVENEMENT EXTERNE, le cinquieme canal (F-PLY-485) : le graphe ecoute
             // `ActionStartup` / `ActionLoop` / `ActionRecovery`, qui portent exactement les suffixes
@@ -8883,6 +8902,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             if (suiviPosture.depuisDecollageS >= 0.2f)
             {
                 suiviPosture.boucleVolDemandee = true;
+                suiviPosture.phaseFranchissement = 1;
+                bool enVolOk = false;
+                Red::CallVirtual(this, "TesseraPousserFranchissement", enVolOk, entityId, true, 1);
                 bool boucleOk = false;
                 Red::CallVirtual(this, "TesseraPousserEvenementAnim", boucleOk, entityId,
                                  Red::CName("ActionLoop"));
@@ -9548,18 +9570,48 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             }
             const float ecartTete =
                 std::fabs(Tessera::Sync::EcartAngulaire(suiviImmobile.yawTenu, yawDuRegard));
-            if (ecartTete > kSeuilTeteDeg)
+            // ⭐ RATTRAPAGE PROGRESSIF (verdict de Lucas, 2026-09-13, sur E2 : « le corps tourne d'un
+            // coup sec, pas assez progressif »). Le seuil franchi ne SAUTE plus le yaw tenu jusqu'au
+            // regard : il ouvre un rattrapage, et le yaw tenu avance vers le regard a vitesse bornee
+            // (`TESSERA_RATTRAPAGE_DEG_S`, defaut 150 deg/s — ~0,6 s pour 90 deg). Le placement a
+            // l'arret porte ce yaw intermediaire, image apres image.
+            static const float kRattrapageDegS = []() {
+                const char* v = std::getenv("TESSERA_RATTRAPAGE_DEG_S");
+                const float s = v ? static_cast<float>(std::atof(v)) : 150.0f;
+                return (s > 1.0f && s < 2000.0f) ? s : 150.0f;
+            }();
+            if (ecartTete > kSeuilTeteDeg && !suiviImmobile.rattrapageEnCours)
             {
-                // La tete a atteint sa limite : le corps rattrape, et on repart d'un cone neuf.
-                suiviImmobile.yawTenu = yawDuRegard;
-                bool suivreOk = false;
-                Red::CallVirtual(this, "TesseraPivoterAvatar", suivreOk, entityId,
-                                 suiviImmobile.yawTenu);
+                suiviImmobile.rattrapageEnCours = true;
                 SDK->logger->InfoF(PLUGIN,
                                    "[avatar %llu] TETE_MENE corps rattrape (ecart=%.0f deg > %.0f) "
-                                   "pivot=%d",
+                                   "a %.0f deg/s",
                                    static_cast<unsigned long long>(networkId), ecartTete,
-                                   kSeuilTeteDeg, suivreOk ? 1 : 0);
+                                   kSeuilTeteDeg, kRattrapageDegS);
+            }
+            if (suiviImmobile.rattrapageEnCours)
+            {
+                const float reste = Tessera::Sync::EcartAngulaire(suiviImmobile.yawTenu, yawDuRegard);
+                const float pas = kRattrapageDegS * deltaTime;
+                if (std::fabs(reste) <= pas || std::fabs(reste) < 2.0f)
+                {
+                    suiviImmobile.yawTenu = yawDuRegard;
+                    suiviImmobile.rattrapageEnCours = false;
+                }
+                else
+                {
+                    suiviImmobile.yawTenu += reste > 0.0f ? pas : -pas;
+                }
+                // Le placement a l'arret ne passe que toutes les 2 s : il ne peut pas porter un yaw
+                // qui avance image par image. On oriente donc le corps par `AIRotateToCommand` vers le
+                // yaw INTERMEDIAIRE, toutes les 0,15 s — une suite de petites rotations au lieu d'une.
+                suiviImmobile.depuisRattrapageS += deltaTime;
+                if (suiviImmobile.depuisRattrapageS >= 0.15f || !suiviImmobile.rattrapageEnCours)
+                {
+                    suiviImmobile.depuisRattrapageS = 0.0f;
+                    bool pivotOk = false;
+                    Red::CallVirtual(this, "TesseraPivoterAvatar", pivotOk, entityId, suiviImmobile.yawTenu);
+                }
             }
             yawCorpsVoulu = suiviImmobile.yawTenu;
         }
@@ -9651,7 +9703,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // flou etait le FLOU CINETIQUE du jeu, un reglage graphique, identifie par Lucas le
                 // 2026-08-27. F-ASC-037 (« le flou vient du placement image par image ») est donc
                 // refute — on avait attribue a notre code un effet qui ne lui appartenait pas.
-                SetEntityPosition(entityId, positionVoulue, pietinementSurPlace ? yawActuel : yawCorpsVoulu);
+                SetEntityPosition(entityId, positionVoulue,
+                                  (pietinementSurPlace || suiviImmobile.rattrapageEnCours) ? yawActuel : yawCorpsVoulu);
             }
             else
             {
@@ -9675,7 +9728,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // que pour un corps QUI MARCHE, appele a chaque image. Ici le regime est
                 // « immobile » par definition, et la cadence est bornee a une fois toutes les
                 // deux secondes.
-                SetEntityPosition(entityId, positionVoulue, pietinementSurPlace ? yawActuel : yawCorpsVoulu);
+                SetEntityPosition(entityId, positionVoulue,
+                                  (pietinementSurPlace || suiviImmobile.rattrapageEnCours) ? yawActuel : yawCorpsVoulu);
             }
         }
 

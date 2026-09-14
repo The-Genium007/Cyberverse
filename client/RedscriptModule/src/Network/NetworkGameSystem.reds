@@ -997,7 +997,10 @@ public native class NetworkGameSystem extends IGameSystem {
         // qui avait produit « la tete ne tourne pas » en aout.
         let tete: LookAtPartRequest;
         tete.partName = n"Head";
-        tete.weight = 0.5;
+        // ⚠️ 1.0 et non plus 0.5 (verdict de Lucas sur E1P, 2026-09-13 : « j'ai du mal à voir ce que ça
+        // fait », après « pas assez franc » le 2026-09-12). Le preset CDPR est un regard de PNJ discret ;
+        // le regard d'un joueur doit se lire à distance. Non mesuré en jeu — à juger sur E1P.
+        tete.weight = 1.0;
         tete.suppress = 0.0;
         tete.mode = 0;
         let parties: array<LookAtPartRequest>;

@@ -357,6 +357,9 @@ struct SuiviAvatar
     /// l'arret tant que le regard reste dans le cone `TESSERA_SEUIL_TETE` (defaut 80 deg).
     float yawTenu = 0.0f;
     bool yawTenuValide = false;
+    /// Rattrapage progressif du corps sur le regard (2026-09-13).
+    bool rattrapageEnCours = false;
+    float depuisRattrapageS = 0.0f;
     /// Temps depuis le dernier `AIRotateToCommand` a l'arret (pivot sur place, F-PLY-443).
     float depuisPivotS = 10.0f;
     /// Piétinement (F-PLY-451) : la commande « sur place » est-elle en cours ? Remis a faux par
@@ -523,6 +526,9 @@ struct SuiviAvatar
     /// Evenement externe du vol : `ActionLoop` se demande une fois, ~0,2 s apres le decollage.
     float depuisDecollageS = 0.0f;
     bool boucleVolDemandee = false;
+    /// Reception du saut en cours (2026-09-13) : `state = 2` tenu, puis retour a `None`.
+    bool receptionEnCours = false;
+    float depuisAtterrissageS = 0.0f;
 
     /// Derniere valeur lue de `TesseraLireLocomotion` (`action * 10 + exploration`), pour
     /// n'ecrire au journal que les CHANGEMENTS d'etat de la machine de deplacement.
