@@ -9660,8 +9660,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // aussi. Le moteur tourne le corps en `IdleTurn` et le cale en `Reposition`, pieds en
         // mouvement ; le yaw ne passe donc plus par le teleport de placement.
         const bool kPietinementMarqueur = PietinementMarqueurActif();
+        // ⭐ LE PIETINEMENT SEULEMENT QUAND LE CORPS DOIT TOURNER (2026-09-14). Mesure du jour, E1P : allume en
+        // permanence, la commande « sur place » garde une marche ACTIVE — le corps derive a 0,3 m/s et suit le
+        // balayage de la tete jusqu'a +-90 deg (sortie du cadre) ; `TESSERA_PIETINEMENT=off`, meme test : corps
+        // immobile. On l'emet donc tant que l'ecart au yaw voulu depasse 8 deg (tenu jusqu'a 3 deg), et on
+        // ANNULE la commande des que le corps est aligne.
+        const float ecartCorpsDeg = std::fabs(Tessera::Sync::EcartAngulaire(yawActuel, yawCorpsVoulu));
+        const bool corpsDoitTourner = kPietinementMarqueur
+            ? (ecartCorpsDeg > (suiviImmobile.pietinementEmis ? 3.0f : kSeuilPivotDeg) || suiviImmobile.rattrapageEnCours)
+            : true;
         const bool pietinementSurPlace = g_marcheSansRelance && (g_pietinement || kPietinementMarqueur) && !pivotSurPlace
-            && !passager && !ciblePortee && deriveFinale <= bandeMorte;
+            && !passager && !ciblePortee && deriveFinale <= bandeMorte && corpsDoitTourner;
+        if (kPietinementMarqueur && !corpsDoitTourner && suiviImmobile.pietinementEmis && !g_suspendreCorrections)
+        {
+            bool fige = false;
+            Red::CallVirtual(this, "TesseraFigerAvatar", fige, entityId);
+            suiviImmobile.pietinementEmis = false;
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] PIETINEMENT fini (ecart=%.1f deg) fige=%d",
+                               static_cast<unsigned long long>(networkId), ecartCorpsDeg, fige ? 1 : 0);
+        }
         if (pietinementSurPlace && !g_suspendreCorrections && suiviImmobile.depuisPivotS >= kPeriodePivotS)
         {
             bool pietinementOk = false;

@@ -929,15 +929,30 @@ public native class NetworkGameSystem extends IGameSystem {
     /// Le regard de BRAS DROIT en cours (F-PLY-460), un par avatar. Retire en meme temps que
     /// celui de la tete : sans ca, chaque mise a jour empilerait un look-at de plus.
     private let m_regardBras: array<ref<LookAtAddEvent>>;
+    // ⭐ LA CIBLE DU REGARD SE DEPLACE, L'EVENEMENT RESTE (2026-09-14). Jusqu'ici chaque ecart de 8 deg RETIRAIT
+    // le look-at et en posait un neuf sur un point fixe : sur un balayage de 70 deg/s, la transition d'entree
+    // repartait de zero toutes les ~0,1 s et la tete ne tournait « a peine » (verdict de Lucas, E1P, homme ;
+    // capture du 2026-09-14 19:22 : tete immobile a poids 1,0). Un fournisseur de position ACCROCHE AU CORPS,
+    // dont on deplace l'offset monde (`IPositionProvider.SetWorldOffset`, lookAtEvents.script:90), laisse
+    // l'evenement vivre et la tete suivre. Non mesure.
+    private let m_regardFournisseur: array<ref<IPositionProvider>>;
+    private let m_regardArme: array<Bool>;
     // Compte les lignes de trace du pointage deja ecrites — s eteint a 20 (voir plus bas).
     // ⚠️ SANS INITIALISEUR, comme ses quatre voisins. Un `= 0` ici etait le SEUL initialiseur
     // de champ du fichier, et il coincide avec la disparition de l'emetteur d'arme
     // (F-PLF-049). `Int32` vaut zero par defaut : l'initialiseur n'apportait rien.
     private let m_pointageTrace: Int32;
 
+    private let m_regardTrace: Int32;
+
     public func TesseraPousserRegard(entityId: EntityID, lookYaw: Float, lookPitch: Float) -> Bool {
-        let ent = GameInstance.FindEntityByID(GetGameInstance(), entityId);
-        let puppet = ent as ScriptedPuppet;
+        // `TesseraCorpsDeLEntite` et non `FindEntityByID` seul : meme resolution que la marche (corps enrichi).
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        // Instrument (2026-09-14) : E1P montre une tete IMMOBILE — l'appel arrive-t-il, et sur quel corps ?
+        if this.m_regardTrace < 12 {
+            this.m_regardTrace += 1;
+            this.Tessera_Journal(s"[Regard] appel yaw=\(Cast<Int32>(lookYaw)) pitch=\(Cast<Int32>(lookPitch)) corps=\(IsDefined(puppet))");
+        }
         if !IsDefined(puppet) {
             return false;
         }
@@ -955,11 +970,23 @@ public native class NetworkGameSystem extends IGameSystem {
             if Equals(this.m_regardCles[i], cle) { trouve = i; }
             i += 1;
         }
+        let origineRegard = puppet.GetWorldPosition();
+        let cosRegard = CosF(Deg2Rad(lookPitch));
+        let offsetRegard = new Vector4(
+            SinF(Deg2Rad(lookYaw)) * 12.0 * cosRegard,
+            CosF(Deg2Rad(lookYaw)) * 12.0 * cosRegard,
+            1.6 + SinF(Deg2Rad(lookPitch)) * 12.0,
+            0.0);
+        let armeRegard = this.Tessera_ArmeDeLEntite(entityId) != TDBID.None();
+        if trouve >= 0 && trouve < ArraySize(this.m_regardFournisseur) && IsDefined(this.m_regardFournisseur[trouve])
+           && trouve < ArraySize(this.m_regardArme) && Equals(this.m_regardArme[trouve], armeRegard) {
+            // Meme evenement : on deplace seulement la cible. La tete poursuit sa rotation sans repartir.
+            this.m_regardFournisseur[trouve].SetWorldOffset(offsetRegard);
+            this.m_regardYaw[trouve] = lookYaw;
+            this.m_regardPitch[trouve] = lookPitch;
+            return true;
+        }
         if trouve >= 0 {
-            if AbsF(this.EcartAngulaireDeg(this.m_regardYaw[trouve], lookYaw)) < 8.0
-               && AbsF(this.m_regardPitch[trouve] - lookPitch) < 8.0 {
-                return true;   // rien n'a bouge : on laisse la tete finir sa transition
-            }
             if IsDefined(this.m_regardEvent[trouve]) {
                 LookAtRemoveEvent.QueueRemoveLookatEvent(puppet, this.m_regardEvent[trouve]);
             }
@@ -979,7 +1006,9 @@ public native class NetworkGameSystem extends IGameSystem {
             1.0);
 
         let ev = new LookAtAddEvent();
-        ev.SetStaticTarget(cible);
+        let fournisseur = IPositionProvider.CreateEntityPositionProvider(puppet);
+        fournisseur.SetWorldOffset(offsetRegard);
+        ev.SetPositionProvider(fournisseur);
         ev.SetStyle(animLookAtStyle.Normal);
 
         // ── ⛔ « LA TETE NE TOURNE PAS » (verdict de Lucas, E1, 2026-09-12) ───────────────────
@@ -1070,6 +1099,14 @@ public native class NetworkGameSystem extends IGameSystem {
         ev.request.limits.softLimitDegrees = 360.0;
         ev.request.limits.hardLimitDegrees = 270.0;
         ev.request.limits.backLimitDegrees = 210.0;
+        // ⚠️ LES DEFAUTS DU SCHEMA NE SONT PAS CEUX DE LA STRUCTURE (2026-09-14). `LookAtPreset`
+        // (`lookat_presets/schema.tweak`) pose `transitionSpeed = 80`, `hardLimitDistance = 1 000 000`,
+        // `followingSpeedFactorOverride = -1` ; un `LookAtAddEvent` neuf porte des ZEROS. Tous les appelants
+        // CDPR recopient le preset champ par champ (`lookAtEvents.script:262-270`). Sans ces trois lignes :
+        // distance limite 0 m et vitesse de transition 0 — la tete du corps enrichi restait IMMOBILE (E1P, E1X).
+        ev.request.transitionSpeed = 80.0;
+        ev.request.limits.hardLimitDistance = 1000000.0;
+        ev.request.followingSpeedFactorOverride = -1.0;
         ev.request.calculatePositionInParentSpace = false;   // cible en espace MONDE
         ev.request.priority = 100;                            // au-dessus des reactions locales
         // ── ON AVAIT COPIÉ LA MAUVAISE RECETTE, ET ELLE SUPPRIME LA TÊTE EXPRÈS ───────────────
@@ -1126,12 +1163,20 @@ public native class NetworkGameSystem extends IGameSystem {
             if trouve < ArraySize(this.m_regardBras) {
                 this.m_regardBras[trouve] = bras;
             }
+            while ArraySize(this.m_regardFournisseur) <= trouve { ArrayPush(this.m_regardFournisseur, null); }
+            while ArraySize(this.m_regardArme) <= trouve { ArrayPush(this.m_regardArme, false); }
+            this.m_regardFournisseur[trouve] = fournisseur;
+            this.m_regardArme[trouve] = armeRegard;
         } else {
             ArrayPush(this.m_regardCles, cle);
             ArrayPush(this.m_regardYaw, lookYaw);
             ArrayPush(this.m_regardPitch, lookPitch);
             ArrayPush(this.m_regardEvent, ev);
             ArrayPush(this.m_regardBras, bras);
+            while ArraySize(this.m_regardFournisseur) < ArraySize(this.m_regardCles) - 1 { ArrayPush(this.m_regardFournisseur, null); }
+            while ArraySize(this.m_regardArme) < ArraySize(this.m_regardCles) - 1 { ArrayPush(this.m_regardArme, false); }
+            ArrayPush(this.m_regardFournisseur, fournisseur);
+            ArrayPush(this.m_regardArme, armeRegard);
         }
         return true;
     }
@@ -1943,13 +1988,9 @@ public native class NetworkGameSystem extends IGameSystem {
         // yaw du corps contredirait la commande en cours. ⚠️ Ne vaut que depuis que le replacement passe
         // par `AITeleportCommand` — avec `Teleport` seul, ce marqueur restait figé à yaw 0.
         if !ArrayContains(this.m_marqueurCles, EntityID.GetHash(entityId)) {
-            // ⚠️ PAS `GetWorldYaw()` : la sonde a relevé un yaw d'entité de signe OPPOSÉ à la convention
-            // de `RotByAngleXY` sur un yaw latéral (+90 contre -90, F-PLY-505/506). On repart du VECTEUR
-            // avant du corps, converti dans la convention du marqueur (avant = (-sin, cos)), pour poser
-            // le marqueur devant l'avatar quel que soit le signe. Hypothèse sur le demi-tour vu par
-            // Lucas en pas de côté (homme, 204144) — non mesuré.
-            let avant = puppet.GetWorldForward();
-            this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), Rad2Deg(AtanF(-avant.X, avant.Y)));
+            // Le marqueur prend un yaw d'ENTITÉ (celui du fil et du placement) et le convertit lui-même
+            // (`-yaw`, 2026-09-14) : on lui passe donc `GetWorldYaw()` tel quel.
+            this.TesseraMarqueurDeRegard(entityId, puppet.GetWorldPosition(), puppet.GetWorldYaw());
         }
         return true;
     }
@@ -2899,16 +2940,29 @@ public native class NetworkGameSystem extends IGameSystem {
     private let m_marqueurRates: Int32;
     private let m_marqueurCles: array<Uint32>;
     private let m_marqueurIds: array<EntityID>;
+    // ⚗️ A/B du SIGNE du marqueur (2026-09-14). Mesure du jour, homme ET femme, marqueur mobile : en pas de
+    // cote le corps releve -90 en marche contre +90 a l'arret, et les videos montrent un avatar de FACE ou de
+    // profil au lieu de dos. L'essai `-yaw` du 2026-09-13 (profil) avait ete juge avec un marqueur FIGE
+    // (F-PLY-506) : il ne departageait rien. MESURE LE 2026-09-14 (A2S, B1MS) : en `-yaw` le corps releve
+    // +90 EN MARCHE comme a l'arret, pas de cote de dos a 1,7 m/s, paliers a l'arret sans derive. `-yaw` devient
+    // le DEFAUT : 0 (defaut) ou -1 = `-yaw` ; +1 = l'ancien `+yaw`, garde pour A/B. Pose par le pont (`marqueur_signe`).
+    private let m_signeMarqueur: Float;
+
+    public func TesseraSigneMarqueur(signe: Float) -> Bool {
+        this.m_signeMarqueur = signe;
+        this.Tessera_Journal("[Marqueur] signe=" + FloatToStringPrec(signe, 0));
+        return true;
+    }
 
     /// Le marqueur de regard d'un avatar : une entité invisible tenue à 30 m devant lui, dans l'axe
     /// de son regard. Créée au premier appel, replacée à chaque commande de marche (une commande
     /// part au plus sur changement d'entrée ou tous les ~2 m : à 30 m, l'erreur d'angle reste < 4°).
     public func TesseraMarqueurDeRegard(entityId: EntityID, ici: Vector4, yaw: Float) -> EntityID {
-        // ⛔ `+yaw`, et NE PAS « corriger » le signe (2026-09-13). Un essai en `-yaw`, décidé sur la sonde
-        // (corps relevé à -90 en mouvement contre +90 à l'arrêt), a fait marcher l'avatar DE PROFIL, face
-        // au déplacement, en pas de côté (vidéo `182428-campagne-A2`). Avec `+yaw` : dos à la caméra,
-        // pas de côté réel. L'écart de la sonde entre mouvement et arrêt reste à expliquer (F-PLY-505).
-        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yaw);
+        // ⭐ `-yaw` (2026-09-14, F-PLY-509+). L'essai `-yaw` du 2026-09-13 (profil, vidéo `182428`) avait été jugé
+        // avec un marqueur FIGÉ par `Teleport` (F-PLY-506) ; remesuré avec le marqueur mobile, `-yaw` aligne le
+        // corps en marche sur son yaw d'arrêt (A2S), et `+yaw` le retourne de 180° en marche (A2, A2F).
+        let yawMarqueur = this.m_signeMarqueur > 0.0 ? yaw : -yaw;
+        let avant = Vector4.RotByAngleXY(new Vector4(0.0, 1.0, 0.0, 0.0), yawMarqueur);
         let cible = new Vector4(ici.X + avant.X * 30.0, ici.Y + avant.Y * 30.0, ici.Z, 1.0);
         let cle = EntityID.GetHash(entityId);
         let i = 0;
