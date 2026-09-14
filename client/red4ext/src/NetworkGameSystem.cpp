@@ -10102,7 +10102,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         static constexpr float kEcartDepuisPlacementM = 0.08f;
         const bool cibleTropLoin =
             s.placeValide && std::fabs(positionVoulue.Z - s.placeZ) > kEcartDepuisPlacementM;
-        if (cibleTropLoin || s.depuisPlaceS >= kPeriodePlacementVolS)
+        // ⚗️ A/B `TESSERA_SAUT_PERIODE=<s>` (2026-09-13). Instrument `[pose]` de la chute D3B : visee.z
+        // monte a 33,7 m, APRES.z et avant.z restent a 29,5 m tout le saut — le corps ne quitte jamais
+        // le sol. Hypothese (non mesuree) : `TeleportPuppet` ANNULE le teleport precedent avant d'en
+        // empiler un neuf ; a 33 Hz, aucun n'a le temps de s'executer. Avec la variable, on espace les
+        // placements en vol et on ne declenche plus sur l'ecart de 8 cm. Sans elle, rien ne change
+        // (l'ascenseur, qui partage `locomotion == 6`, garde sa cadence).
+        static const float kPeriodeSautAB = []() {
+            const char* v = std::getenv("TESSERA_SAUT_PERIODE");
+            const float p = v ? static_cast<float>(std::atof(v)) : 0.0f;
+            return (p > 0.0f && p < 2.0f) ? p : 0.0f;
+        }();
+        const bool placerMaintenant = kPeriodeSautAB > 0.0f
+            ? s.depuisPlaceS >= kPeriodeSautAB
+            : (cibleTropLoin || s.depuisPlaceS >= kPeriodePlacementVolS);
+        if (placerMaintenant)
         {
             // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On
             // suit donc la verticale SANS lissage, et on garde l'amortissement sur l'horizontale.
