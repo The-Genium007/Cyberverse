@@ -241,9 +241,19 @@ public class TesseraArmeAvatar extends DelayCallback {
             return;
         }
         let slot = t"AttachmentSlots.WeaponRight";
+        // Un workspot POSSEDE la main droite (le geste « boire » y fait apparaitre sa canette a +4 s) : la boucle
+        // la retirait aussitot (KF1, 2026-09-15). On ne converge pas pendant un workspot.
+        let workspots = GameInstance.GetWorkspotSystem(jeu);
+        if IsDefined(workspots) && workspots.IsActorInWorkspot(avatar) {
+            return;
+        }
 
         // ── CE QUE LE SERVEUR VEUT, TRADUIT POUR UN PANTIN ───────────────────────────────
         let voulue = reseau.Tessera_ArmeDeLEntite(this.cible);
+        // Sans arme, l'objet d'un geste (canette, cigarette, telephone) prend la main droite (2026-09-15).
+        if TDBID.ToNumber(voulue) == 0ul {
+            voulue = reseau.TesseraGesteObjet(this.cible);
+        }
         let attendue = this.PourPantin(voulue);
 
         // ── CE QUE L'AVATAR TIENT VRAIMENT ───────────────────────────────────────────────

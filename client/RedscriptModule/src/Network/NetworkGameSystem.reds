@@ -3619,6 +3619,24 @@ public native class NetworkGameSystem extends IGameSystem {
         return n"None";
     }
 
+    /// L'OBJET que le geste met dans la main droite (F-PLY-519) : l'item de foule de CDPR, qui pose lui-meme
+    /// sa demarche par son GLP. Lu par `TesseraArmeAvatar` quand le serveur ne donne aucune arme — la meme
+    /// boucle qui converge l'arme converge donc l'objet, sans second ecrivain sur le slot. `TDBID.None()` = rien.
+    public func TesseraGesteObjet(entityId: EntityID) -> TweakDBID {
+        let i = this.TesseraGesteIndex(entityId);
+        if i < 0 {
+            return TDBID.None();
+        }
+        switch this.m_gesteCodes[i] {
+            // PAS le code 1 : le workspot « boire » pose sa propre canette (slot change seul a +4 s), et deux
+            // ecrivains sur le slot pendant le workspot rendaient l'avatar invisible (KF1, 2026-09-15).
+            case 11u: return t"Items.locomotion_crowd_soda_can_a";
+            case 12u: return t"Items.locomotion_crowd_cigarette_i_stick";
+            case 13u: return t"Items.locomotion_crowd_cellphone";
+        }
+        return TDBID.None();
+    }
+
     private func TesseraGesteIndex(entityId: EntityID) -> Int32 {
         let cle = EntityID.GetHash(entityId);
         let i = 0;
