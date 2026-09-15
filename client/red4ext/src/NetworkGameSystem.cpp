@@ -6261,7 +6261,7 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
         if (event->action() == kActionSaut)
         {
             bool pousse = false;
-            Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true, 0);
+            Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true, 0, 0);
             g_telemetrie.Evenement("action_recue", event->actor(),
                                    pousse ? "saut" : "saut_refuse");
         }
@@ -8945,14 +8945,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // d'ou le « on dirait qu'il grimpe » de Lucas. La sequence vraie : 0 au decollage, 1 en vol,
         // 2 a la reception, puis `None`.
         static constexpr float kReceptionS = 0.7f;   // jump_walk_recover = 0,77 s
+        // ⭐ LA CHUTE (Lucas, 2026-09-15 : « pareil pour la chute ») — le jeu derive range `fall_loop` et
+        // `landing_hard` (1,73 s) sous `jump_sprint_*`, que le graphe choisit par `exploration.movementType = 2`.
+        // Un saut de V dure ~1 s en l'air : au-dela de kChuteS, c'est une chute. NON MESURE.
+        // ponytail: seuil de duree de vol, pas la hauteur ; passer a la hauteur perdue si les petites chutes jurent.
+        static constexpr float kChuteS = 1.3f;
+        static constexpr float kReceptionChuteS = 1.6f;
         if (suiviPosture.receptionEnCours && !enVolMaintenant)
         {
             suiviPosture.depuisAtterrissageS += deltaTime;
-            if (suiviPosture.depuisAtterrissageS >= kReceptionS)
+            if (suiviPosture.depuisAtterrissageS >= (suiviPosture.chute ? kReceptionChuteS : kReceptionS))
             {
                 suiviPosture.receptionEnCours = false;
+                suiviPosture.chute = false;
                 bool fin = false;
-                Red::CallVirtual(this, "TesseraPousserFranchissement", fin, entityId, false, 0);
+                Red::CallVirtual(this, "TesseraPousserFranchissement", fin, entityId, false, 0, 0);
             }
         }
         if (suiviPosture.dernierEnVol != enVolMaintenant)
@@ -8960,11 +8967,13 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suiviPosture.dernierEnVol = enVolMaintenant;
             suiviPosture.phaseFranchissement = enVolMaintenant ? 0 : 2;
             suiviPosture.receptionEnCours = !enVolMaintenant;
+            if (enVolMaintenant)
+                suiviPosture.chute = false;
             suiviPosture.depuisAtterrissageS = 0.0f;
             bool franchi = false;
             // A la reception, le type RESTE `Jump` (sinon on quitte l'etat avant `_recover`).
             Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, true,
-                             suiviPosture.phaseFranchissement);
+                             suiviPosture.phaseFranchissement, suiviPosture.chute ? 2 : 0);
             // ⭐ ET L'EVENEMENT EXTERNE, le cinquieme canal (F-PLY-485) : le graphe ecoute
             // `ActionStartup` / `ActionLoop` / `ActionRecovery`, qui portent exactement les suffixes
             // des clips de franchissement (`jump_walk_startup` / `_loop` / `_recover`, F-PLY-475).
@@ -8990,15 +8999,23 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                    enVolMaintenant ? (franchi ? "decollage" : "decollage_refuse")
                                                    : (franchi ? "sol" : "sol_refuse"));
         }
-        else if (enVolMaintenant && !suiviPosture.boucleVolDemandee)
+        else if (enVolMaintenant)
         {
             suiviPosture.depuisDecollageS += deltaTime;
-            if (suiviPosture.depuisDecollageS >= 0.2f)
+            if (!suiviPosture.chute && suiviPosture.depuisDecollageS >= kChuteS)
+            {
+                suiviPosture.chute = true;
+                bool chuteOk = false;
+                Red::CallVirtual(this, "TesseraPousserFranchissement", chuteOk, entityId, true, 1, 2);
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] CHUTE pose=%d",
+                                   static_cast<unsigned long long>(networkId), chuteOk ? 1 : 0);
+            }
+            if (!suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= 0.2f)
             {
                 suiviPosture.boucleVolDemandee = true;
                 suiviPosture.phaseFranchissement = 1;
                 bool enVolOk = false;
-                Red::CallVirtual(this, "TesseraPousserFranchissement", enVolOk, entityId, true, 1);
+                Red::CallVirtual(this, "TesseraPousserFranchissement", enVolOk, entityId, true, 1, 0);
                 bool boucleOk = false;
                 Red::CallVirtual(this, "TesseraPousserEvenementAnim", boucleOk, entityId,
                                  Red::CName("ActionLoop"));

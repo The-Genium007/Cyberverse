@@ -2625,7 +2625,9 @@ public native class NetworkGameSystem extends IGameSystem {
         return TesseraHabillerLeCorps(entityId, passe);
     }
 
-    public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool, phase: Int32) -> Bool {
+    /// `typeMouvement` = `exploration.movementType` : 0 saut (`jump_walk_*`), 2 CHUTE (`jump_sprint_*`, que le jeu
+    /// derive du saut remplit de `fall_loop` et `landing_hard` — Switch lu dans `humanoid.animgraph`, 2026-09-15).
+    public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool, phase: Int32, typeMouvement: Int32) -> Bool {
         let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
         if !IsDefined(puppet) {
@@ -2674,6 +2676,7 @@ public native class NetworkGameSystem extends IGameSystem {
         let trait = new animAnimFeature_NPCExploration();
         trait.explorationType = enVol ? 2 : 0;   // moveExplorationType : Jump = 2, None = 0
         trait.state = phase;
+        trait.movementType = typeMouvement;
         AnimationControllerComponent.ApplyFeature(puppet, n"exploration", trait);
         return true;
     }
