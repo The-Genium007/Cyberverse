@@ -3610,6 +3610,13 @@ public native class NetworkGameSystem extends IGameSystem {
         return n"None";
     }
 
+    private func TesseraGesteClipForce(code: Uint32) -> CName {
+        switch code {
+            case 1u: return n"stand__rh_can__01__drink__01";
+        }
+        return n"None";
+    }
+
     private func TesseraGesteWrapper(code: Uint32) -> CName {
         switch code {
             case 11u: return n"CanLocomotion";
@@ -3753,6 +3760,15 @@ public native class NetworkGameSystem extends IGameSystem {
         // Joue par le `DelaySystem`, hors du tick natif. (L'invisibilite qui l'avait motive venait en fait de
         // l'orientation du porteur — voir `TesseraPorteurDeGeste` ; l'indirection est gardee, elle est sans cout.)
         GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(TesseraGesteRappel.Creer(entityId, this.m_gestePorteurs[i], this.TesseraGesteComposant(this.m_gesteCodes[i]), 1), 0.0, false);
+        // ⭐ BOIRE = LE CLIP DE GORGEE, PAS LA LISTE ALEATOIRE (verdict de Lucas, 2026-09-15, sur `183904` : « c'est pas
+        // l'animation »). Le workspot tire au hasard parmi `drink__01/03/04`, `shuffle__01`, `spill__01/02` (renverser,
+        // se dandiner). Apres l'animation d'entree qui sort la canette (`…__to__stand__rh_can__01__turn0__01`, ~3 s,
+        // evenement `WorkspotItem` `Items.crowd_soda_can_a`), on force la gorgee. NON MESURE.
+        let clipForce = this.TesseraGesteClipForce(this.m_gesteCodes[i]);
+        if NotEquals(clipForce, n"None") {
+            let rappel = TesseraGesteRappel.Creer(entityId, this.m_gestePorteurs[i], clipForce, 3);
+            GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(rappel, 3.5, false);
+        }
         this.m_gesteJoues[i] = true;
         this.Tessera_Journal(s"[Geste] code=\(this.m_gesteCodes[i]) joue sur le porteur");
         return true;
@@ -3924,7 +3940,7 @@ public class TesseraGesteRappel extends DelayCallback {
     let avatar: EntityID;
     let porteur: EntityID;
     let composant: CName;
-    let mode: Int32;   // 0 sortie · 1 jouer · 2 creer le porteur
+    let mode: Int32;   // 0 sortie · 1 jouer · 2 creer le porteur · 3 forcer le clip `composant` dans le workspot
 
     public static func Creer(avatar: EntityID, porteur: EntityID, composant: CName, mode: Int32) -> ref<TesseraGesteRappel> {
         let r = new TesseraGesteRappel();
@@ -3943,6 +3959,12 @@ public class TesseraGesteRappel extends DelayCallback {
         }
         if this.mode == 2 {
             GameInstance.GetNetworkGameSystem().TesseraGesteCreerPorteur(this.avatar);
+            return;
+        }
+        if this.mode == 3 {
+            if workspots.IsActorInWorkspot(puppet) {
+                workspots.SendJumpToAnimEnt(puppet, this.composant, false);
+            }
             return;
         }
         if this.mode == 1 {
