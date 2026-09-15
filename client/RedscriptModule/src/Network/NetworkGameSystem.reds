@@ -3622,6 +3622,18 @@ public native class NetworkGameSystem extends IGameSystem {
     /// L'OBJET que le geste met dans la main droite (F-PLY-519) : l'item de foule de CDPR, qui pose lui-meme
     /// sa demarche par son GLP. Lu par `TesseraArmeAvatar` quand le serveur ne donne aucune arme — la meme
     /// boucle qui converge l'arme converge donc l'objet, sans second ecrivain sur le slot. `TDBID.None()` = rien.
+    public func TesseraAnnulerPlacements(entityId: EntityID) -> Bool {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        let controleur = IsDefined(puppet) ? puppet.GetAIControllerComponent() : null;
+        if !IsDefined(controleur) {
+            return false;
+        }
+        controleur.CancelOrInterruptCommand(n"AITeleportCommand", true, false);
+        controleur.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
+        controleur.CancelOrInterruptCommand(n"AIHoldPositionCommand", true, false);
+        return true;
+    }
+
     public func TesseraGesteObjet(entityId: EntityID) -> TweakDBID {
         let i = this.TesseraGesteIndex(entityId);
         if i < 0 {

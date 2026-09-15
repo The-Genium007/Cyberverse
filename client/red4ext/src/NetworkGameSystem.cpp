@@ -686,6 +686,15 @@ std::set<uint64_t> g_gestesEnAttente;
 // qui rend (K1) — aucune commande ni correction ne doit sortir le corps du porteur.
 std::set<uint64_t> g_avatarsEnGeste;
 static bool EstCodeGeste(std::uint32_t code) { return code >= 1u && code < 1000u; }
+// Saut par ecriture directe du moveComponent (2026-09-15, defaut allume ; `TESSERA_SAUT_DIRECT=0` coupe).
+static bool SautDirectActif()
+{
+    static const bool actif = []() {
+        const char* v = std::getenv("TESSERA_SAUT_DIRECT");
+        return v == nullptr || std::string(v) != "0";
+    }();
+    return actif;
+}
 
 // ⭐ LE PLAN DE BITS DE `PositionUpdate.flags` — voir le commentaire a l'emission pour le
 // raisonnement complet. Une seule declaration, pour que l'emetteur et le recepteur ne puissent
@@ -8967,6 +8976,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suiviPosture.boucleVolDemandee = false;
             if (enVolMaintenant)
             {
+                // Un placement au sol encore en file (AITeleportCommand du regime immobile) se resoudrait EN VOL
+                // et ramenerait le corps au sol : mesure 2026-09-15, z qui retombe a 27,5 m pendant l'ecriture
+                // directe. On les annule au decollage.
+                bool annule = false;
+                Red::CallVirtual(this, "TesseraAnnulerPlacements", annule, entityId);
                 SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT phase=%d pose=%d evenement=%d",
                                    static_cast<unsigned long long>(networkId),
                                    suiviPosture.phaseFranchissement, franchi ? 1 : 0,
@@ -10218,9 +10232,33 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             const float p = v ? static_cast<float>(std::atof(v)) : 0.0f;
             return (p > 0.0f && p < 2.0f) ? p : 0.0f;
         }();
-        const bool placerMaintenant = kPeriodeSautAB > 0.0f
+        // ⭐ ESSAI `TESSERA_SAUT_DIRECT` (2026-09-15, defaut ALLUME, `=0` coupe). F-PLY-516 : aucun
+        // `AITeleportCommand` ne prend en l'air, meme espace de 0,2 s. L'ecriture directe de l'entree active du
+        // moveComponent (F-PLY-337) est la seule qui porte deja un corps a la verticale — les passagers de
+        // cabine. On l'emploie a CHAQUE image en vol, sans cadence et sans ordre d'IA.
+        const bool kSautDirect = SautDirectActif();
+        if (kSautDirect)
+        {
+            const RED4ext::Vector4 volDirect{
+                position.X + dx * kFractionCorrection,
+                position.Y + dy * kFractionCorrection,
+                positionVoulue.Z,
+                1.0f};
+            int32_t raison = -1;
+            Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", raison, entityId, volDirect);
+            s.depuisLogS += deltaTime;
+            if (std::fabs(volDirect.Z - position.Z) > 0.05f && s.depuisLogS >= 0.2f)
+            {
+                s.depuisLogS = 0.0f;
+                const auto relu = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+                SDK->logger->InfoF(PLUGIN,
+                    "[saut-direct %llu] raison=%d visee.z=%.3f avant.z=%.3f APRES.z=%.3f",
+                    networkId, raison, volDirect.Z, position.Z, relu.Z);
+            }
+        }
+        const bool placerMaintenant = !kSautDirect && (kPeriodeSautAB > 0.0f
             ? s.depuisPlaceS >= kPeriodeSautAB
-            : (cibleTropLoin || s.depuisPlaceS >= kPeriodePlacementVolS);
+            : (cibleTropLoin || s.depuisPlaceS >= kPeriodePlacementVolS));
         if (placerMaintenant)
         {
             // Un saut dure moins d'une seconde : l'amortir reviendrait à ne jamais le montrer. On
@@ -10654,7 +10692,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
 
     // ⚠️ Suspension de mesure (voir `g_suspendreCommandes`) : on n'emet plus la commande de
     // marche, pour qu'un test de placement ne soit pas defait par notre propre boucle.
-    if (g_suspendreCommandes)
+    // En vol, une commande de marche RECOLLE le corps au sol une image sur deux (mesure 2026-09-15, D1P contre
+    // D1S) : on n'en emet pas tant que l'ecriture directe porte le saut.
+    if (g_suspendreCommandes || (SautDirectActif() && enLair))
     {
         return;
     }
