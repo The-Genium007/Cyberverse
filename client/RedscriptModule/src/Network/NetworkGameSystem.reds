@@ -631,6 +631,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // (F-MND-047 : tête, bras, poings nus, connecteur d'interaction).
     public native func Tessera_PreserverTaille() -> Int32;
     public native func Tessera_PreserverId(index: Int32) -> String;
+    public native func Tessera_SignalerGeste(code: Uint32, debut: Bool) -> Bool;
 
 
     public func SpawnTransientEntity(entityName: TweakDBID, worldPosition: Vector4, worldOrientation: Quaternion) -> EntityID {
@@ -3923,6 +3924,51 @@ public class TesseraGesteRappel extends DelayCallback {
             if workspots.IsActorInWorkspot(puppet) {
                 workspots.StopNpcInWorkspot(puppet);
             }
+        }
+    }
+}
+
+// ── ⭐ L'EMETTEUR DU GESTE « BOIRE » (2026-09-14, decision de Lucas) ──────────────────────────────────
+//
+// Quand le joueur LOCAL consomme une boisson, les autres voient l'animation PNJ « boire une canette » (code 1,
+// F-PLY-518). `ItemActionsHelper.ConsumeItem` est l'entonnoir de toute consommation : inventaire, raccourci,
+// objet ramasse (`rpgManager.script:3092`, `player.script:2406`). Manger n'a pas d'animation decidee : rien.
+//
+// La fin est une duree fixe (6 s, un cycle du geste). A terme, l'objet se TIENT en main avant d'etre bu
+// (code 11) — cycle complet a trancher par Lucas.
+@wrapMethod(ItemActionsHelper)
+public static func ConsumeItem(executor: wref<GameObject>, itemID: ItemID, fromInventory: Bool) -> Void {
+    wrappedMethod(executor, itemID, fromInventory);
+    let joueur = executor as PlayerPuppet;
+    if !IsDefined(joueur) {
+        return;
+    }
+    let record = TweakDBInterface.GetItemRecord(ItemID.GetTDBID(itemID));
+    if !IsDefined(record) || !record.TagsContains(n"Drink") {
+        return;
+    }
+    let reseau = GameInstance.GetNetworkGameSystem();
+    if !IsDefined(reseau) {
+        return;
+    }
+    let emis = reseau.Tessera_SignalerGeste(1u, true);
+    reseau.Tessera_Journal(s"[Geste] joueur local boit \(TDBID.ToStringDEBUG(ItemID.GetTDBID(itemID))) emis=\(emis)");
+    GameInstance.GetDelaySystem(joueur.GetGame()).DelayCallback(TesseraFinGesteLocal.Creer(1u), 6.0, false);
+}
+
+public class TesseraFinGesteLocal extends DelayCallback {
+    let code: Uint32;
+
+    public static func Creer(code: Uint32) -> ref<TesseraFinGesteLocal> {
+        let r = new TesseraFinGesteLocal();
+        r.code = code;
+        return r;
+    }
+
+    public func Call() -> Void {
+        let reseau = GameInstance.GetNetworkGameSystem();
+        if IsDefined(reseau) {
+            reseau.Tessera_SignalerGeste(this.code, false);
         }
     }
 }
