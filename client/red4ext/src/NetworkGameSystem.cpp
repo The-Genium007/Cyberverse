@@ -8947,9 +8947,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         static constexpr float kReceptionS = 0.7f;   // jump_walk_recover = 0,77 s
         // ⭐ LA CHUTE (Lucas, 2026-09-15 : « pareil pour la chute ») — le jeu derive range `fall_loop` et
         // `landing_hard` (1,73 s) sous `jump_sprint_*`, que le graphe choisit par `exploration.movementType = 2`.
-        // Un saut retombe a sa hauteur de depart : descendre de plus de kChuteM SOUS le decollage, c'est une
-        // chute. (Pas la duree de vol : la chute de 3 m du test D3B ne dure que 1,3 s, autant qu'un saut.) NON MESURE.
-        static constexpr float kChuteM = 1.5f;
+        // Un saut de V redescend de ~1,5 m depuis son sommet : descendre de plus de kChuteM sous le point le plus
+        // HAUT du vol, c'est une chute. (Pas la duree de vol : la chute de 3 m du test D3B ne dure que 1,3 s, autant
+        // qu'un saut. Pas le point de decollage : le drapeau « en l'air » peut arriver avant la position — mesure
+        // D3B 20:46, une seule chute reconnue sur quatre.)
+        static constexpr float kChuteM = 2.0f;
         static constexpr float kReceptionChuteS = 1.6f;
         if (suiviPosture.receptionEnCours && !enVolMaintenant)
         {
@@ -9005,6 +9007,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         else if (enVolMaintenant)
         {
             suiviPosture.depuisDecollageS += deltaTime;
+            suiviPosture.zDecollage = std::max(suiviPosture.zDecollage, pose.z);
             if (!suiviPosture.chute && suiviPosture.zDecollage - pose.z > kChuteM)
             {
                 suiviPosture.chute = true;
