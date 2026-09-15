@@ -526,8 +526,9 @@ struct SuiviAvatar
     /// Evenement externe du vol : `ActionLoop` se demande une fois, ~0,2 s apres le decollage.
     float depuisDecollageS = 0.0f;
     bool boucleVolDemandee = false;
-    /// Vol plus long qu'un saut : bascule `exploration.movementType = 2` (chute, `fall_loop` + `landing_hard`).
+    /// Descente sous le point de decollage : bascule `exploration.movementType = 2` (chute, `fall_loop` + `landing_hard`).
     bool chute = false;
+    float zDecollage = 0.0f;
     /// Reception du saut en cours (2026-09-13) : `state = 2` tenu, puis retour a `None`.
     bool receptionEnCours = false;
     float depuisAtterrissageS = 0.0f;

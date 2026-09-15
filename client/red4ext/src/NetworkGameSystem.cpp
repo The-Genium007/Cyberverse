@@ -8947,9 +8947,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         static constexpr float kReceptionS = 0.7f;   // jump_walk_recover = 0,77 s
         // ⭐ LA CHUTE (Lucas, 2026-09-15 : « pareil pour la chute ») — le jeu derive range `fall_loop` et
         // `landing_hard` (1,73 s) sous `jump_sprint_*`, que le graphe choisit par `exploration.movementType = 2`.
-        // Un saut de V dure ~1 s en l'air : au-dela de kChuteS, c'est une chute. NON MESURE.
-        // ponytail: seuil de duree de vol, pas la hauteur ; passer a la hauteur perdue si les petites chutes jurent.
-        static constexpr float kChuteS = 1.3f;
+        // Un saut retombe a sa hauteur de depart : descendre de plus de kChuteM SOUS le decollage, c'est une
+        // chute. (Pas la duree de vol : la chute de 3 m du test D3B ne dure que 1,3 s, autant qu'un saut.) NON MESURE.
+        static constexpr float kChuteM = 1.5f;
         static constexpr float kReceptionChuteS = 1.6f;
         if (suiviPosture.receptionEnCours && !enVolMaintenant)
         {
@@ -8968,7 +8968,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suiviPosture.phaseFranchissement = enVolMaintenant ? 0 : 2;
             suiviPosture.receptionEnCours = !enVolMaintenant;
             if (enVolMaintenant)
+            {
                 suiviPosture.chute = false;
+                suiviPosture.zDecollage = pose.z;
+            }
             suiviPosture.depuisAtterrissageS = 0.0f;
             bool franchi = false;
             // A la reception, le type RESTE `Jump` (sinon on quitte l'etat avant `_recover`).
@@ -9002,7 +9005,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         else if (enVolMaintenant)
         {
             suiviPosture.depuisDecollageS += deltaTime;
-            if (!suiviPosture.chute && suiviPosture.depuisDecollageS >= kChuteS)
+            if (!suiviPosture.chute && suiviPosture.zDecollage - pose.z > kChuteM)
             {
                 suiviPosture.chute = true;
                 bool chuteOk = false;
