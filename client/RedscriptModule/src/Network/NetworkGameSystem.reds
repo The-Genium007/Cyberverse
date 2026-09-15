@@ -3622,6 +3622,10 @@ public native class NetworkGameSystem extends IGameSystem {
             case 11u: return n"CanLocomotion";
             case 12u: return n"CigaretteLocomotion";
             case 13u: return n"CellphoneTalkingLocomotion";
+            // BOIRE EN MARCHANT : jeu DERIVE `tessera_<sexe>_boire_marche.anims` (jambes de la marche canette, haut du
+            // corps de la gorgee `drink__01`), entree a priorite 121 au-dessus de `CanLocomotion` que l'item pose.
+            // Archive `construire-boire-marche-glb.py`. NON MESURE en jeu.
+            case 14u: return n"TesseraBoireMarche";
         }
         return n"None";
     }
@@ -3650,6 +3654,7 @@ public native class NetworkGameSystem extends IGameSystem {
             // PAS le code 1 : le workspot « boire » pose sa propre canette (slot change seul a +4 s), et deux
             // ecrivains sur le slot pendant le workspot rendaient l'avatar invisible (KF1, 2026-09-15).
             case 11u: return t"Items.locomotion_crowd_soda_can_a";
+            case 14u: return t"Items.locomotion_crowd_soda_can_a";
             case 12u: return t"Items.locomotion_crowd_cigarette_i_stick";
             case 13u: return t"Items.locomotion_crowd_cellphone";
         }
@@ -4003,9 +4008,12 @@ public static func ConsumeItem(executor: wref<GameObject>, itemID: ItemID, fromI
     if !IsDefined(reseau) {
         return;
     }
-    let emis = reseau.Tessera_SignalerGeste(1u, true);
-    reseau.Tessera_Journal(s"[Geste] joueur local boit \(TDBID.ToStringDEBUG(ItemID.GetTDBID(itemID))) emis=\(emis)");
-    GameInstance.GetDelaySystem(joueur.GetGame()).DelayCallback(TesseraFinGesteLocal.Creer(1u), 6.0, false);
+    // Le joueur qui MARCHE boit en marchant (code 14, jeu derive), a l'arret il boit par le workspot (code 1).
+    // Seuil 0,4 m/s : celui de CDPR pour « en mouvement » (`agentMovingHitPrereqCondition.script:22`). NON MESURE.
+    let code = Vector4.Length2D(joueur.GetVelocity()) > 0.4 ? 14u : 1u;
+    let emis = reseau.Tessera_SignalerGeste(code, true);
+    reseau.Tessera_Journal(s"[Geste] joueur local boit \(TDBID.ToStringDEBUG(ItemID.GetTDBID(itemID))) code=\(code) emis=\(emis)");
+    GameInstance.GetDelaySystem(joueur.GetGame()).DelayCallback(TesseraFinGesteLocal.Creer(code), 6.0, false);
 }
 
 public class TesseraFinGesteLocal extends DelayCallback {
