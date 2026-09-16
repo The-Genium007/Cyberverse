@@ -848,6 +848,7 @@ constexpr uint8_t kComportementATerre = 5;
 /// cette table qui permet de rejouer l'apparence a son attachement.
 std::deque<EtatAscenseurRecu> g_ascenseursRecus;
 int32_t g_ascenseursTotalRecus = 0;
+std::deque<VerdictPostureRecu> g_verdictsPostureRecus;
 /// Range une ligne pour le script, en BORNANT la file.
 ///
 /// ⚠️ Quand la borne est atteinte on jette la PLUS ANCIENNE **et on le dit** : une file qui perd
@@ -2122,6 +2123,9 @@ void NetworkGameSystem::PollIncomingMessages()
                     break;
                 case cyberpunk_rp::protocol::ServerMsg_StaffMode:
                     HandleStaffMode(env->msg_as_StaffMode());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_PostureResult:
+                    HandlePostureResult(env->msg_as_PostureResult());
                     break;
                 case cyberpunk_rp::protocol::ServerMsg_ActionCatalog:
                     HandleActionCatalog(env->msg_as_ActionCatalog());
@@ -3640,6 +3644,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // (F-PLY-303, mesure du 2026-08-24 — recensement exhaustif des accesseurs `ps->...()`).
             // Toute la moitie « les autres me voient assis » reposait sur un canal a zero lecteur.
             pose.sustained = ps->sustained();
+            pose.postureSpot = ps->posture_spot();
             // QUI LE PORTE (ADR 0039). `frame` = 0 a pied, sinon l'EntityID de la cabine. On ne
             // s'en sert pas pour placer le corps — la position reste une position MONDE — mais
             // pour savoir qu'un AUTRE systeme le place deja, et lui laisser la verticale.
@@ -4703,6 +4708,23 @@ void NetworkGameSystem::HandleStaffMode(const cyberpunk_rp::protocol::StaffMode*
     // au premier message manque, et plus rien ne la remettrait d aplomb.
     m_modeStaff = msg->on();
     SDK->logger->InfoF(PLUGIN, "StaffMode : %s", m_modeStaff ? "ON" : "OFF");
+}
+
+void NetworkGameSystem::HandlePostureResult(const cyberpunk_rp::protocol::PostureResult* msg)
+{
+    if (msg == nullptr)
+    {
+        return;
+    }
+    constexpr size_t kFileMax = 8;
+    while (g_verdictsPostureRecus.size() >= kFileMax)
+    {
+        g_verdictsPostureRecus.pop_front();
+    }
+    g_verdictsPostureRecus.push_back({msg->emplacement(), msg->ok(), msg->reason()});
+    SDK->logger->InfoF(PLUGIN, "PostureResult : emplacement=%llu %s motif=%u",
+        static_cast<unsigned long long>(msg->emplacement()), msg->ok() ? "accepte" : "refuse",
+        msg->reason());
 }
 
 void NetworkGameSystem::HandleCommandCatalog(const cyberpunk_rp::protocol::CommandCatalog* msg)
@@ -8532,10 +8554,12 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // Meme discipline que l'accroupissement juste au-dessus : SUR CHANGEMENT, jamais en
         // continu — une ecriture par avatar et par frame a fait tomber le jeu deux fois le
         // 2026-08-06.
-        if (suiviPosture.derniereSustained != pose.sustained)
+        if (suiviPosture.derniereSustained != pose.sustained
+            || suiviPosture.dernierPostureSpot != pose.postureSpot)
         {
             const std::uint32_t precedente = suiviPosture.derniereSustained;
             suiviPosture.derniereSustained = pose.sustained;
+            suiviPosture.dernierPostureSpot = pose.postureSpot;
             bool appliquee = false;
             // ⭐ GESTES (1-999) : un porteur de workspot ou un poids de wrapper, jamais un emplacement
             // du monde. On quitte le geste precedent avant tout autre etat.
@@ -8552,7 +8576,16 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // La sentinelle initiale ne correspond à aucune posture à quitter.
                 if (precedente != 0xFFFFFFFFu && !precedentEtaitGeste)
                 {
-                    Red::CallVirtual(this, "TesseraQuitterPostureAvatar", appliquee, entityId);
+                    const auto joueur = Cyberverse::Utils::GetPlayer();
+                    if (joueur != nullptr)
+                    {
+                        Red::CallVirtual(joueur, "TesseraQuitterPostureAvatarMonde", appliquee,
+                                         entityId);
+                    }
+                    if (!appliquee)
+                    {
+                        Red::CallVirtual(this, "TesseraQuitterPostureAvatar", appliquee, entityId);
+                    }
                 }
                 suiviPosture.postureWorkspotAppliquee = false;
             }
@@ -8570,8 +8603,18 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             }
             else
             {
-                Red::CallVirtual(this, "TesseraTenirPostureAvatar", appliquee, entityId,
-                                 pose.sustained, positionVoulue);
+                const auto joueur = Cyberverse::Utils::GetPlayer();
+                if (joueur != nullptr)
+                {
+                    Red::CallVirtual(joueur, "TesseraTenirPostureAvatarMonde", appliquee,
+                                     entityId, pose.sustained, pose.postureSpot);
+                }
+                if (!appliquee)
+                {
+                    // Repli pour un modset ancien sans tessera-uikit.
+                    Red::CallVirtual(this, "TesseraTenirPostureAvatar", appliquee, entityId,
+                                     pose.sustained, positionVoulue);
+                }
                 suiviPosture.postureWorkspotAppliquee = appliquee;
             }
             char detail[64];
@@ -8967,7 +9010,13 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         if (suiviPosture.dernierEnVol != enVolMaintenant)
         {
             suiviPosture.dernierEnVol = enVolMaintenant;
-            suiviPosture.phaseFranchissement = enVolMaintenant ? 0 : 2;
+            // ⚗️ SONDE 2026-09-16 : le creneau 2 (`recover`) n'est JAMAIS joue (A/B du 205724 et du 175346) ;
+            // le creneau 1 (`loop`) l'est, et sa derniere image reste tenue au sol. On essaie donc les deux
+            // creneaux qui MARCHENT : 1 en vol, 0 a la reception (avec l'animation de reception dans le
+            // creneau `startup` de l'archive de sonde). `TESSERA_PHASES_INVERSEES=0` rend l'ordre d'origine.
+            static const bool kPhasesInversees = []{ const char* v = std::getenv("TESSERA_PHASES_INVERSEES"); return !v || v[0] != '0'; }();
+            suiviPosture.phaseFranchissement = kPhasesInversees ? (enVolMaintenant ? 1 : 0)
+                                                                : (enVolMaintenant ? 0 : 2);
             suiviPosture.receptionEnCours = !enVolMaintenant;
             if (enVolMaintenant)
             {
@@ -9000,6 +9049,14 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                    suiviPosture.phaseFranchissement, franchi ? 1 : 0,
                                    evenementOk ? 1 : 0);
             }
+            if (!enVolMaintenant)
+            {
+                // ⚗️ La RECEPTION ne s'affiche pas (F-PLY-528) : on veut savoir si la poussee part vraiment.
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECEPTION phase=%d type=%d pose=%d",
+                                   static_cast<unsigned long long>(networkId),
+                                   suiviPosture.phaseFranchissement, suiviPosture.chute ? 2 : 0,
+                                   franchi ? 1 : 0);
+            }
             g_telemetrie.Evenement("franchissement", networkId,
                                    enVolMaintenant ? (franchi ? "decollage" : "decollage_refuse")
                                                    : (franchi ? "sol" : "sol_refuse"));
@@ -9019,7 +9076,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             if (!suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= 0.2f)
             {
                 suiviPosture.boucleVolDemandee = true;
-                suiviPosture.phaseFranchissement = 1;
+                suiviPosture.phaseFranchissement = 1;   // idempotent si les phases sont inversees
                 bool enVolOk = false;
                 Red::CallVirtual(this, "TesseraPousserFranchissement", enVolOk, entityId, true, 1, 0);
                 bool boucleOk = false;
