@@ -3620,15 +3620,22 @@ public native class NetworkGameSystem extends IGameSystem {
         return n"None";
     }
 
+    private func TesseraGesteClipSortie(code: Uint32) -> CName {
+        switch code {
+            case 1u: return n"stand__rh_can__01__to__stand__2h_on_sides__01__turn0__01";
+        }
+        return n"None";
+    }
+
     private func TesseraGesteWrapper(code: Uint32) -> CName {
         switch code {
             case 11u: return n"CanLocomotion";
             case 12u: return n"CigaretteLocomotion";
             case 13u: return n"CellphoneTalkingLocomotion";
-            // BOIRE EN MARCHANT : jeu DERIVE `tessera_<sexe>_boire_marche.anims` (jambes de la marche canette, haut du
-            // corps de la gorgee `drink__01`), entree a priorite 121 au-dessus de `CanLocomotion` que l'item pose.
-            // Archive `construire-boire-marche-glb.py`. NON MESURE en jeu.
-            case 14u: return n"TesseraBoireMarche";
+            // BOIRE EN MARCHANT : ⛔ VERDICT DE LUCAS sur KF4 (2026-09-15) — « il boit pas en marchant, ca marche pas
+            // forcement bien ». Le jeu derive `tessera_<sexe>_boire_marche.anims` existe (F-PLY-526) mais n'est PAS
+            // chaine : boire en marchant = canette en main, la gorgee attend l'arret.
+            case 14u: return n"CanLocomotion";
         }
         return n"None";
     }
@@ -3798,9 +3805,16 @@ public native class NetworkGameSystem extends IGameSystem {
                 // redescend (idee de Lucas) ; la sortie dure `StopNpcInWorkspot` se fait au geste suivant.
                 let workspots = GameInstance.GetWorkspotSystem(GetGameInstance());
                 if IsDefined(workspots) && workspots.IsActorInWorkspot(puppet) {
-                    // ⚠️ `SendSlowExitSignal` essaye le 2026-09-14 (KF1 203943) : l'avatar DISPARAIT pendant
-                    // toute la pause, et reste « en workspot ». Sortie DURE, porteur garde jusqu'au geste suivant.
-                    GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(TesseraGesteRappel.Creer(entityId, new EntityID(), n"None", 0), 0.0, false);
+                    // Rangement d'abord (mode 4, animation de sortie nommee), sortie DURE 2,5 s plus tard en filet.
+                    // Le porteur reste jusqu'au geste suivant : le supprimer ici faisait disparaitre l'avatar.
+                    let sortie = this.TesseraGesteClipSortie(this.m_gesteCodes[i]);
+                    let delais = GameInstance.GetDelaySystem(GetGameInstance());
+                    if NotEquals(sortie, n"None") {
+                        delais.DelayCallback(TesseraGesteRappel.Creer(entityId, new EntityID(), sortie, 4), 0.0, false);
+                        delais.DelayCallback(TesseraGesteRappel.Creer(entityId, new EntityID(), n"None", 0), 2.5, false);
+                    } else {
+                        delais.DelayCallback(TesseraGesteRappel.Creer(entityId, new EntityID(), n"None", 0), 0.0, false);
+                    }
                 }
             }
         }
@@ -3948,7 +3962,7 @@ public class TesseraGesteRappel extends DelayCallback {
     let avatar: EntityID;
     let porteur: EntityID;
     let composant: CName;
-    let mode: Int32;   // 0 sortie · 1 jouer · 2 creer le porteur · 3 forcer le clip `composant` dans le workspot
+    let mode: Int32;   // 0 sortie dure · 1 jouer · 2 creer le porteur · 3 forcer le clip · 4 rangement (sortie lente nommee)
 
     public static func Creer(avatar: EntityID, porteur: EntityID, composant: CName, mode: Int32) -> ref<TesseraGesteRappel> {
         let r = new TesseraGesteRappel();
@@ -3970,9 +3984,26 @@ public class TesseraGesteRappel extends DelayCallback {
             return;
         }
         if this.mode == 3 {
-            if workspots.IsActorInWorkspot(puppet) {
-                workspots.SendJumpToAnimEnt(puppet, this.composant, false);
+            // ⚠️ `instant = true` : c'est ainsi que CDPR l'appelle (`locomotionTakedown.script:331`). Avec `false`
+            // (2026-09-15, KF1) Lucas n'a vu QUE l'animation d'entree — « sortir quelque chose de sa poche ».
+            let dedans = workspots.IsActorInWorkspot(puppet);
+            if dedans {
+                workspots.SendJumpToAnimEnt(puppet, this.composant, true);
             }
+            GameInstance.GetNetworkGameSystem().Tessera_Journal(s"[Geste] gorgee forcee \(NameToString(this.composant)) dedans=\(dedans)");
+            return;
+        }
+        // ⭐ LE RANGEMENT (decision de Lucas, 2026-09-15 : « la canette se range, avec une animation de rangement »).
+        // L'animation existe dans le workspot : `workExitAnim` `stand__rh_can__01__to__stand__2h_on_sides__01__turn0__01`,
+        // qui porte l'evenement `WorkspotItem` `can_off` (F-PLY-525) — la canette rentre dans la poche toute seule.
+        // `SendSlowExitSignal` prend justement un nom d'animation de sortie ; sans nom (essai du 2026-09-14) l'avatar
+        // disparaissait. La sortie DURE reste en filet, 2,5 s plus tard (mode 0).
+        if this.mode == 4 {
+            let encore = workspots.IsActorInWorkspot(puppet);
+            if encore {
+                workspots.SendSlowExitSignal(puppet, this.composant, false);
+            }
+            GameInstance.GetNetworkGameSystem().Tessera_Journal(s"[Geste] rangement \(NameToString(this.composant)) dedans=\(encore)");
             return;
         }
         if this.mode == 1 {
