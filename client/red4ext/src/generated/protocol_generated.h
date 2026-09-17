@@ -85,6 +85,9 @@ struct InteractionChoiceBuilder;
 struct InteractionResult;
 struct InteractionResultBuilder;
 
+struct PostureResult;
+struct PostureResultBuilder;
+
 struct CoffreLigne;
 struct CoffreLigneBuilder;
 
@@ -451,11 +454,12 @@ enum ServerMsg : uint8_t {
   ServerMsg_CommandCatalog = 24,
   ServerMsg_ConsoleLine = 25,
   ServerMsg_StaffMode = 26,
+  ServerMsg_PostureResult = 27,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_StaffMode
+  ServerMsg_MAX = ServerMsg_PostureResult
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[27] {
+inline const ServerMsg (&EnumValuesServerMsg())[28] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -483,13 +487,14 @@ inline const ServerMsg (&EnumValuesServerMsg())[27] {
     ServerMsg_DeviceStateMsg,
     ServerMsg_CommandCatalog,
     ServerMsg_ConsoleLine,
-    ServerMsg_StaffMode
+    ServerMsg_StaffMode,
+    ServerMsg_PostureResult
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[28] = {
+  static const char * const names[29] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -517,13 +522,14 @@ inline const char * const *EnumNamesServerMsg() {
     "CommandCatalog",
     "ConsoleLine",
     "StaffMode",
+    "PostureResult",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_StaffMode)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_PostureResult)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -634,6 +640,10 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::ConsoleLine> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaffMode> {
   static const ServerMsg enum_value = ServerMsg_StaffMode;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::PostureResult> {
+  static const ServerMsg enum_value = ServerMsg_PostureResult;
 };
 
 template <bool B = false>
@@ -996,7 +1006,8 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_LOOK_YAW = 24,
     VT_LOOK_PITCH = 26,
     VT_FRAME_POSITION = 28,
-    VT_FRAME_POSITION_VALID = 30
+    VT_FRAME_POSITION_VALID = 30,
+    VT_POSTURE_SPOT = 32
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -1040,6 +1051,9 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   bool frame_position_valid() const {
     return GetField<uint8_t>(VT_FRAME_POSITION_VALID, 0) != 0;
   }
+  uint64_t posture_spot() const {
+    return GetField<uint64_t>(VT_POSTURE_SPOT, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1057,6 +1071,7 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<int16_t>(verifier, VT_LOOK_PITCH, 2) &&
            VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_FRAME_POSITION, 4) &&
            VerifyField<uint8_t>(verifier, VT_FRAME_POSITION_VALID, 1) &&
+           VerifyField<uint64_t>(verifier, VT_POSTURE_SPOT, 8) &&
            verifier.EndTable();
   }
 };
@@ -1107,6 +1122,9 @@ struct PlayerStateBuilder {
   void add_frame_position_valid(bool frame_position_valid) {
     fbb_.AddElement<uint8_t>(PlayerState::VT_FRAME_POSITION_VALID, static_cast<uint8_t>(frame_position_valid), 0);
   }
+  void add_posture_spot(uint64_t posture_spot) {
+    fbb_.AddElement<uint64_t>(PlayerState::VT_POSTURE_SPOT, posture_spot, 0);
+  }
   explicit PlayerStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1133,8 +1151,10 @@ inline ::flatbuffers::Offset<PlayerState> CreatePlayerState(
     uint16_t look_yaw = 0,
     int16_t look_pitch = 0,
     const cyberpunk_rp::protocol::QVec3 *frame_position = nullptr,
-    bool frame_position_valid = false) {
+    bool frame_position_valid = false,
+    uint64_t posture_spot = 0) {
   PlayerStateBuilder builder_(_fbb);
+  builder_.add_posture_spot(posture_spot);
   builder_.add_slot(slot);
   builder_.add_frame(frame);
   builder_.add_id(id);
@@ -2827,6 +2847,68 @@ inline ::flatbuffers::Offset<InteractionResult> CreateInteractionResultDirect(
       session_id,
       ok,
       payload__);
+}
+
+struct PostureResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef PostureResultBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_EMPLACEMENT = 4,
+    VT_OK = 6,
+    VT_REASON = 8
+  };
+  uint64_t emplacement() const {
+    return GetField<uint64_t>(VT_EMPLACEMENT, 0);
+  }
+  bool ok() const {
+    return GetField<uint8_t>(VT_OK, 0) != 0;
+  }
+  uint8_t reason() const {
+    return GetField<uint8_t>(VT_REASON, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_EMPLACEMENT, 8) &&
+           VerifyField<uint8_t>(verifier, VT_OK, 1) &&
+           VerifyField<uint8_t>(verifier, VT_REASON, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct PostureResultBuilder {
+  typedef PostureResult Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_emplacement(uint64_t emplacement) {
+    fbb_.AddElement<uint64_t>(PostureResult::VT_EMPLACEMENT, emplacement, 0);
+  }
+  void add_ok(bool ok) {
+    fbb_.AddElement<uint8_t>(PostureResult::VT_OK, static_cast<uint8_t>(ok), 0);
+  }
+  void add_reason(uint8_t reason) {
+    fbb_.AddElement<uint8_t>(PostureResult::VT_REASON, reason, 0);
+  }
+  explicit PostureResultBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<PostureResult> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<PostureResult>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<PostureResult> CreatePostureResult(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t emplacement = 0,
+    bool ok = false,
+    uint8_t reason = 0) {
+  PostureResultBuilder builder_(_fbb);
+  builder_.add_emplacement(emplacement);
+  builder_.add_reason(reason);
+  builder_.add_ok(ok);
+  return builder_.Finish();
 }
 
 struct CoffreLigne FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -6282,6 +6364,9 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::StaffMode *msg_as_StaffMode() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_StaffMode ? static_cast<const cyberpunk_rp::protocol::StaffMode *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::PostureResult *msg_as_PostureResult() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_PostureResult ? static_cast<const cyberpunk_rp::protocol::PostureResult *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -6394,6 +6479,10 @@ template<> inline const cyberpunk_rp::protocol::ConsoleLine *ServerEnvelope::msg
 
 template<> inline const cyberpunk_rp::protocol::StaffMode *ServerEnvelope::msg_as<cyberpunk_rp::protocol::StaffMode>() const {
   return msg_as_StaffMode();
+}
+
+template<> inline const cyberpunk_rp::protocol::PostureResult *ServerEnvelope::msg_as<cyberpunk_rp::protocol::PostureResult>() const {
+  return msg_as_PostureResult();
 }
 
 struct ServerEnvelopeBuilder {
@@ -6650,6 +6739,10 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_StaffMode: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaffMode *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_PostureResult: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PostureResult *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

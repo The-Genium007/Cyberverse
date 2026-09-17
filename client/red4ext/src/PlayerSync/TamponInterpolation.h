@@ -131,6 +131,9 @@ struct Pose
     /// `PlayerState.sustained` depuis le palier 2 — et n'etait lu NULLE PART cote client jusqu'au
     /// 2026-08-24 (F-PLY-303). Le serveur ecrivait, le fil transportait, le client jetait.
     std::uint32_t sustained = 0;
+    /// Emplacement serveur exact de la posture tenue. `sustained` nomme la
+    /// famille ; cet id choisit le workspot du monde a utiliser.
+    std::uint64_t postureSpot = 0;
     /// Le REGARD, en degres — distinct de `yaw`, qui est l'orientation du CORPS.
     /// C'est `lookState.lookDir` de gameMuppetState (spec 2026-08-15). (0,0) = non rapporte.
     float lookYaw = 0.0f;
@@ -173,6 +176,7 @@ struct PoseRendue
     /// on prend celle de l'echantillon courant, on ne l'interpole pas — une posture est ou n'est
     /// pas, il n'y a pas de demi-assise.
     std::uint32_t sustained = 0;
+    std::uint64_t postureSpot = 0;
     /// Vrai quand la pose est DEVINÉE (tampon à sec) plutôt qu'interpolée entre deux
     /// échantillons réels. L'appelant a le droit de traiter les deux différemment ; il
     /// n'a pas le droit de l'ignorer sans le savoir.
@@ -569,6 +573,7 @@ private:
         r.flags = p.flags;
         r.moveDir = p.moveDir;
         r.sustained = p.sustained;
+        r.postureSpot = p.postureSpot;
         return r;
     }
 
@@ -597,6 +602,7 @@ private:
         r.flags = a.pose.flags;
         r.moveDir = a.pose.moveDir;
         r.sustained = a.pose.sustained;
+        r.postureSpot = a.pose.postureSpot;
         PoserVitesse(r, a, b, duree);
         return r;
     }

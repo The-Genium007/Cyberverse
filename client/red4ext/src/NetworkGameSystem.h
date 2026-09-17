@@ -91,6 +91,7 @@ namespace cyberpunk_rp::protocol {
     // d'un en-tete lourd, ce qui est un vrai cout et un vrai arbitrage. Tant qu'on ne le fait pas,
     // ce commentaire est le seul garde-fou, et il ne marche visiblement pas.
     struct InteractionOpen;
+    struct PostureResult;
 }
 
 // Apparence faisant autorité pour chaque PNJ STATIQUE, par EntityID — définie dans le .cpp.
@@ -120,6 +121,14 @@ struct EtatAscenseurRecu
     int32_t elapsedMs = 0;
 };
 extern std::deque<EtatAscenseurRecu> g_ascenseursRecus;
+
+struct VerdictPostureRecu
+{
+    uint64_t emplacement = 0;
+    bool ok = false;
+    uint8_t motif = 0;
+};
+extern std::deque<VerdictPostureRecu> g_verdictsPostureRecus;
 
 // APPAREILS DU MONDE (portes, portiques, contenants...) — spec 2026-08-26.
 //
@@ -493,6 +502,7 @@ struct SuiviAvatar
     /// taire la premiere transition d'un avatar qui naît deja assis. Meme piege que le -1 de
     /// l'accroupissement, et meme famille que le `Bool` non initialise de `UiKitPosture.reds`.
     std::uint32_t derniereSustained = 0xFFFFFFFFu;
+    std::uint64_t dernierPostureSpot = 0;
     /// Vrai uniquement si le lecteur redscript a effectivement remis le pantin au workspot.
     /// `sustained` peut nommer une famille encore inconnue ou un emplacement hors catalogue :
     /// dans ces cas, la locomotion réseau doit continuer au lieu de figer un avatar debout.
@@ -1201,6 +1211,7 @@ protected:
     void HandleActionCatalog(const cyberpunk_rp::protocol::ActionCatalog* msg);
     void HandleCommandCatalog(const cyberpunk_rp::protocol::CommandCatalog* msg);
     void HandleStaffMode(const cyberpunk_rp::protocol::StaffMode* msg);
+    void HandlePostureResult(const cyberpunk_rp::protocol::PostureResult* msg);
     // Noms que ce joueur CONNAIT. En lot au join, a une entree a chaque presentation recue. On
     // ACCUMULE ici (contrairement au catalogue) : le message a une entree est un ajout, pas un
     // remplacement, et le traiter comme tel effacerait toutes les connaissances a chaque poignee
@@ -2648,6 +2659,29 @@ public:
         return EnvoyerPosture(emplacementId, code);
     }
 
+    int32_t Tessera_PostureResultatEnAttente()
+    {
+        return static_cast<int32_t>(g_verdictsPostureRecus.size());
+    }
+    uint64_t Tessera_PostureResultatEmplacement()
+    {
+        return g_verdictsPostureRecus.empty() ? 0 : g_verdictsPostureRecus.front().emplacement;
+    }
+    bool Tessera_PostureResultatAccepte()
+    {
+        return !g_verdictsPostureRecus.empty() && g_verdictsPostureRecus.front().ok;
+    }
+    int32_t Tessera_PostureResultatMotif()
+    {
+        return g_verdictsPostureRecus.empty() ? 0 : g_verdictsPostureRecus.front().motif;
+    }
+    bool Tessera_PostureResultatRetirer()
+    {
+        if (g_verdictsPostureRecus.empty()) { return false; }
+        g_verdictsPostureRecus.pop_front();
+        return true;
+    }
+
     int32_t Tessera_AscenseurTotalRecus()
     {
         return g_ascenseursTotalRecus;
@@ -3063,6 +3097,11 @@ private:
 
 RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_SignalerPosture);
+    RTTI_METHOD(Tessera_PostureResultatEnAttente);
+    RTTI_METHOD(Tessera_PostureResultatEmplacement);
+    RTTI_METHOD(Tessera_PostureResultatAccepte);
+    RTTI_METHOD(Tessera_PostureResultatMotif);
+    RTTI_METHOD(Tessera_PostureResultatRetirer);
     RTTI_METHOD(EnqueueLoadLastCheckpoint);
     RTTI_METHOD(Tessera_GetServerShard);
     RTTI_METHOD(Tessera_GetServerOverlaps);

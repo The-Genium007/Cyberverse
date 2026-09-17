@@ -404,6 +404,11 @@ public native class NetworkGameSystem extends IGameSystem {
     // personne ne LISAIT `sustained` en retour (F-PLY-303). Les deux moities du canal etaient
     // absentes, chacune supposant que l'autre existait.
     public native func Tessera_SignalerPosture(emplacement: Uint64, code: Uint32) -> Bool;
+    public native func Tessera_PostureResultatEnAttente() -> Int32;
+    public native func Tessera_PostureResultatEmplacement() -> Uint64;
+    public native func Tessera_PostureResultatAccepte() -> Bool;
+    public native func Tessera_PostureResultatMotif() -> Int32;
+    public native func Tessera_PostureResultatRetirer() -> Bool;
     public native func Tessera_AscenseurTotalRecus() -> Int32;
     public native func Tessera_AscenseurEnAttente() -> Int32;
     public native func Tessera_AscenseurCabine() -> EntityID;
