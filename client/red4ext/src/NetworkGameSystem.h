@@ -311,6 +311,9 @@ struct SuiviAvatar
     float depuisS = 0.0f;
     /// Temps écoulé depuis la dernière ligne de diagnostic — voir `PiloterAvatar`.
     float depuisLogS = 0.0f;
+    /// Instrument du cap du corps (2026-09-18) : cadence et dernier yaw journalise.
+    float depuisCapS = 0.0f;
+    float dernierYawCap = 1e9f;
     /// Horloge indépendante du diagnostic passager. La trace verticale ne doit pas la remettre à
     /// zéro avant qu'elle puisse révéler si l'écriture directe a réellement pris.
     float depuisLogPassagerS = 0.0f;

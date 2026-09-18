@@ -8383,6 +8383,32 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         }
     }
 
+    // ── L'INSTRUMENT DU CAP DU CORPS (2026-09-18) ─────────────────────────────────────────────
+    //
+    // Lucas, test a deux instances : « il recule pas… avancer accroupi il se retourne… le retournement doit etre
+    // dirige UNIQUEMENT par le yaw ». Les traces du fantome (yaw 0 ou 180) ne le montraient pas : il faut le cap
+    // REEL du corps compare au yaw du joueur, pendant le mouvement et les rotations sur place. Une ligne toutes
+    // les 0,25 s : `ecart` = cap du corps - yaw du joueur (0 = il regarde ou le joueur regarde).
+    {
+        auto& suiviCap = g_suiviAvatars[networkId];
+        suiviCap.depuisCapS += deltaTime;
+        const bool bouge = pose.locomotion != 0
+            || std::fabs(Tessera::Sync::EcartAngulaire(suiviCap.dernierYawCap, pose.yaw)) > 2.0f;
+        if (bouge && suiviCap.depuisCapS >= 0.25f)
+        {
+            suiviCap.depuisCapS = 0.0f;
+            suiviCap.dernierYawCap = pose.yaw;
+            const auto q = Cyberverse::Utils::Entity_GetWorldOrientation(entite.value());
+            // lacet d'un quaternion autour de Z (monde Z-haut), dans la convention du yaw d'Euler du moteur
+            const float cap = std::atan2(2.0f * (q.r * q.k + q.i * q.j), 1.0f - 2.0f * (q.j * q.j + q.k * q.k))
+                              * 180.0f / 3.14159265f;
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] CAP corps=%.1f yaw=%.1f ecart=%.1f loco=%u mdir=%u",
+                               static_cast<unsigned long long>(networkId), cap, pose.yaw,
+                               Tessera::Sync::EcartAngulaire(pose.yaw, cap), static_cast<unsigned>(pose.locomotion),
+                               static_cast<unsigned>(pose.moveDir));
+        }
+    }
+
     // ── ⭐ RECUL : L'ETAT DU MOTEUR IMAGE PAR IMAGE (F-PLY-458) ────────────────────────────
     //
     // Le strafe est pose sur ~99 % des images et l'avatar se retourne quand meme : ce qui distingue
