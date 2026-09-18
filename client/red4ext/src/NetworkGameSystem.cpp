@@ -9014,7 +9014,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // le creneau 1 (`loop`) l'est, et sa derniere image reste tenue au sol. On essaie donc les deux
             // creneaux qui MARCHENT : 1 en vol, 0 a la reception (avec l'animation de reception dans le
             // creneau `startup` de l'archive de sonde). `TESSERA_PHASES_INVERSEES=0` rend l'ordre d'origine.
-            static const bool kPhasesInversees = []{ const char* v = std::getenv("TESSERA_PHASES_INVERSEES"); return !v || v[0] != '0'; }();
+            // ⚠️ ÉTEINT PAR DÉFAUT depuis le 2026-09-18 : le saut dérivé n'est pas retenu (Lucas : « brancher toutes les
+            // animations sauf le saut »). L'archive LIVRÉE porte le saut PNJ d'origine, qui se joue dans l'ordre d'origine.
+            // `TESSERA_PHASES_INVERSEES=1` pour les archives de saut dérivé (réception dans le créneau `startup`).
+            static const bool kPhasesInversees = []{ const char* v = std::getenv("TESSERA_PHASES_INVERSEES"); return v && v[0] == '1'; }();
             suiviPosture.phaseFranchissement = kPhasesInversees ? (enVolMaintenant ? 1 : 0)
                                                                 : (enVolMaintenant ? 0 : 2);
             suiviPosture.receptionEnCours = !enVolMaintenant;
