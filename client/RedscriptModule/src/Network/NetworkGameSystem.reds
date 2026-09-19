@@ -2610,6 +2610,43 @@ public native class NetworkGameSystem extends IGameSystem {
 
     /// `typeMouvement` = `exploration.movementType` : 0 saut (`jump_walk_*`), 2 CHUTE (`jump_sprint_*`, que le jeu
     /// derive du saut remplit de `fall_loop` et `landing_hard` — Switch lu dans `humanoid.animgraph`, 2026-09-15).
+    // ⚗️ SONDE DE LA MACHINE D'ACTION (2026-09-19, F-PLY-544). Le graphe des PNJ a une machine « clip a phases AVEC
+    // DUREE » (`ActionAnimation`) qui va chercher ses clips dans `action_animation.actionanimdb`. Le jeu la pilote par
+    // `ActionAnimationScriptProxy` (`tweakAIAction.script:1521-1565`) : Stop, Setup(nom de l'action, trait {state,
+    // stateDuration}), Launch — a chaque phase. [F-PLY-522] passait par l'autre chemin (trait sous son propre nom) : ici,
+    // le chemin du consommateur. `duree` 0 = duree naturelle du clip ; > 0 = clip RETIME a cette duree.
+    public func TesseraSondeActionAnimation(entityId: EntityID, action: CName, phase: Int32, duree: Float, variation: Int32) -> Bool {
+        let entite = TesseraCorpsDeLEntite(entityId);
+        let puppet = entite as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            this.Tessera_Journal("[ActionAnim] corps introuvable (entite=" + ToString(IsDefined(entite))
+                + " classe=" + (IsDefined(entite) ? NameToString(entite.GetClassName()) : "-") + ")");
+            return false;
+        }
+        let ia = puppet.GetAIControllerComponent();
+        if !IsDefined(ia) {
+            this.Tessera_Journal("[ActionAnim] IA introuvable sur " + NameToString(puppet.GetClassName()));
+            return false;
+        }
+        let proxy = ia.GetActionAnimationScriptProxy();
+        if !IsDefined(proxy) {
+            this.Tessera_Journal("[ActionAnim] proxy absent");
+            return false;
+        }
+        let trait = new AnimFeature_AIAction();
+        trait.state = phase;
+        trait.stateDuration = duree;
+        trait.animVariation = variation;
+        let glisse: ActionAnimationSlideParams;
+        proxy.Stop();
+        let pose = proxy.Setup(action, trait, false, false, false, false, false, glisse, null, 0.0);
+        proxy.Launch();
+        this.Tessera_Journal("[ActionAnim] " + NameToString(action) + " phase=" + IntToString(phase)
+            + " duree=" + FloatToStringPrec(duree, 2) + " variation=" + IntToString(variation)
+            + " setup=" + ToString(pose) + " statut=" + ToString(EnumInt(proxy.GetStatus())));
+        return pose;
+    }
+
     public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool, phase: Int32, typeMouvement: Int32) -> Bool {
         let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
