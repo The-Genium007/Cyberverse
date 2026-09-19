@@ -687,6 +687,27 @@ std::set<uint64_t> g_gestesEnAttente;
 std::set<uint64_t> g_avatarsEnGeste;
 static bool EstCodeGeste(std::uint32_t code) { return code >= 1u && code < 1000u; }
 // Saut par ecriture directe du moveComponent (2026-09-15, defaut allume ; `TESSERA_SAUT_DIRECT=0` coupe).
+// ⭐ LE SAUT PAR LA MACHINE D'ACTION DU GRAPHE (2026-09-19, F-PLY-544/547, spec 2026-09-19-animation-saut-strategie) :
+// phases jouees (impulsion, vol, reception) a une DUREE choisie, avec fondus — au lieu de l'etat `exploration`, qui coupe
+// sec et ne joue jamais la reception (F-PLY-530, F-PLY-546). Exige l'archive de `construire-action-saut-glb.py` (clips
+// `answer_call_*` de la ligne vanilla `CallSquad`). `TESSERA_SAUT_ACTION=1` l'allume ; eteint par defaut tant que Lucas
+// ne l'a pas juge.
+static bool SautParActionActif()
+{
+    static const bool actif = []() {
+        const char* v = std::getenv("TESSERA_SAUT_ACTION");
+        return v != nullptr && v[0] == '1';
+    }();
+    return actif;
+}
+
+// Durees des phases (s), calees sur le vrai saut de V : 0,77 s en l'air, sommet +0,91 m (F-PLY-545). Points de depart,
+// a ajuster sur observation (memoire « ajuster une valeur illisible »).
+static constexpr float kSautImpulsionS = 0.25f;   // flexion + extension, partie des l'arrivee du message « saut »
+static constexpr float kSautVolDebutS = 0.12f;    // apres le decollage affiche : on passe au groupe
+static constexpr float kSautVolS = 0.65f;         // le reste du vol
+static constexpr float kSautReceptionS = 0.5f;    // absorption + retour debout
+
 static bool SautDirectActif()
 {
     static const bool actif = []() {
@@ -6298,7 +6319,18 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
         if (event->action() == kActionSaut)
         {
             bool pousse = false;
-            Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true, 0, 0);
+            if (SautParActionActif())
+            {
+                // Le message arrive AVANT que le decollage ne s'affiche (tampon d'interpolation) : c'est la fenetre
+                // de l'anticipation. Le front `loco 6` ne la rejouera pas (`impulsionParMessage`).
+                Red::CallVirtual(this, "TesseraSondeActionAnimation", pousse, acteur->second, Red::CName("CallSquad"),
+                                 int32_t{1}, kSautImpulsionS, int32_t{-1});
+                g_suiviAvatars[event->actor()].impulsionParMessage = true;
+            }
+            else
+            {
+                Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true, 0, 0);
+            }
             g_telemetrie.Evenement("action_recue", event->actor(),
                                    pousse ? "saut" : "saut_refuse");
         }
@@ -8387,6 +8419,22 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         suiviCap.depuisCapS += deltaTime;
         const bool bouge = pose.locomotion != 0
             || std::fabs(Tessera::Sync::EcartAngulaire(suiviCap.dernierYawCap, pose.yaw)) > 2.0f;
+        // ⚗️ RAFALE A L'ATTERRISSAGE (2026-09-19) : a 30 i/s, l'avatar DISPARAIT 3 a 5 images a chaque reception, en
+        // exploration comme par la machine d'action — donc un placement, pas un clip. Hauteur de l'entite et de la
+        // cible a chaque image pendant les 20 premieres images au sol.
+        if (pose.locomotion != 6 && suiviCap.derniereLocoCap == 6)
+        {
+            suiviCap.imagesAtterrissage = 20;
+        }
+        suiviCap.derniereLocoCap = pose.locomotion;
+        if (suiviCap.imagesAtterrissage > 0)
+        {
+            --suiviCap.imagesAtterrissage;
+            const auto p = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] ATTERRISSAGE i=%d z=%.3f cible=%.3f loco=%u",
+                               static_cast<unsigned long long>(networkId), 20 - suiviCap.imagesAtterrissage - 1, p.Z,
+                               pose.z, static_cast<unsigned>(pose.locomotion));
+        }
         if (bouge && suiviCap.depuisCapS >= 0.25f)
         {
             suiviCap.depuisCapS = 0.0f;
@@ -9015,15 +9063,31 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // D3B 20:46, une seule chute reconnue sur quatre.)
         static constexpr float kChuteM = 2.0f;
         static constexpr float kReceptionChuteS = 1.6f;
+        const bool parAction = SautParActionActif();
+        auto phaseAction = [&](int32_t phase, float duree) {
+            bool ok = false;
+            Red::CallVirtual(this, "TesseraSondeActionAnimation", ok, entityId, Red::CName("CallSquad"), phase, duree,
+                             int32_t{-1});
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT_ACTION phase=%d duree=%.2f ok=%d",
+                               static_cast<unsigned long long>(networkId), phase, duree, ok ? 1 : 0);
+        };
         if (suiviPosture.receptionEnCours && !enVolMaintenant)
         {
             suiviPosture.depuisAtterrissageS += deltaTime;
-            if (suiviPosture.depuisAtterrissageS >= (suiviPosture.chute ? kReceptionChuteS : kReceptionS))
+            const float finReception = parAction ? kSautReceptionS : (suiviPosture.chute ? kReceptionChuteS : kReceptionS);
+            if (suiviPosture.depuisAtterrissageS >= finReception)
             {
                 suiviPosture.receptionEnCours = false;
                 suiviPosture.chute = false;
                 bool fin = false;
-                Red::CallVirtual(this, "TesseraPousserFranchissement", fin, entityId, false, 0, 0);
+                if (parAction)
+                {
+                    phaseAction(0, 0.0f);
+                }
+                else
+                {
+                    Red::CallVirtual(this, "TesseraPousserFranchissement", fin, entityId, false, 0, 0);
+                }
             }
         }
         if (suiviPosture.dernierEnVol != enVolMaintenant)
@@ -9047,9 +9111,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             }
             suiviPosture.depuisAtterrissageS = 0.0f;
             bool franchi = false;
+            if (parAction)
+            {
+                if (enVolMaintenant && !g_suiviAvatars[networkId].impulsionParMessage)
+                {
+                    phaseAction(1, kSautImpulsionS);
+                }
+                if (!enVolMaintenant)
+                {
+                    phaseAction(3, kSautReceptionS);
+                    g_suiviAvatars[networkId].impulsionParMessage = false;
+                }
+                franchi = true;
+            }
+            else
+            {
             // A la reception, le type RESTE `Jump` (sinon on quitte l'etat avant `_recover`).
             Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, true,
                              suiviPosture.phaseFranchissement, suiviPosture.chute ? 2 : 0);
+            }
             // ⛔ PLUS D'EVENEMENT `ActionStartup` / `ActionLoop` / `ActionRecovery` (retire le 2026-09-19, F-PLY-542).
             // Ils appartiennent a la machine `ActionAnimation` des PNJ, pas au saut (F-PLY-494) — et ils la
             // DECLENCHAIENT : sonde a 30 i/s, saut PNJ d'origine de face, 6 decollages sur 6 passaient par des images
@@ -9087,11 +9167,17 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             {
                 suiviPosture.chute = true;
                 bool chuteOk = false;
+                if (!parAction)
                 Red::CallVirtual(this, "TesseraPousserFranchissement", chuteOk, entityId, true, 1, 2);
                 SDK->logger->InfoF(PLUGIN, "[avatar %llu] CHUTE pose=%d",
                                    static_cast<unsigned long long>(networkId), chuteOk ? 1 : 0);
             }
-            if (!suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= 0.2f)
+            if (parAction && !suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= kSautVolDebutS)
+            {
+                suiviPosture.boucleVolDemandee = true;
+                phaseAction(2, kSautVolS);
+            }
+            if (!parAction && !suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= 0.2f)
             {
                 suiviPosture.boucleVolDemandee = true;
                 suiviPosture.phaseFranchissement = 1;   // idempotent si les phases sont inversees
