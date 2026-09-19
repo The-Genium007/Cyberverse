@@ -391,9 +391,6 @@ struct SuiviAvatar
     /// Les clips de locomotion ont-ils ete releves pour cet avatar ? Une fois par corps, a sa
     /// premiere image pilotee (F-PLY-466 : verifier DANS LE JEU ce que l'inventaire des fichiers dit).
     bool clipsReleves = false;
-    /// Dernier angle de deplacement pousse au graphe (F-PLY-458, essai `directionAngle`).
-    /// 1e9 = jamais pousse.
-    float dernierAngleDirection = 1e9f;
     /// Dernier yaw pour lequel la cible de strafe a ete posee. Bande morte de 2 deg : voir le
     /// bloc `sans relance` du .cpp — reposer a CHAQUE image est suspecte de retenir la machine
     /// en `Start` (F-PLY-458 : 30 images sur 30 en Start).

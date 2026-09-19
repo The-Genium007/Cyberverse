@@ -8376,28 +8376,6 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         }
     }
 
-    // ── ⭐ ESSAI : L'ANGLE DE DEPLACEMENT POUSSE AU GRAPHE (F-PLY-458) ─────────────────────
-    //
-    // Le clip `walk_180` EXISTE dans le jeu qui joue (F-PLY-466) et n'est pas choisi quand l'avatar
-    // se retourne. On pousse donc au graphe l'angle du deplacement RELATIF AU REGARD — 0 devant,
-    // 180 derriere — par les entrees `directionAngle` et `desiredYaw`, jamais essayees.
-    //
-    // Sur changement de plus de 5 deg : pousser a chaque image couterait un appel script par image
-    // et par avatar, pour une valeur qui ne bouge qu'aux virages.
-    if (pose.locomotion != 0)
-    {
-        auto& suiviDir = g_suiviAvatars[networkId];
-        const float angle = static_cast<float>(pose.moveDir) * (360.0f / 256.0f);
-        if (std::fabs(Tessera::Sync::EcartAngulaire(suiviDir.dernierAngleDirection, angle)) > 5.0f)
-        {
-            suiviDir.dernierAngleDirection = angle;
-            bool pousse = false;
-            Red::CallVirtual(this, "TesseraPousserDirection", pousse, entityId, angle);
-            SDK->logger->InfoF(PLUGIN, "[avatar %llu] DIRECTION angle=%.0f pousse=%d",
-                               static_cast<unsigned long long>(networkId), angle, pousse ? 1 : 0);
-        }
-    }
-
     // ── L'INSTRUMENT DU CAP DU CORPS (2026-09-18) ─────────────────────────────────────────────
     //
     // Lucas, test a deux instances : « il recule pas… avancer accroupi il se retourne… le retournement doit etre
@@ -9072,13 +9050,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // A la reception, le type RESTE `Jump` (sinon on quitte l'etat avant `_recover`).
             Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, true,
                              suiviPosture.phaseFranchissement, suiviPosture.chute ? 2 : 0);
-            // ⭐ ET L'EVENEMENT EXTERNE, le cinquieme canal (F-PLY-485) : le graphe ecoute
-            // `ActionStartup` / `ActionLoop` / `ActionRecovery`, qui portent exactement les suffixes
-            // des clips de franchissement (`jump_walk_startup` / `_loop` / `_recover`, F-PLY-475).
-            // Au decollage on demande le DEPART, a l'atterrissage la RECEPTION.
-            bool evenementOk = false;
-            Red::CallVirtual(this, "TesseraPousserEvenementAnim", evenementOk, entityId,
-                             Red::CName(enVolMaintenant ? "ActionStartup" : "ActionRecovery"));
+            // ⛔ PLUS D'EVENEMENT `ActionStartup` / `ActionLoop` / `ActionRecovery` (retire le 2026-09-19, F-PLY-542).
+            // Ils appartiennent a la machine `ActionAnimation` des PNJ, pas au saut (F-PLY-494) — et ils la
+            // DECLENCHAIENT : sonde a 30 i/s, saut PNJ d'origine de face, 6 decollages sur 6 passaient par des images
+            // bras a l'horizontale (pose de liaison) avec les evenements, 0 sur 12 sans eux.
             suiviPosture.depuisDecollageS = 0.0f;
             suiviPosture.boucleVolDemandee = false;
             if (enVolMaintenant)
@@ -9088,10 +9063,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // directe. On les annule au decollage.
                 bool annule = false;
                 Red::CallVirtual(this, "TesseraAnnulerPlacements", annule, entityId);
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT phase=%d pose=%d evenement=%d",
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT phase=%d pose=%d",
                                    static_cast<unsigned long long>(networkId),
-                                   suiviPosture.phaseFranchissement, franchi ? 1 : 0,
-                                   evenementOk ? 1 : 0);
+                                   suiviPosture.phaseFranchissement, franchi ? 1 : 0);
             }
             if (!enVolMaintenant)
             {
@@ -9123,9 +9097,6 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 suiviPosture.phaseFranchissement = 1;   // idempotent si les phases sont inversees
                 bool enVolOk = false;
                 Red::CallVirtual(this, "TesseraPousserFranchissement", enVolOk, entityId, true, 1, 0);
-                bool boucleOk = false;
-                Red::CallVirtual(this, "TesseraPousserEvenementAnim", boucleOk, entityId,
-                                 Red::CName("ActionLoop"));
             }
         }
     }
@@ -9153,6 +9124,16 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                           : 0.0f;
         const bool cibleVerticale =
             suiviVert.cibleImmobileConnue && std::fabs(dzCible) > 0.005f;
+        // ⭐⭐ UNE VITESSE D'AVANT L'ARRET NE VAUT PLUS RIEN (2026-09-19, F-PLY-542). La vitesse lissee n'etait
+        // jamais remise a zero : au sol (cible immobile) elle gardait celle de la fin de la chute precedente,
+        // ~-7 m/s, et le PREMIER placement du saut suivant l'extrapolait — `visee.z = 27,71` pour un sol a 29,50 :
+        // le corps s'enfoncait jusqu'a la poitrine pendant deux images a chaque decollage. Au sol on repart de
+        // ZERO — pas de la vitesse de la premiere image, qui projetait le corps 2,3 m trop haut une image
+        // (`visee.z = 31,82`). Pas en l'air (`loco 6`) : un passager d'ascenseur y garde sa vitesse de cabine.
+        if (!cibleVerticale && pose.locomotion != 6)
+        {
+            suiviVert.vitesseZLissee = 0.0f;
+        }
 
         // ── ⭐⭐ EXTRAPOLATION DU RETARD — ICI, ET PAS DANS UNE BRANCHE ─────────────────────
         //
