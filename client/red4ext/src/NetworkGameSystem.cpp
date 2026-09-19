@@ -10442,7 +10442,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             int32_t raison = -1;
             Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", raison, entityId, volDirect);
             s.depuisLogS += deltaTime;
-            if (std::fabs(volDirect.Z - position.Z) > 0.05f && s.depuisLogS >= 0.2f)
+            if (std::getenv("TESSERA_SAUT_TRACE") != nullptr || (std::fabs(volDirect.Z - position.Z) > 0.05f && s.depuisLogS >= 0.2f))
             {
                 s.depuisLogS = 0.0f;
                 const auto relu = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
