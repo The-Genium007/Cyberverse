@@ -1004,13 +1004,28 @@ bool g_pietinement = false;
 // ⭐ PIETINEMENT PAR LE MARQUEUR DE REGARD — ALLUME PAR DEFAUT depuis le 2026-09-14 (verdict de Lucas sur
 // B1M : « parfait »). A l'arret, le corps tourne en deplacant les pieds vers le yaw voulu.
 // `TESSERA_PIETINEMENT=off` coupe.
+// ⭐⭐ LE CORPS DIRIGE UNIQUEMENT PAR LE YAW (regle de Lucas, 2026-09-18, test a deux instances) : « le retournement
+// dirige uniquement par le yaw… le regard, c'est une fleche devant lui ». Mesure sur ses entrees reelles (F-PLY-540) :
+// a l'arret, « la tete mene » (seuil 80 deg) + le pietinement par marche d'IA laissaient le corps jusqu'a 151 deg
+// derriere le yaw, avec des pas « en croix ». En rotation directe, le corps suit le yaw A L'ARRET par le placement
+// (teleport en place, ~30 Hz tant que l'ecart depasse la bande morte) : ni tete qui mene, ni pietinement.
+// `TESSERA_ROTATION_DIRECTE=0` rend l'ancien comportement.
+static bool RotationDirecteActive()
+{
+    static const bool actif = []() {
+        const char* v = std::getenv("TESSERA_ROTATION_DIRECTE");
+        return v == nullptr || v[0] != '0';
+    }();
+    return actif;
+}
+
 static bool PietinementMarqueurActif()
 {
     static const bool actif = []() {
         const char* v = std::getenv("TESSERA_PIETINEMENT");
         return v == nullptr || std::string(v) != "off";
     }();
-    return actif;
+    return actif && !RotationDirecteActive();
 }
 
 bool NetworkGameSystem::Tessera_Pietinement(bool actif)
@@ -9700,7 +9715,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // Une cible qui defile se suit a la CADENCE DES SNAPSHOTS, pas plus vite : corriger a
         // 60 Hz une donnee qui arrive a 20 Hz n'ajoute aucune information et triple le cout.
         static constexpr float kPeriodeCiblePorteeS = 0.05f;
-        const float periode = ciblePortee ? kPeriodeCiblePorteeS : kPeriodePlacementImmobileS;
+        const float periodeDeBase = ciblePortee ? kPeriodeCiblePorteeS : kPeriodePlacementImmobileS;
+        // Rotation directe : un ecart de YAW seul se rattrape a ~30 Hz (petits pas d'orientation, le corps « tourne »
+        // avec la camera) ; la position garde sa cadence de 2 s. Borne connue : un AITeleportCommand par image et par
+        // avatar TANT QU'IL TOURNE — rare et bref.
+        const float periode = (RotationDirecteActive() && !ciblePortee && deriveYaw > kBandeMorteYawDeg) ? 0.033f : periodeDeBase;
         const float bandeMorte = ciblePortee ? 0.01f : kBandeMorteImmobileM;
 
         // ⚠️ L'ERREUR SE RECALCULE ICI, CONTRE LA CIBLE FINALE — et pas avant.
@@ -9772,7 +9791,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             return (s > 1.0f && s < 180.0f) ? s : 80.0f;
         }();
         float yawCorpsVoulu = pose.yaw;
-        if (pose.lookYaw != 0.0f || pose.lookPitch != 0.0f)
+        if (!RotationDirecteActive() && (pose.lookYaw != 0.0f || pose.lookPitch != 0.0f))
         {
             const float yawDuRegard = -pose.lookYaw;
             if (!suiviImmobile.yawTenuValide)
@@ -10878,8 +10897,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const char* v = std::getenv("TESSERA_REGARD_MARQUEUR");
         return v == nullptr || v[0] != '0';
     }();
+    // ⭐ RECULER EN COURANT (F-PLY-540, 2026-09-19). Les entrees reelles de Lucas reculent en COURSE (`loco 2`) : le
+    // corps se retournait (ecart -179 deg), alors qu'en marche (`loco 1`, A1) il recule face au yaw (ecart 0). Le jeu
+    // detendu n'a AUCUN clip de course arriere — `walk_0`, `walk_180`, `sprint_0` seulement (releve 2026-09-19) : en
+    // course, le moteur court de face. En arriere on commande donc la MARCHE. Borne connue : la marche arriere
+    // (~1,2 m/s) est plus lente qu'une course arriere de V (~3 m/s) — la derive se rattrape par le recalage.
+    int32_t allureCommande = static_cast<int32_t>(pose.locomotion);
+    {
+        const int ecartArriere = std::abs(static_cast<int>(pose.moveDir) - 128);
+        if ((pose.locomotion == 2 || pose.locomotion == 3) && std::min(ecartArriere, 256 - ecartArriere) <= 32)
+        {
+            allureCommande = 1;
+        }
+    }
     if (Red::CallVirtual(this, "TesseraSuivreAvatarRegard", enRoute, entityId, visee,
-                         static_cast<int32_t>(pose.locomotion), pose.yaw, useStart, kRegardMarqueur)
+                         allureCommande, pose.yaw, useStart, kRegardMarqueur)
         && (suivi.dernierRetourCommande = enRoute ? 1 : 0, enRoute))
     {
         // ── L'INSTRUMENT ───────────────────────────────────────────────────────────────────
