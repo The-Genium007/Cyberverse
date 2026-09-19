@@ -563,6 +563,27 @@ public native class NetworkGameSystem extends IGameSystem {
     /// script ; le natif borne, ecrit puis relit son entree active (F-PLY-337).
     /// 0 = écrit ; 1 = corps introuvable ; 2 = moveComponent introuvable ; 3 = natif refusé.
     /// Un booléen confondait ces trois pannes et a coûté plusieurs trajets sans diagnostic.
+    /// Le composant de mouvement d'un avatar (meme recherche que l'ecriture ci-dessous), pour la rafale ATTERRISSAGE.
+    public func TesseraComposantMouvement(cible: EntityID) -> ref<IScriptable> {
+        let corps = GameInstance.FindEntityByID(GetGameInstance(), cible) as GameObject;
+        if !IsDefined(corps) {
+            return null;
+        }
+        let mouvement = corps.FindComponentByName(n"moveComponent") as IScriptable;
+        if IsDefined(mouvement) {
+            return mouvement;
+        }
+        let composants = corps.GetComponents();
+        let i: Int32 = 0;
+        while i < ArraySize(composants) {
+            let classe = NameToString(composants[i].GetClassName());
+            if Equals(classe, "moveComponent") || Equals(classe, "entIMoverComponent") {
+                return composants[i] as IScriptable;
+            }
+            i += 1;
+        }
+        return null;
+    }
     public func TesseraEcrirePositionRepresentation(cible: EntityID, position: Vector4) -> Int32 {
         let corps = GameInstance.FindEntityByID(GetGameInstance(), cible) as GameObject;
         if !IsDefined(corps) {

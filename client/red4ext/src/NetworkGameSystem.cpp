@@ -8431,9 +8431,15 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         {
             --suiviCap.imagesAtterrissage;
             const auto p = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
-            SDK->logger->InfoF(PLUGIN, "[avatar %llu] ATTERRISSAGE i=%d z=%.3f cible=%.3f loco=%u",
+            // L'entree ACTIVE du composant de mouvement — celle ou l'ecriture en vol pose la position (+0x20) — et son
+            // adresse (+0x160 du composant) : qui ecrit apres le contact, et l'entree change-t-elle ? (F-PLY-548)
+            Red::Handle<RED4ext::IScriptable> mouvement;
+            Red::CallVirtual(this, "TesseraComposantMouvement", mouvement, entityId);
+            const auto entreePos = mouvement ? Tessera_LireMouvementBrut(mouvement, 0x20, 3) : Red::CString("");
+            const auto entreeAdr = mouvement ? Tessera_LireComposantBrut(mouvement, 0x160, 2) : Red::CString("");
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] ATTERRISSAGE i=%d z=%.3f cible=%.3f loco=%u entree=[%s] adr=[%s]",
                                static_cast<unsigned long long>(networkId), 20 - suiviCap.imagesAtterrissage - 1, p.Z,
-                               pose.z, static_cast<unsigned>(pose.locomotion));
+                               pose.z, static_cast<unsigned>(pose.locomotion), entreePos.c_str(), entreeAdr.c_str());
         }
         if (bouge && suiviCap.depuisCapS >= 0.25f)
         {
