@@ -8437,9 +8437,16 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             Red::CallVirtual(this, "TesseraComposantMouvement", mouvement, entityId);
             const auto entreePos = mouvement ? Tessera_LireMouvementBrut(mouvement, 0x20, 3) : Red::CString("");
             const auto entreeAdr = mouvement ? Tessera_LireComposantBrut(mouvement, 0x160, 2) : Red::CString("");
-            SDK->logger->InfoF(PLUGIN, "[avatar %llu] ATTERRISSAGE i=%d z=%.3f cible=%.3f loco=%u entree=[%s] adr=[%s]",
+            // Et ce que le MOTEUR croit faire : `moveLocomotionAction * 10 + moveExplorationType` (F-PLY-123).
+            // 0 Undefined · 1 Exploration · 2 Idle · 3 IdleTurn · 4 Reposition · 5 Start · 6 Move · 7 Stop. Si l'IA
+            // « repositionne » le corps pendant la fenetre, c'est elle qui le deplace, pas la physique (F-PLY-548).
+            int32_t etatMoteur = -2;
+            Red::CallVirtual(this, "TesseraLireLocomotion", etatMoteur, entityId);
+            SDK->logger->InfoF(PLUGIN,
+                               "[avatar %llu] ATTERRISSAGE i=%d z=%.3f cible=%.3f loco=%u moteur=%d entree=[%s] adr=[%s]",
                                static_cast<unsigned long long>(networkId), 20 - suiviCap.imagesAtterrissage - 1, p.Z,
-                               pose.z, static_cast<unsigned>(pose.locomotion), entreePos.c_str(), entreeAdr.c_str());
+                               pose.z, static_cast<unsigned>(pose.locomotion), etatMoteur, entreePos.c_str(),
+                               entreeAdr.c_str());
         }
         if (bouge && suiviCap.depuisCapS >= 0.25f)
         {
