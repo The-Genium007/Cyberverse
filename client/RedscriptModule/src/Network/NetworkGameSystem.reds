@@ -2038,6 +2038,24 @@ public native class NetworkGameSystem extends IGameSystem {
     /// `JumpEvents.OnEnter` écrit `PlayerStateMachine.Locomotion = Jump` dans la même image que
     /// l'impulsion (`locomotionTransitions.script:5245-5247`), donc avant que `IsOnGround` ne bascule.
     /// Même tableau noir, même lecture que `TesseraViseeActive` — l'accesseur que le jeu emprunte.
+    /// ⭐ LA SORTE DE SAUT, telle que le JEU la nomme (F-PLY-545) : `gamePSMDetailedLocomotionStates` sur le tableau
+    /// noir du joueur (`PlayerStateMachine.LocomotionDetailed`) — `Jump`, `DoubleJump`, `ChargeJump`, `HoverJump`,
+    /// `Fall`, `RegularLand`, `HardLand`, `VeryHardLand`, `SuperheroLand`, `Climb`, `Vault`, `Ladder*`… L'observateur
+    /// n'a donc rien a deviner : la valeur voyage dans le champ `param` du rapport d'action, deja present sur le fil.
+    /// -1 = illisible (pas de joueur, pas de tableau noir) — un resultat, pas une absence de resultat.
+    public func TesseraLocomotionDetaillee() -> Int32 {
+        let joueur = GetPlayer(GetGameInstance());
+        if !IsDefined(joueur) {
+            return -1;
+        }
+        let tableau = GameInstance.GetBlackboardSystem(GetGameInstance())
+            .GetLocalInstanced(joueur.GetEntityID(), GetAllBlackboardDefs().PlayerStateMachine);
+        if !IsDefined(tableau) {
+            return -1;
+        }
+        return tableau.GetInt(GetAllBlackboardDefs().PlayerStateMachine.LocomotionDetailed);
+    }
+
     public func TesseraSautEngage() -> Bool {
         let joueur = GetPlayer(GetGameInstance());
         if !IsDefined(joueur) {

@@ -2376,10 +2376,16 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
     if (sautCommence)
     {
         g_localSautEmis = true;
+        // La SORTE de saut, nommee par le jeu lui-meme (F-PLY-545) : elle part dans `param`, libre jusqu'ici. Un
+        // client plus ancien l'ignore (le schema est extensible en avant) ; un observateur a jour saura distinguer
+        // saut simple, double saut et saut charge sans nouveau champ de protocole.
+        int32_t sorteDeSaut = -1;
+        Red::CallVirtual(this, "TesseraLocomotionDetaillee", sorteDeSaut);
         g_telemetrie.Evenement("saut_source", 0, sautEngage ? "intention" : "decollage");
+        g_telemetrie.Evenement("saut_sorte", 0, std::to_string(sorteDeSaut).c_str());
         flatbuffers::FlatBufferBuilder bAction(128);
         const auto rapport = cyberpunk_rp::protocol::CreatePlayerActionReport(
-            bAction, kActionSaut, /*param=*/0u);
+            bAction, kActionSaut, /*param=*/static_cast<std::uint32_t>(sorteDeSaut < 0 ? 0 : sorteDeSaut));
         const auto envAction = cyberpunk_rp::protocol::CreateClientEnvelope(
             bAction, cyberpunk_rp::protocol::ClientMsg_PlayerActionReport, rapport.Union());
         bAction.Finish(envAction);
@@ -6318,6 +6324,11 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
         }
         if (event->action() == kActionSaut)
         {
+            // `param` porte la sorte de saut (`gamePSMDetailedLocomotionStates`, F-PLY-545) : 18 Jump, 19 DoubleJump,
+            // 20 ChargeJump, 21 HoverJump. Journalise avant d'en faire quoi que ce soit — on ne branche une animation
+            // dessus qu'une fois la valeur VUE dans un vrai saut.
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] ACTION_SAUT sorte=%u",
+                               static_cast<unsigned long long>(event->actor()), event->param());
             bool pousse = false;
             if (SautParActionActif())
             {
