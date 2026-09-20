@@ -707,6 +707,11 @@ static constexpr float kSautImpulsionS = 0.25f;   // flexion + extension, partie
 static constexpr float kSautVolDebutS = 0.12f;    // apres le decollage affiche : on passe au groupe
 static constexpr float kSautVolS = 0.65f;         // le reste du vol
 static constexpr float kSautReceptionS = 0.5f;    // absorption + retour debout
+// ⭐ UNE action, TROIS phases (F-PLY-550). Nos poses vivent dans trois clips du jeu d'EXPLORATION que nos avatars ne
+// jouent jamais (`charged_jump_400cm_up_*`), et une base d'actions DERIVEE fait pointer les trois phases de `CallSquad`
+// vers eux. Les trois autres montages ont casse le corps en jeu : clip neuf (maillage explose), clip renomme (avatar
+// invisible), clips du jeu de REACTIONS (corps deforme).
+static constexpr const char* kActionSautNom = "CallSquad";
 
 static bool SautDirectActif()
 {
@@ -6334,8 +6339,8 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
             {
                 // Le message arrive AVANT que le decollage ne s'affiche (tampon d'interpolation) : c'est la fenetre
                 // de l'anticipation. Le front `loco 6` ne la rejouera pas (`impulsionParMessage`).
-                Red::CallVirtual(this, "TesseraSondeActionAnimation", pousse, acteur->second, Red::CName("CallSquad"),
-                                 int32_t{1}, kSautImpulsionS, int32_t{-1});
+                Red::CallVirtual(this, "TesseraSondeActionAnimation", pousse, acteur->second,
+                                 Red::CName(kActionSautNom), int32_t{1}, kSautImpulsionS, int32_t{-1});
                 g_suiviAvatars[event->actor()].impulsionParMessage = true;
             }
             else
@@ -9090,7 +9095,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         const bool parAction = SautParActionActif();
         auto phaseAction = [&](int32_t phase, float duree) {
             bool ok = false;
-            Red::CallVirtual(this, "TesseraSondeActionAnimation", ok, entityId, Red::CName("CallSquad"), phase, duree,
+            Red::CallVirtual(this, "TesseraSondeActionAnimation", ok, entityId, Red::CName(kActionSautNom), phase, duree,
                              int32_t{-1});
             SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT_ACTION phase=%d duree=%.2f ok=%d",
                                static_cast<unsigned long long>(networkId), phase, duree, ok ? 1 : 0);
@@ -9350,6 +9355,39 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             if (!(avance > -kAvanceMaxM && avance < kAvanceMaxM))
             {
                 avance = 0.0f;   // couvre aussi NaN : toute comparaison avec NaN est fausse
+            }
+            // ⭐⭐ ET SEULEMENT EN L'AIR (2026-09-20, F-PLY-548) — LE SOL EST UN MUR DANS LE TEMPS.
+            //
+            // Cette extrapolation predit la cible ~0,3 s plus loin A VITESSE CONSTANTE. Un corps
+            // PORTE va a vitesse constante : c'est le cas pour lequel elle a ete ecrite (passager
+            // d'ascenseur, 2026-08-27), et il rapporte `locomotion = 6`. Un corps qui TOUCHE LE SOL,
+            // lui, s'arrete net — et la prediction le plante sous le decor pendant que la vitesse
+            // lissee redescend.
+            //
+            // Mesure du 2026-09-20 (rafale ATTERRISSAGE, test SA, 30 i/s) : a chaque reception
+            // l'entite passe 1,43 m SOUS sa cible pendant ~75 ms, puis remonte en trois paliers
+            // (-0,50 m, -0,05 m, 0). Un corps de 1,8 m enfonce de 1,43 m, c'est une tete qui
+            // depasse — exactement le « il disparait a l'atterrissage » vu a l'ecran.
+            //
+            // C'est le MEME defaut que [F-PLY-542], a l'autre bout du saut : la-bas une vitesse de
+            // chute survivait a l'arret au sol et plombait le decollage suivant ; ici elle survit
+            // au CONTACT. La correction de 542 (remise a zero au sol) ne pouvait pas l'attraper :
+            // elle est gardee par `!cibleVerticale`, et a la reception la cible defile encore.
+            //
+            // On ne rattrape donc pas la vitesse — on retire l'extrapolation la ou son hypothese
+            // est fausse. Au sol, la cible EST le sol : il n'y a rien a predire.
+            const float avanceTemoin = avance;   // ce que l'ancienne regle aurait pose
+            if (pose.locomotion != 6)
+            {
+                avance = 0.0f;
+            }
+            if (suiviVert.imagesAtterrissage > 0)
+            {
+                SDK->logger->InfoF(PLUGIN,
+                                   "[avatar %llu] VERT_ATTER loco=%u vz=%.2f delai=%.3f dt=%.4f temoin=%.3f pose=%.3f",
+                                   static_cast<unsigned long long>(networkId),
+                                   static_cast<unsigned>(pose.locomotion), vzCible, delaiBorne, deltaTime,
+                                   avanceTemoin, avance);
             }
             positionVoulue.Z += avance;
         }
