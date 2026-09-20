@@ -2686,6 +2686,41 @@ public native class NetworkGameSystem extends IGameSystem {
         return pose;
     }
 
+    /// ⭐ LE STATUT DE LA MACHINE D'ACTION, LU QUAND ON VEUT — et c'est ce qui manquait.
+    ///
+    /// `TesseraSondeActionAnimation` journalise déjà un statut, mais **dans la même image que
+    /// `Launch()`** : il vaut donc toujours `READY (2)`, que l'action démarre ensuite ou non. Un
+    /// nombre qui ne peut pas varier ne mesure rien — c'est le défaut que le registre nomme
+    /// « compteur sur le symptôme ».
+    ///
+    /// Relu une seconde plus tard, le même champ départage :
+    ///   · `PROGRESS (3)` → le clip JOUE ;
+    ///   · `READY (2)` → il a été préparé et n'a jamais démarré ;
+    ///   · `FAILURE (5)` → le moteur l'a refusé ;
+    ///   · `COMPLETE (4)` → il a joué et fini.
+    ///
+    /// ⭐ Pourquoi ça compte ici : le verdict d'une animation ne dépend plus de la VIDÉO. Le
+    /// 2026-09-20, l'enregistreur du harnais rendait des images au canal rouge saturé — aucun
+    /// jugement visuel possible, et toute la campagne VISÉE bloquée. Un nombre, lui, traverse.
+    ///
+    /// `gameEActionStatus` : 0 INVALID · 1 BOUND · 2 READY · 3 PROGRESS · 4 COMPLETE · 5 FAILURE.
+    /// -1 = on n'a même pas pu atteindre le proxy (corps, IA ou proxy absent) — à distinguer de 0.
+    public func TesseraStatutAction(entityId: EntityID) -> Int32 {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return -1;
+        }
+        let ia = puppet.GetAIControllerComponent();
+        if !IsDefined(ia) {
+            return -1;
+        }
+        let proxy = ia.GetActionAnimationScriptProxy();
+        if !IsDefined(proxy) {
+            return -1;
+        }
+        return EnumInt(proxy.GetStatus());
+    }
+
     public func TesseraPousserFranchissement(entityId: EntityID, enVol: Bool, phase: Int32, typeMouvement: Int32) -> Bool {
         let entity = TesseraCorpsDeLEntite(entityId);   // DES seul rate le corps ENRICHI (2026-09-13)
         let puppet = entity as ScriptedPuppet;
