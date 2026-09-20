@@ -9133,6 +9133,16 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             suiviPosture.phaseFranchissement = kPhasesInversees ? (enVolMaintenant ? 1 : 0)
                                                                 : (enVolMaintenant ? 0 : 2);
             suiviPosture.receptionEnCours = !enVolMaintenant;
+            // ⭐ AU CONTACT, ON REPLACE TOUT DE SUITE (F-PLY-557). Une fois au sol l'avatar repasse par la
+            // branche IMMOBILE, qui ne corrige qu'une fois toutes les 2 s — un rythme cale sur l'hypothese
+            // « un corps immobile ne bouge pas ». Une RECEPTION la casse : le corps se fige a la hauteur de
+            // sa derniere image de VOL, et il y reste. Mesure du 2026-09-20, apres [F-PLY-556] : +0,09 a
+            // +0,22 m au-dessus du sol sur 6 receptions sur 11, encore la au bout de 0,6 s de fenetre.
+            if (!enVolMaintenant)
+            {
+                suiviPosture.rattrapageAuContact = true;
+                suiviPosture.depuisContactRattrapageS = 0.0f;
+            }
             if (enVolMaintenant)
             {
                 suiviPosture.chute = false;
@@ -9623,6 +9633,24 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         static constexpr float kPeriodePlacementImmobileS = 2.0f;
         auto& suiviImmobile = g_suiviAvatars[networkId];
         suiviImmobile.depuisPlacementImmobileS += deltaTime;
+        if (suiviImmobile.rattrapageAuContact)
+        {
+            suiviImmobile.depuisContactRattrapageS += deltaTime;
+            // ⚠ PAS A L'IMAGE DU CONTACT — LA CIBLE DESCEND ENCORE, ET C'EST MESURE.
+            //
+            // Premiere version, 2026-09-20 : le placement etait rearme des le contact. Resultat, PIRE que
+            // sans (residu median 0,156 → 0,238 m, pire 0,242 → 0,339 m, 11 receptions). La raison est
+            // ecrite plus haut, a propos de [F-PLY-085] : `SetEntityPosition` empile un `AITeleportCommand`,
+            // et une commande d'IA ne se remplace pas — elle s'EXECUTE, avec la destination qu'elle portait
+            // quand elle a ete empilee. A l'image du contact, cette destination est la cible d'ALORS, encore
+            // 15 cm au-dessus du sol ; et l'emettre remet le compteur a zero, donc supprime la correction
+            // tardive qui, elle, aurait ete juste. On attend que la cible se soit posee (mesure : 3 images).
+            if (suiviImmobile.depuisContactRattrapageS >= 0.25f)
+            {
+                suiviImmobile.rattrapageAuContact = false;
+                suiviImmobile.depuisPlacementImmobileS = 1.0e3f;   // le placement passe des cette image
+            }
+        }
 
         // ── ⭐ LE PASSAGER EST L'EXCEPTION, ET C'EST LUI QUI SAUTILLAIT ────────────────────
         //

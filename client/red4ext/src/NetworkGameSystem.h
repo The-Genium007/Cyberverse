@@ -315,6 +315,10 @@ struct SuiviAvatar
     float depuisCapS = 0.0f;
     float dernierYawCap = 1e9f;
     int32_t imagesAtterrissage = 0;
+    // ⭐ Une RECEPTION n'est pas une derive : on sait exactement quand elle arrive, et le corps y
+    // reste fige a la hauteur de sa derniere image de vol. Rearme le placement immobile (F-PLY-557).
+    bool rattrapageAuContact = false;
+    float depuisContactRattrapageS = 0.0f;
     uint8_t derniereLocoCap = 0;
     /// Saut par la machine d'action : l'impulsion est deja partie a l'arrivee du message « saut » (anticipation).
     bool impulsionParMessage = false;
