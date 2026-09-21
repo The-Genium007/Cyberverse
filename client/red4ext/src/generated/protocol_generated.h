@@ -3058,7 +3058,8 @@ struct PlayerEvent FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_ACTOR = 4,
     VT_KIND = 6,
     VT_ACTION = 8,
-    VT_PARAM = 10
+    VT_PARAM = 10,
+    VT_TICK = 12
   };
   uint64_t actor() const {
     return GetField<uint64_t>(VT_ACTOR, 0);
@@ -3072,6 +3073,9 @@ struct PlayerEvent FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t param() const {
     return GetField<uint32_t>(VT_PARAM, 0);
   }
+  uint64_t tick() const {
+    return GetField<uint64_t>(VT_TICK, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -3079,6 +3083,7 @@ struct PlayerEvent FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_KIND, 1) &&
            VerifyField<uint8_t>(verifier, VT_ACTION, 1) &&
            VerifyField<uint32_t>(verifier, VT_PARAM, 4) &&
+           VerifyField<uint64_t>(verifier, VT_TICK, 8) &&
            verifier.EndTable();
   }
 };
@@ -3099,6 +3104,9 @@ struct PlayerEventBuilder {
   void add_param(uint32_t param) {
     fbb_.AddElement<uint32_t>(PlayerEvent::VT_PARAM, param, 0);
   }
+  void add_tick(uint64_t tick) {
+    fbb_.AddElement<uint64_t>(PlayerEvent::VT_TICK, tick, 0);
+  }
   explicit PlayerEventBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -3115,8 +3123,10 @@ inline ::flatbuffers::Offset<PlayerEvent> CreatePlayerEvent(
     uint64_t actor = 0,
     uint8_t kind = 0,
     uint8_t action = 0,
-    uint32_t param = 0) {
+    uint32_t param = 0,
+    uint64_t tick = 0) {
   PlayerEventBuilder builder_(_fbb);
+  builder_.add_tick(tick);
   builder_.add_actor(actor);
   builder_.add_param(param);
   builder_.add_action(action);
