@@ -2622,6 +2622,16 @@ public native class NetworkGameSystem extends IGameSystem {
         // `groupe` reste un paramètre pour pouvoir essayer une autre action du même patron
         // (`ShootAction`, `CallSquad`…) sans recompiler le C++.
         let enAction = etat > 0;
+        // ⛔ `MeleeWeapon` A ZERO : ESSAYE LE 2026-09-21, SANS EFFET ([F-PLY-568]).
+        //
+        // La transition vers la mise en joue exige `NonCombatAim.state == 1` ET que le wrapper
+        // `MeleeWeapon` soit absent ([F-PLY-567]). Le forcer a zero juste avant la poussee ne
+        // change RIEN — quatre images calees sur le journal, deux « en joue », deux « relache »,
+        // toutes identiques. La cause est donc ailleurs : la machine a etats n'est vraisembla-
+        // blement jamais dans l'etat-source d'ou cette transition part.
+        //
+        // On ne garde pas la ligne : elle ne sert a rien, et un ecrivain de plus sur un wrapper
+        // partage est un risque pour le pas chasse ([F-PLY-438]) sans contrepartie.
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"RangedWeapon", 0.0);
         AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"combatLocomotion",
             enAction ? 1.0 : 0.0);
