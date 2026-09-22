@@ -6928,6 +6928,35 @@ void NetworkGameSystem::HandleAppearanceSync(const cyberpunk_rp::protocol::Appea
             }
         }
     }
+
+    // ── ⭐⭐ LA TRACE DE RECEPTION, POSEE LE 2026-09-22 (F-PLY-576) ─────────────────────────
+    //
+    // POURQUOI. `Tessera_ArmeDeLEntite` rend zero sur un avatar fantome arme, et toute la moitie
+    // SERVEUR de la chaine a ete ecartee sans le jeu : le fantome emet, le serveur range, le
+    // filtre laisse passer un fusil, et le relais porte six tests verts (stockage, livraison,
+    // re-annonce au degainage comme au rangement, survie a un changement de tenue, et la course
+    // des deux ordres d'arrivee). Il ne restait donc que deux suspects, tous deux ICI : soit ce
+    // message n'arrive jamais avec l'arme, soit il arrive et l'entite ne le retrouve pas.
+    //
+    // Cette fonction ne journalisait RIEN. Sans cette ligne, trancher exigeait une SECONDE session
+    // de jeu : constater le symptome, rebatir la DLL, relancer. Elle est donc posee AVANT d'avoir
+    // le verrou, precisement pour que la prochaine seance reponde en une fois.
+    //
+    // ⚠️ Ce qu'elle dit, et c'est le point : `garments=` distingue « aucun message porteur d'arme »
+    // de « message recu, arme absente du vecteur ». Un compteur unique confondrait les deux —
+    // c'est l'erreur que `arme=0` seul avait deja produite un cran plus haut.
+    if (SDK != nullptr && SDK->logger != nullptr)
+    {
+        const auto connue = m_networkedEntitiesLookup.find(id);
+        SDK->logger->InfoF(PLUGIN,
+            "[ApparenceRecue] id=%llu garments=%d arme=%llu vetements=%zu entite=%s",
+            static_cast<unsigned long long>(id),
+            sync->spec()->garments() == nullptr
+                ? -1 : static_cast<int>(sync->spec()->garments()->size()),
+            static_cast<unsigned long long>(appearance.arme),
+            appearance.vetements.size(),
+            connue == m_networkedEntitiesLookup.end() ? "PAS-ENCORE-NEE" : "connue");
+    }
     // ── L'ESTHETIQUE, RECOPIEE DEPUIS LE FIL ──────────────────────────────────────────────────
     //
     // On copie au lieu de garder le pointeur : le tampon FlatBuffers appartient au message recu et
