@@ -5090,7 +5090,33 @@ void NetworkGameSystem::HandleInteractionOpen(const cyberpunk_rp::protocol::Inte
 {
     constexpr uint8_t kUiKindCoffre = 7;
     constexpr uint8_t kUiKindContenant = 8;
-    constexpr uint8_t kUiKindInvocation = 8;
+    // ⛔ VALAIT 8, COMME kUiKindContenant — et ca cassait les contenants EN SILENCE.
+    //
+    // Corrige le 2026-09-22, avec sa contrepartie `UI_KIND_INVOCATION` dans `gateway.rs`. Les
+    // deux constantes sont recopiees A LA MAIN de part et d'autre du fil : elles bougent
+    // ENSEMBLE ou pas du tout, sinon le fil ment sans qu'une seule ligne ne le dise.
+    //
+    // CE QUI SE PASSAIT. Le test d'invocation, ci-dessous, vient EN PREMIER et sort par un
+    // `return` inconditionnel : l'ordre d'ouvrir un contenant du monde n'atteignait donc JAMAIS
+    // le test de la ligne suivante. Et le mode d'echec n'est pas celui qu'on imagine — la charge
+    // utile d'un contenant est un tampon FlatBuffers (`CoffreContenu`), donc NON VIDE : on ne
+    // tombait pas dans le garde-fou « SANS record », on recopiait le tampon binaire dans
+    // `m_invocationRecord` comme s'il s'agissait d'un nom de record de vehicule.
+    //
+    //     ouvrir une caisse ne montrait pas l'ecran de stockage — ca declenchait une invocation
+    //     de vehicule dont le nom de record etait fait d'octets FlatBuffers.
+    //
+    // ⭐ LA PREUVE, SANS SESSION DE JEU : `m_coffreEstContenant = (ui_kind == kUiKindContenant)`
+    // etait INATTEIGNABLE — la seule ligne qui peut le mettre a `true` est en aval du `return`.
+    // Le drapeau valait donc `false` en toutes circonstances, et `verbeChoix` rendait toujours 0.
+    //
+    // ⚠️ Les deux chemins ne partagent pas le meme FORMAT de payload (chaine brute pour
+    // l'invocation, tampon imbrique pour le contenant) : c'est ce qui rendait la collision
+    // dangereuse, et pas seulement ambigue.
+    constexpr uint8_t kUiKindInvocation = 9;
+    static_assert(kUiKindCoffre != kUiKindContenant && kUiKindContenant != kUiKindInvocation
+                      && kUiKindCoffre != kUiKindInvocation,
+                  "deux ui_kind partagent une valeur : ce decodeur en ignorera un EN SILENCE");
     if (msg == nullptr)
     {
         return;
