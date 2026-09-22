@@ -2643,6 +2643,25 @@ public native class NetworkGameSystem extends IGameSystem {
         let trait = new AnimFeature_AIAction();
         trait.state = etat;
         AnimationControllerComponent.ApplyFeatureToReplicate(puppet, groupe, trait);
+        // ⛔ PAS de `ApplyFeature` à côté : essayé le 2026-09-22, MESURé inutile (F-PLY-573).
+        //
+        // L'hypothèse était crois-able : le composant qui porte `humanoid.animgraph` sur notre
+        // entité dérivée déclare `isReplicable = 0`, et cette fonction-ci s'appelle
+        // `...ToReplicate`. A/B en jeu, deux exécutions complètes : la main de l'avatar atteint
+        // `avant=0,584 haut=1,472` AVEC l'appel supplémentaire et `avant=0,581 haut=1,470` SANS.
+        // Trois millimètres, soit le bruit. `ApplyFeatureToReplicate` applique bel et bien.
+        //
+        // ⚠️ Et le vrai enseignement n'est pas là : ce geste était déclaré ABSENT depuis des jours
+        // (F-PLY-566, corrigée), sur la foi de vidéos. Il faisait 54 cm. Ce n'est pas le code qui
+        // manquait, c'est l'instrument : voir `tools/game-harness/mesurer-la-pose.py`.
+        // ⭐ UNE TRACE HORODATEE, parce que sans elle le verdict est aveugle (2026-09-22).
+        //
+        // Le verdict d'un geste se prend en calant les images sur le journal
+        // (`tools/game-harness/caler-sur-le-journal.py`) : une planche echantillonnee au hasard
+        // peut tomber six fois sur le meme instant du cycle et ne rien prouver. Cette poussee-ci
+        // n'ecrivait RIEN — donc aucun point d'ancrage, donc aucune facon de savoir si l'image
+        // qu'on regarde est pendant ou apres le geste.
+        this.Tessera_Journal("[ViseeTrait] " + NameToString(groupe) + " etat=" + IntToString(etat));
         return true;
     }
 
