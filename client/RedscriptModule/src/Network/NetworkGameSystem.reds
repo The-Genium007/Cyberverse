@@ -2637,8 +2637,33 @@ public native class NetworkGameSystem extends IGameSystem {
             enAction ? 1.0 : 0.0);
         if enAction {
             // Reposés à chaque passe : le moteur remet les poids de wrapper à zéro (F-PLY-438).
-            AnimationControllerComponent.SetAnimWrapperWeight(puppet, n"Wea_Handgun", 1.0);
             AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"WeaponRight", 1.0);
+
+            // ⭐⭐ LE TYPE D'ARME VIENT DE L'ARME, PAS D'UNE CONSTANTE (2026-09-22, F-PLY-575).
+            //
+            // Cette ligne posait `Wea_Handgun` à 1.0 **quelle que soit l'arme tenue**. Mesuré :
+            // pistolet, fusil d'assaut, katana et mains nues levaient le bras de +0,613 / +0,612 /
+            // +0,620 / +0,617 m — **le même geste à 8 mm près**, sur quatre armes que tout oppose.
+            // Une uniformité pareille n'est pas un succès, c'est la signature d'un paramètre ignoré :
+            // le graphe ne voyait jamais l'arme réelle, seulement notre constante. Tout le monde
+            // braquait comme un pistolet — le fusil à une main, et les mains nues un flingue invisible.
+            //
+            // Le graphe connaît **21 familles** (`Wea_Handgun`, `Wea_Rifle`, `Wea_Katana`, `Wea_Fists`…).
+            // On ne les mappe pas à la main : la recette de CDPR le fait déjà, et elle est appelée
+            // vingt lignes plus haut dans ce même fichier pour l'habillage. C'est l'accesseur que le
+            // natif emprunte — on l'emprunte aussi.
+            //
+            // ⚠️ Repli sur `Wea_Handgun` quand l'entité ne porte pas d'arme lisible : sans aucun
+            // wrapper de type, la couche de visée est pondérée à zéro et le bras ne bouge plus du
+            // tout. Mieux vaut un geste imparfait qu'aucun geste — et le cas se mesure à part.
+            let npcVisee = puppet as NPCPuppet;
+            let armeVisee = this.Tessera_ArmeDeLEntite(entityId);
+            if IsDefined(npcVisee) && TDBID.IsValid(armeVisee) {
+                NPCPuppet.SetAnimWrapperBasedOnEquippedItem(npcVisee, t"AttachmentSlots.WeaponRight",
+                    ItemID.FromTDBID(armeVisee), 1.0);
+            } else {
+                AnimationControllerComponent.SetAnimWrapperWeight(puppet, n"Wea_Handgun", 1.0);
+            }
         }
         let trait = new AnimFeature_AIAction();
         trait.state = etat;
