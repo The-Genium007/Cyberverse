@@ -4248,3 +4248,96 @@ public class TesseraFinGesteLocal extends DelayCallback {
         }
     }
 }
+
+// ── Classes de PRODUCTION, sorties des sondes le 2026-09-22 ──────────────────────────────────
+// NetworkGameSystem les instancie. Elles vivaient dans AppearanceProbe.reds et CrowdProbe.reds,
+// que build-client.yml laisse HORS du zip (ce sont des sondes) : chez un joueur, redscript ne les
+// resolvait pas et faisait tomber TOUT r6/scripts (UNRESOLVED_TYPE, menu vanilla). Invisible sur
+// le poste de dev, ou src/Network/ est deploye en entier. Constate au playtest 2 (0.2.0-pts.4).
+
+// Verdict de l'HYDRATATION (2026-08-09) — même mesure que la sonde ci-dessus, mais posée sur le
+// chemin de production plutôt que sur un cobaye.
+//
+// POURQUOI. Le compteur « apparences appliquées » de la boucle d'hydratation comptait des ORDRES
+// PASSÉS, jamais des effets : `AppliquerApparenceStatique` renvoie `true` dès que l'entité est
+// trouvée. Lucas a tranché à l'oeil le 2026-08-09 — « l'esthétique n'est pas hydratée » — alors que
+// le compteur annonçait 81 sur 96. Exactement le piège de F-PNJ-130, repris par l'autre bout.
+//
+// `SANS-EFFET` est le verdict qui accuse : le moteur rejette en silence une apparence étrangère au
+// jeu d'apparences du PNJ (F-PNJ-051), ce qui arrive dès que les deux clients n'ont pas le même
+// record pour cette entité.
+public class TesseraVerdictHydratation extends DelayCallback {
+    let pantin: wref<ScriptedPuppet>;
+    let demandee: CName;
+    let origine: CName;
+
+    public func Call() -> Void {
+        let reseau = GameInstance.GetNetworkGameSystem();
+        if !IsDefined(reseau) {
+            return;
+        }
+        if !IsDefined(this.pantin) {
+            reseau.Tessera_Journal(s"[Hydra] VERDICT=entite-absente demandee=\(this.demandee)");
+            return;
+        }
+        let relue = this.pantin.GetCurrentAppearanceName();
+        let verdict = Equals(relue, this.demandee) ? "PREND" : (Equals(relue, this.origine) ? "SANS-EFFET" : "AUTRE");
+        reseau.Tessera_Journal(s"[Hydra] VERDICT=\(verdict) relue=\(relue) demandee=\(this.demandee) origine=\(this.origine)");
+    }
+}
+
+// Relevé d'ÉTAT d'un PNJ statique, toutes les 30 s, tant qu'il est chargé.
+//
+// C'est le seul instrument qui mesure ce que le client AFFICHE, et dans la DURÉE. Tous les
+// précédents mesuraient un instant (un ordre passé, une relecture à 3 s) — aucun ne pouvait voir
+// une cohérence qui se DÉGRADE, ce qui est le mode de défaillance soupçonné : un PNJ déchargé puis
+// rechargé reçoit une nouvelle apparence au hasard, et l'hydratation le croit déjà fait.
+//
+// ⚠️ Se ré-arme lui-même : `DelayCallback` est one-shot. Un relevé unique ne dirait rien de la
+// durée, et c'est précisément la durée qui est en cause.
+public class TesseraReleveEtatStatique extends DelayCallback {
+    // Une EntityID, pas une `wref<ScriptedPuppet>`. Deux raisons, et la seconde est le coeur du
+    // chantier : (1) une reference faible tombe des que le PNJ est decharge, alors que l'identifiant
+    // reste valide et permet de le retrouver s'il revient ; (2) un REMPLACANT n'est pas `IsCrowd()`,
+    // donc `CrowdProbe` ne le classe jamais — sans ce suivi par identifiant, la mesure ne verrait
+    // pas les PNJ reparees et compterait la reparation comme un echec.
+    let cible: EntityID;
+    let cle: String;
+    // Apparence que ce PNJ DOIT porter. Vide pour un natif (le serveur tranche ailleurs), posee
+    // pour un remplacant — c'est nous qui l'avons fabrique, donc nous qui garantissons sa tenue.
+    let attendue: CName;
+
+    public func Call() -> Void {
+        let reseau = GameInstance.GetNetworkGameSystem();
+        if !IsDefined(reseau) {
+            return;
+        }
+        let entite = GameInstance.FindEntityByID(GetGameInstance(), this.cible);
+        let pantin = entite as ScriptedPuppet;
+        // ── RECONCILIATION (2026-08-09) ──────────────────────────────────────────────────────
+        // Ce releve ne se contente plus d'OBSERVER : s'il constate un ecart avec l'apparence
+        // attendue, il le CORRIGE. Mesure qui l'a impose : deux clients avaient bien cree chacun
+        // un remplacant pour le meme PNJ, meme record — et affichaient deux variantes DIFFERENTES.
+        // `DynamicEntitySpec.appearanceName` n'est donc pas honore pour un record de foule : le
+        // moteur tire dans le pool au hasard (F-PNJ-049). L'apparence doit etre imposee APRES le
+        // spawn, par le chemin qui est mesure comme fonctionnel (ScheduleAppearanceChange).
+        if IsDefined(pantin) && IsNameValid(this.attendue)
+            && NotEquals(pantin.GetCurrentAppearanceName(), this.attendue) {
+            reseau.AppliquerApparenceStatique(this.cible, this.attendue);
+        }
+        if !IsDefined(pantin) {
+            // On le DIT et on continue de surveiller : un PNJ absent d'un journal et present dans
+            // l'autre explique une divergence a lui seul, et il peut revenir.
+            reseau.Tessera_Journal(s"[Etat] \(this.cle);0;decharge;decharge");
+        } else {
+            let voulue = reseau.Tessera_ApparenceStatiqueConnue(this.cible);
+            reseau.Tessera_Journal(
+                s"[Etat] \(this.cle);\(TDBID.ToNumber(pantin.GetRecordID()));\(pantin.GetCurrentAppearanceName());\(IsNameValid(voulue) ? NameToString(voulue) : "inconnue-du-serveur")");
+        }
+        let suivant = new TesseraReleveEtatStatique();
+        suivant.cible = this.cible;
+        suivant.cle = this.cle;
+        suivant.attendue = this.attendue;
+        GameInstance.GetDelaySystem(GetGameInstance()).DelayCallback(suivant, 30.0, false);
+    }
+}
