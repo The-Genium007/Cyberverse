@@ -2706,8 +2706,21 @@ public native class NetworkGameSystem extends IGameSystem {
         // Une mesure d'effet ne departage pas ces deux-la. Seul l'EMETTEUR le peut — c'est la
         // regle du « compteur sur le symptome » : un compteur en aval du point de decision
         // confirme TOUTES les causes. On journalise donc la branche prise et l'arme lue.
+        // ⚠⚠ ET LE NOMBRE DE VETEMENTS, PARCE QUE `arme=0` CONFIRME DEUX CHOSES (2026-09-22).
+        //
+        // `Tessera_ArmeDeLEntite` lit `ApparencePourEntite(cible)->arme`, et cet accesseur rend
+        // `nullptr` quand aucune fiche d'apparence ne correspond a l'entite — auquel cas la
+        // fonction rend zero, exactement comme une fiche presente mais sans arme. Le meme
+        // nombre pour deux causes opposees : c'est le defaut que ce journal etait cense eviter,
+        // et je l'ai reintroduit d'un cran plus bas.
+        //
+        // `Tessera_NombreDeVetements` lit la MEME fiche. Un avatar habille en porte plusieurs :
+        // `vet>0` prouve donc que la fiche EXISTE et que seule l'arme y manque · `vet=0`
+        // oriente vers une fiche absente, c'est-a-dire un probleme d'APPARIEMENT entite <-> id
+        // reseau, pas de livraison. Deux causes, deux signatures.
         this.Tessera_Journal("[ViseeTrait] " + NameToString(groupe) + " etat=" + IntToString(etat)
-            + " voie=" + this.m_viseeVoie + " arme=" + TDBID.ToStringDEBUG(this.m_viseeArme));
+            + " voie=" + this.m_viseeVoie + " arme=" + TDBID.ToStringDEBUG(this.m_viseeArme)
+            + " vet=" + IntToString(this.Tessera_NombreDeVetements(entityId)));
         return true;
     }
 
