@@ -2563,6 +2563,12 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    /// Témoins de la dernière poussée de visée : quelle branche a été prise, et quelle arme a été lue.
+    /// Ils n'existent que pour le journal — sans eux, un « aucun changement » ne distingue pas
+    /// « le graphe ignore le type d'arme » de « mon correctif n'a jamais tourné ».
+    private let m_viseeVoie: String;
+    private let m_viseeArme: TweakDBID;
+
     /// LA MISE EN JOUE — deux tenues distinctes, pas un bras qui pointe (Lucas, 2026-09-12).
     ///
     ///     arme rangee   : rien
@@ -2658,11 +2664,14 @@ public native class NetworkGameSystem extends IGameSystem {
             // tout. Mieux vaut un geste imparfait qu'aucun geste — et le cas se mesure à part.
             let npcVisee = puppet as NPCPuppet;
             let armeVisee = this.Tessera_ArmeDeLEntite(entityId);
+            this.m_viseeArme = armeVisee;
             if IsDefined(npcVisee) && TDBID.IsValid(armeVisee) {
                 NPCPuppet.SetAnimWrapperBasedOnEquippedItem(npcVisee, t"AttachmentSlots.WeaponRight",
                     ItemID.FromTDBID(armeVisee), 1.0);
+                this.m_viseeVoie = "recette";
             } else {
                 AnimationControllerComponent.SetAnimWrapperWeight(puppet, n"Wea_Handgun", 1.0);
+                this.m_viseeVoie = IsDefined(npcVisee) ? "repli(arme illisible)" : "repli(pas un NPCPuppet)";
             }
         }
         let trait = new AnimFeature_AIAction();
@@ -2686,7 +2695,19 @@ public native class NetworkGameSystem extends IGameSystem {
         // peut tomber six fois sur le meme instant du cycle et ne rien prouver. Cette poussee-ci
         // n'ecrivait RIEN — donc aucun point d'ancrage, donc aucune facon de savoir si l'image
         // qu'on regarde est pendant ou apres le geste.
-        this.Tessera_Journal("[ViseeTrait] " + NameToString(groupe) + " etat=" + IntToString(etat));
+        // ⚠⚠ LA TRACE DIT QUEL CHEMIN A ETE PRIS, PAS SEULEMENT QU'ON EST PASSE (2026-09-22).
+        //
+        // Le correctif du wrapper d'arme n'a RIEN change aux nombres (fusil +0,621 m avant comme
+        // apres). Deux explications tiennent : soit la couche de visee ne depend pas du type
+        // d'arme, soit **mon correctif ne s'execute pas** parce que `Tessera_ArmeDeLEntite` rend
+        // `None` sur notre avatar, auquel cas on retombe sur le repli `Wea_Handgun` et rien n'a
+        // bouge, pour une raison qui n'a rien a voir avec le graphe.
+        //
+        // Une mesure d'effet ne departage pas ces deux-la. Seul l'EMETTEUR le peut — c'est la
+        // regle du « compteur sur le symptome » : un compteur en aval du point de decision
+        // confirme TOUTES les causes. On journalise donc la branche prise et l'arme lue.
+        this.Tessera_Journal("[ViseeTrait] " + NameToString(groupe) + " etat=" + IntToString(etat)
+            + " voie=" + this.m_viseeVoie + " arme=" + TDBID.ToStringDEBUG(this.m_viseeArme));
         return true;
     }
 
