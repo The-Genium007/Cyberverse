@@ -6074,6 +6074,104 @@ void NetworkGameSystem::DetruireTousLesRemplacants(const char* raison)
     SDK->logger->InfoF(PLUGIN, "Roster : %zu remplacants detruits (%s)", combien, raison);
 }
 
+// ── ⛔⛔ LE MONDE PART, SES ENTITES AVEC LUI (2026-09-24) ─────────────────────────────────────
+//
+// Ce systeme vit autant que le PROCESSUS ; le monde, lui, se decharge a chaque « CHANGER DE
+// PERSONNAGE » (retour au menu de demarrage) et a chaque chargement. Rien ne videait les tables
+// indexees par une entite de ce monde. Journal du 2026-09-24, pre-playtest :
+//
+//     18:55:07  Game restored                       <- nouveau monde
+//     18:55:35  [ApparenceRecue] id=4 ... entite=connue
+//     18:55:25  [avatar 4] RECALAGE derive=1928.13m  <- on pilote un EntityID d'un autre monde
+//
+// L'avatar du voisin n'est JAMAIS rene (`HandleSnapshot` ne fait naitre que les ids inconnus) : on
+// ne voyait plus personne, pendant que les autres nous voyaient. Et l'EntityID perime peut designer
+// une AUTRE entite du nouveau monde — c'est elle qu'on deplacait et qu'on habillait.
+//
+// Appele AVANT le detachement : le monde existe encore, donc on rend proprement chaque corps
+// enrichi au spawner du mode photo — un corps jamais rendu y reste compte, et au-dela de quelques
+// corps vivants le spawner livre des corps CASSES (vetements detaches, sans animation).
+//
+// ⚠️ `m_appearances` RESTE : c'est ce que le serveur a DIT, et il le croit toujours livre a cette
+// connexion. L'effacer ferait renaitre les voisins au record de repli jusqu'au tourniquet (30 s par
+// voisin). `g_dejaVus` reste pour la raison donnee dans `DetruireTousLesRemplacants`.
+void NetworkGameSystem::OublierLeMondeCharge(const char* raison)
+{
+    // ⭐ LE PERSONNAGE QUITTE LE MONDE ICI, ET NULLE PART AILLEURS (2026-09-24).
+    //
+    // Le crochet du menu pause l'envoyait au CLIC sur « CHANGER DE PERSONNAGE » — AVANT la
+    // confirmation native (« Voulez-vous vraiment quitter la partie ? »). Mesure a deux instances :
+    // `SelectCharacter(0)` part a 19:30:28, la fenetre de confirmation est encore a l'ecran. Un
+    // joueur qui ANNULE restait en jeu chez lui, retire du monde chez tous les autres.
+    //
+    // Le dechargement du monde, lui, n'arrive que si le joueur a confirme — quelle que soit la voie.
+    // `m_gameRestored` distingue un monde de JEU du decor du menu : a la sortie du menu vers la
+    // partie, le lobby a DEJA choisi le personnage suivant, et le retirer serait une catastrophe.
+    if (m_gameRestored && m_personnageIncarne != 0)
+    {
+        Tessera_ChoisirPersonnage(0);
+    }
+    const std::size_t corps = m_networkedEntitiesLookup.size();
+    const auto rendre = [this](RED4ext::ent::EntityID entite)
+    {
+        int32_t eteints = -1;
+        Red::CallVirtual(this, "TesseraEteindreCorps", eteints, entite);
+        std::string diagSuppr;
+        Tessera::SpawnEnrichi::Supprimer(entite, diagSuppr);
+        Red::CallVirtual(this, "DestroyTransientEntity", entite);
+    };
+    for (const auto& [id, entite] : m_networkedEntitiesLookup)
+    {
+        rendre(entite);
+        g_telemetrie.OublierEntite(id);
+    }
+    for (const auto& [id, entite] : g_ancienCorpsEnSursis)
+    {
+        (void)id;
+        rendre(entite);
+    }
+    DetruireTousLesRemplacants(raison);
+    Tessera::SpawnEnrichi::OublierAttentes();
+    // Le regard est indexe par le hash de l'EntityID, que le monde suivant peut reattribuer.
+    Red::CallVirtual(this, "TesseraOublierRegards");
+
+    m_networkedEntitiesLookup.clear();
+    m_appliedAppearance.clear();
+    g_ancienCorpsEnSursis.clear();
+    g_absentsDepuis.clear();
+    g_dernieresCibles.clear();
+    g_tamponsJoueurs.clear();
+    g_suiviAvatars.clear();
+    g_visageEnReconstruction.clear();
+    g_avatarsARelever.clear();
+    g_gestesEnAttente.clear();
+    g_avatarsEnGeste.clear();
+    g_posesEnAttente.clear();
+    g_avatarsAssis.clear();
+    g_porteurParAvatar.clear();
+    g_avatarsAttachesPlateforme.clear();
+    g_poseVoulueAttachee.clear();
+    g_yawVouluAttache.clear();
+    g_allureAttachee.clear();
+    g_cadavresAppliques.clear();
+    g_essaisCadavre.clear();
+    // Les statiques du monde suivant sont des entites NEUVES : leur apparence est a reappliquer.
+    g_apparencesAppliquees.clear();
+    g_vehiculeLocalMonte = 0;
+    g_cabineJoueurLocal = 0;
+    g_localEtaitEnLair = false;
+    g_localSautEmis = false;
+    m_gameRestored = false;
+    SDK->logger->InfoF(PLUGIN, "[monde] %s : %zu corps distant(s) rendu(s), tables du monde videes", raison,
+                       corps);
+}
+
+void NetworkGameSystem::OnBeforeWorldDetach(RED4ext::world::RuntimeScene* aScene)
+{
+    OublierLeMondeCharge("monde decharge");
+    IGameSystem::OnBeforeWorldDetach(aScene);
+}
+
 void NetworkGameSystem::NettoyerRemplacants(float deltaTime)
 {
     // ── LA CONTREPARTIE DE TOUTE CRÉATION ──────────────────────────────────────────────────
@@ -7231,6 +7329,13 @@ bool NetworkGameSystem::AttendreEncore(uint64_t networkId)
 
 bool NetworkGameSystem::SpawnNetworkEntity(uint64_t networkId, const RED4ext::Vector4& worldPosition)
 {
+    // Pas de monde de JEU (menu de demarrage, createur, chargement) : un corps ne ici appartiendrait
+    // au decor du menu et mourrait avec lui (journal du 2026-09-24 : « Spawn entite reseau 4 » a
+    // 18:50:30, quarante secondes avant « Game restored »). Le snapshot suivant le fera naitre.
+    if (!m_gameRestored)
+    {
+        return false;
+    }
     TesseraAppliquerDrapeauxUneFois();
     // Le record vient du SERVEUR (AppearanceSync). Le repli n'est utilise que si aucune apparence
     // n'est encore connue pour cet id — et il se signale, parce qu'un avatar de repli silencieux
@@ -7647,6 +7752,14 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     // envoi pour laisser le moteur poser la téléportation avant de re-mesurer/ré-émettre la
     // position (sinon on renverrait l'ancienne, redéclenchant une correction — cf.
     // HandlePositionCorrection).
+    // Pas de monde de jeu, pas de position : au menu, le « joueur » n'est pas le personnage, et sa
+    // position arrivait au serveur des que le lobby avait choisi (journal serveur du 2026-09-24 :
+    // positions acceptees pour un client encore sur l'ecran titre).
+    if (!m_gameRestored)
+    {
+        return;
+    }
+
     if (m_skipNextPositionUpdate)
     {
         m_skipNextPositionUpdate = false;

@@ -105,4 +105,7 @@ Resultat Tenter(std::uint64_t aNetworkId, const std::vector<std::uint8_t>& aBlob
 /// pour ces corps (`DeleteEntity` est sans effet). `false` + `aDiag` si ce n'est pas un corps enrichi
 /// ou si la liste du spawner ne se relit pas. Voir le `.cpp` pour le chemin natif et la mesure.
 bool Supprimer(RED4ext::ent::EntityID aEntite, std::string& aDiag);
+
+/// Oublie les naissances en cours : le monde qui devait les recevoir se decharge.
+void OublierAttentes();
 }  // namespace Tessera::SpawnEnrichi

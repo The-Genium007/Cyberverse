@@ -1184,4 +1184,9 @@ bool Supprimer(RED4ext::ent::EntityID aEntite, std::string& aDiag)
     aDiag = "rendu au spawner : " + std::to_string(compte) + " -> " + std::to_string(apres) + " corps";
     return apres + 1 == compte;
 }
+
+void OublierAttentes()
+{
+    g_enAttente.clear();
+}
 }  // namespace Tessera::SpawnEnrichi

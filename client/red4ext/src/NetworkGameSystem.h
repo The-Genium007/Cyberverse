@@ -1062,6 +1062,9 @@ private:
 
     void OnRegisterUpdates(RED4ext::UpdateRegistrar* aRegistrar) override;
     bool OnGameRestored() override;
+    /// Le monde se decharge (« changer de personnage », chargement) : tout ce qui designe une
+    /// entite de CE monde doit partir avec lui. Voir `OublierLeMondeCharge`.
+    void OnBeforeWorldDetach(RED4ext::world::RuntimeScene* aScene) override;
 
 private:
     bool ConnectToServer(const std::string& host, uint16_t port);
@@ -1154,6 +1157,10 @@ protected:
     /// Teardown : détruit TOUS nos remplaçants. Appelé à la déconnexion — sans ça ils survivent
     /// à la session qui les a créés.
     void DetruireTousLesRemplacants(const char* raison);
+    /// Teardown du MONDE, pas de la connexion : rend chaque corps distant a son createur et vide
+    /// toutes les tables indexees par une entite du monde. Garde `m_appearances` (verite serveur,
+    /// toujours valide pour cette connexion) pour que les corps renaissent justes au monde suivant.
+    void OublierLeMondeCharge(const char* raison);
     // Réconcilie un Snapshot serveur : spawn (id inconnu) / interpole (id connu) / despawn (id disparu).
     void HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* snapshot);
     /// RTT courant de la connexion, en millisecondes ; -1 si inconnu (pas encore connecté).

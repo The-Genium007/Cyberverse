@@ -1870,6 +1870,18 @@ public native class NetworkGameSystem extends IGameSystem {
     //
     // ⚠️ J'ai bâti DEUX correctifs sur un diagnostic deviné entre ces trois hypothèses, et les
     // deux étaient faux. On mesure maintenant : l'id reçu, et laquelle des deux résolutions échoue.
+    // Appelé par `OublierLeMondeCharge` (C++) quand le monde se décharge : les regards sont indexés
+    // par le hash d'un EntityID, que le monde suivant peut réattribuer à un autre corps.
+    public func TesseraOublierRegards() -> Void {
+        ArrayClear(this.m_regardCles);
+        ArrayClear(this.m_regardYaw);
+        ArrayClear(this.m_regardPitch);
+        ArrayClear(this.m_regardEvent);
+        ArrayClear(this.m_regardBras);
+        ArrayClear(this.m_regardFournisseur);
+        ArrayClear(this.m_regardArme);
+    }
+
     public func TesseraEteindreCorps(cible: EntityID) -> Int32 {
         let corps = TesseraCorpsDeLEntite(cible) as GameObject;
         if !IsDefined(corps) {
