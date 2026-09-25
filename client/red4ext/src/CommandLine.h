@@ -108,6 +108,19 @@ inline bool SpawnEnrichiDemande(char* commandLine)
     return std::string(commandLine).find("--tessera-spawn-enrichi") != std::string::npos;
 }
 
+// `--tessera-sans-spawn-enrichi` — COUPE la voie enrichie, allumee par defaut depuis le 2026-09-25.
+//
+// ⭐ Le defaut s'est inverse parce que l'ancien laissait TOUS les joueurs sans le V des autres :
+// aucun lanceur de production ne passait `--tessera-spawn-enrichi`. Ce drapeau garde l'A/B possible
+// et sert de repli si la voie (couche 3, ADR 0015) plantait chez quelqu'un.
+// ⚠️ Pas de collision de sous-chaine : « --tessera-sans-spawn-enrichi » ne contient pas
+// « --tessera-spawn-enrichi ».
+inline bool SansSpawnEnrichiDemande(char* commandLine)
+{
+    if (commandLine == nullptr) { return false; }
+    return std::string(commandLine).find("--tessera-sans-spawn-enrichi") != std::string::npos;
+}
+
 // `--tessera-charge-exhaustive` — LE CORRECTIF de F-PLY-366, en sonde d'abord.
 //
 // ⭐⭐⭐ CE QU'IL CORRIGE. L'avatar NAIT avec le visage du joueur LOCAL : l'appel natif construit la

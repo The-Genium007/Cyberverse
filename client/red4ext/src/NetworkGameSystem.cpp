@@ -1098,11 +1098,14 @@ void NetworkGameSystem::TesseraAppliquerDrapeauxUneFois()
 {
     if (m_drapeauxAppliques) { return; }
     m_drapeauxAppliques = true;
-    if (SpawnEnrichiDemande(GetCommandLineA()))
+    // ⭐ ALLUME PAR DEFAUT depuis le 2026-09-25. `--tessera-spawn-enrichi` reste accepte (les
+    // lanceurs de test le passent) mais ne change plus rien ; seul le retrait s'exprime.
+    if (SansSpawnEnrichiDemande(GetCommandLineA()))
     {
-        Tessera::SpawnEnrichi::g_actif = true;
-        SDK->logger->InfoF(PLUGIN, "spawn enrichi ALLUME par --tessera-spawn-enrichi");
+        Tessera::SpawnEnrichi::g_actif = false;
     }
+    SDK->logger->InfoF(PLUGIN, "spawn enrichi %s au lancement",
+                       Tessera::SpawnEnrichi::g_actif ? "ALLUME" : "ETEINT par --tessera-sans-spawn-enrichi");
 }
 
 bool NetworkGameSystem::Tessera_SpawnEnrichi(bool actif)

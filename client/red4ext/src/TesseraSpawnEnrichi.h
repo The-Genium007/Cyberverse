@@ -19,8 +19,11 @@
 // Il appelle une fonction du binaire par RVA, avec une requete assemblee a la main. Quatre
 // garde-fous, decides avec Lucas le 2026-08-23, et aucun n'est decoratif :
 //
-//   1. le drapeau `g_actif` est **ETEINT par defaut** — rien ne s'execute tant qu'on ne l'allume
-//      pas, exactement comme `g_pilotageParEntrees` avant sa mesure ;
+//   1. le drapeau `g_actif` — ⭐ **ALLUME par defaut depuis le 2026-09-25** (decision de Lucas du
+//      2026-09-13, jamais appliquee jusque-la). Eteint, AUCUN joueur ne voyait le V d'un autre :
+//      le launcher ne passe pas `--tessera-spawn-enrichi`, donc tout voisin sortait en passant
+//      (journal du playtest du 2026-09-25 : zero ligne `[spawn enrichi]`). `--tessera-sans-spawn-
+//      enrichi` le coupe, pour l'A/B ;
 //   2. la charge est **validee** avant tout appel (magic, compteurs, taille coherente) ;
 //   3. les gardes du spawner sont **relues a l'instant**, jamais supposees ;
 //   4. tout echec **rend la main** a la voie sure (`SpawnNetworkAvatar`), il n'y a pas de chemin
@@ -41,7 +44,7 @@
 
 namespace Tessera::SpawnEnrichi
 {
-/// L'interrupteur. ⚠️ **ETEINT par defaut, et c'est le premier garde-fou.**
+/// L'interrupteur. ⭐ **ALLUME par defaut depuis le 2026-09-25** — voir le garde-fou 1 ci-dessus.
 ///
 /// La lecon vient du pilotage par entrees : le correctif de glissement etait ECRIT et JUSTE, et il
 /// est reste inerte des semaines parce que personne n'avait decide quand l'allumer (F-PLY-223). On

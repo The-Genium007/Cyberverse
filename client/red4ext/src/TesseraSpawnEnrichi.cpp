@@ -19,7 +19,9 @@
 
 namespace Tessera::SpawnEnrichi
 {
-bool g_actif = false;
+// ⭐ ALLUME par defaut (2026-09-25) : c'est la SEULE voie qui donne a un voisin son propre V. Une
+// initialisation constante ne depend d'aucun ordre entre unites de compilation.
+bool g_actif = true;
 
 namespace
 {
