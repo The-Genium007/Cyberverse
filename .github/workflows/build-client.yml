@@ -76,6 +76,14 @@ jobs:
           if (-not $dll) { Write-Error "Plugin DLL introuvable"; exit 1 }
           Copy-Item $dll.FullName $plug/
           Write-Host "Plugin : $($dll.FullName)  ($($dll.Length) o)"
+          # PDB du plugin -> symboles/, HORS de staging : il ne part jamais chez les joueurs, il sert
+          # a nommer les fonctions d'un plantage (Tessera, spec 2026-09-26-plantages-du-jeu-design).
+          # Un PDB ne se reconstruit pas apres coup : sans lui, un plantage de CE build reste illisible.
+          $pdb = Join-Path $dll.DirectoryName 'Cyberverse.Red4Ext.pdb'
+          if (-not (Test-Path $pdb)) { Write-Error "PDB introuvable a cote du plugin (src/CMakeLists.txt : /Zi + /DEBUG)"; exit 1 }
+          New-Item -ItemType Directory -Force -Path symboles | Out-Null
+          Copy-Item $pdb symboles/; Copy-Item $dll.FullName symboles/
+          Write-Host "Symboles -> symboles/ : $((Get-Item $pdb).Length) o"
           # DLL runtime -> bin/x64/ (a cote de l'exe = sur le chemin de recherche DLL).
           # libprotoc (compilateur protobuf) exclu : inutile au runtime, ~10 Mo.
           $vbin = Get-ChildItem -Recurse client/red4ext/build -Directory -Filter bin |
@@ -156,6 +164,13 @@ jobs:
           path: staging/**
           if-no-files-found: error
 
+      - name: Upload symboles (PDB, jamais livre aux joueurs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyberverse-client-symboles
+          path: symboles/**
+          if-no-files-found: error
+
       # ── Publication netcode-v* (declenchee a la main) ─────────────────────────────────────
       # Ferme la boucle qui a rendu le jeu injouable le 2026-07-15 : release.yml (monorepo
       # Tessera) consomme le netcode via une release `netcode-v*` sur The-Genium007/distribution
@@ -206,4 +221,8 @@ jobs:
           (package-dev puis promote) sur le monorepo pour composer et publier le modset." \
           || gh release upload "netcode-v${V}" cyberverse-client.zip \
             --repo The-Genium007/distribution --clobber
+          # Symboles a cote du zip, en asset SEPARE : release.yml ne telecharge que
+          # cyberverse-client.zip, le PDB n'entre donc jamais dans le modset.
+          (cd symboles && 7z a -tzip ../cyberverse-client-symboles.zip . >/dev/null)
+          gh release upload "netcode-v${V}" cyberverse-client-symboles.zip             --repo The-Genium007/distribution --clobber
           echo "::notice::netcode-v${V} publiee — lancer maintenant release.yml (package-dev + promote) sur le monorepo"
