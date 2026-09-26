@@ -959,6 +959,10 @@ constexpr auto kDelaiAvantRhabillage = std::chrono::milliseconds(150);
 bool g_localEtaitEnLair = false;
 /// Le saut en cours a-t-il deja ete emis ? L'intention ET le decollage peuvent le signaler : un seul envoi.
 bool g_localSautEmis = false;
+// Filtre temporel de l'allure « en l'air » a l'emission (retours du playtest 2, R1).
+bool g_localEnLairBrut = false;
+std::chrono::steady_clock::time_point g_localEnLairDepuis{};
+std::uint8_t g_localDerniereAllureSol = 0;
 
 /// Dernier masque d'etats de locomotion releve sur la population NATIVE autour du
 /// joueur. -2 = jamais releve (-1 est une valeur legitime : joueur injoignable).
@@ -2309,10 +2313,42 @@ void NetworkGameSystem::SendPositionUpdate(float x, float y, float z, float yaw,
     {
         packedLocomotion = 0;
     }
-    const auto locomotion = locomotionForcee >= 0
-                                ? static_cast<uint8_t>(locomotionForcee)
-                                : static_cast<uint8_t>(packedLocomotion & 0xFF);
+    auto locomotion = locomotionForcee >= 0
+                          ? static_cast<uint8_t>(locomotionForcee)
+                          : static_cast<uint8_t>(packedLocomotion & 0xFF);
     const auto moveDir = static_cast<uint8_t>((packedLocomotion >> 8) & 0xFF);
+
+    // ⛔ RETOURS DU PLAYTEST 2 (2026-09-26, R1 « les mouvements s'arretent ») — « en l'air » est
+    // FILTRE DANS LE TEMPS. `ReadLocomotionPacked` rend 6 des que `IsOnGround` est faux, et une
+    // marche d'escalier, une pente ou un trottoir le font basculer une fraction de seconde. Journal
+    // client du playtest : 60 passages a l'allure 6, dont 32 de moins de 0,2 s — chacun annulait la
+    // marche de l'avatar chez les autres et le figeait le temps d'une reception (0,7 s).
+    // Un VRAI saut passe tout de suite : la machine a etats le dit des l'appui (`TesseraSautEngage`).
+    // Une chute du haut d'un rebord, elle, part avec 0,15 s de retard — invisible sur une chute.
+    {
+        static constexpr std::uint8_t kLocoEnLairBrut = 6;
+        static constexpr auto kVolMinimal = std::chrono::milliseconds(150);
+        const auto maintenant = std::chrono::steady_clock::now();
+        if (locomotionForcee < 0 && locomotion == kLocoEnLairBrut)
+        {
+            if (!g_localEnLairBrut)
+            {
+                g_localEnLairBrut = true;
+                g_localEnLairDepuis = maintenant;
+            }
+            bool sautVolontaire = false;
+            Red::CallVirtual(this, "TesseraSautEngage", sautVolontaire);
+            if (!sautVolontaire && !g_localSautEmis && maintenant - g_localEnLairDepuis < kVolMinimal)
+            {
+                locomotion = g_localDerniereAllureSol;
+            }
+        }
+        else
+        {
+            g_localEnLairBrut = false;
+            g_localDerniereAllureSol = locomotion;
+        }
+    }
 
     // Le REGARD (spec 2026-08-15 §5.1) — `lookState.lookDir` de gameMuppetState. Lu en redscript
     // pour la meme raison que la locomotion : l'API camera y est accessible et la conversion
@@ -6164,6 +6200,7 @@ void NetworkGameSystem::OublierLeMondeCharge(const char* raison)
     g_cabineJoueurLocal = 0;
     g_localEtaitEnLair = false;
     g_localSautEmis = false;
+    g_localEnLairBrut = false;
     m_gameRestored = false;
     SDK->logger->InfoF(PLUGIN, "[monde] %s : %zu corps distant(s) rendu(s), tables du monde videes", raison,
                        corps);
@@ -6462,6 +6499,19 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
             SDK->logger->InfoF(PLUGIN, "[avatar %llu] ACTION_SAUT sorte=%u",
                                static_cast<unsigned long long>(event->actor()), event->param());
             bool pousse = false;
+            // ⛔ RETOURS DU PLAYTEST 2 (2026-09-26, R1 « les mouvements s'arretent ») : l'emetteur
+            // part des que `enLair`, donc aussi sur une CHUTE, une marche qui rate une marche ou un
+            // atterrissage. Journal client du playtest : 76 `ACTION_SAUT`, dont 17 seulement de
+            // sorte 18 (Jump) — Stand x28, Sprint x13, Fall x12... Chacun annulait la marche et
+            // posait le trait `exploration=Jump`, que rien ne retirait avant la reception suivante
+            // (4 a 36 s plus tard) : l'avatar se figeait. Seules les sortes 18-21 sont des sauts.
+            static constexpr std::uint32_t kSortePremierSaut = 18;   // Jump
+            static constexpr std::uint32_t kSorteDernierSaut = 21;   // HoverJump
+            if (event->param() < kSortePremierSaut || event->param() > kSorteDernierSaut)
+            {
+                g_telemetrie.Evenement("action_recue", event->actor(), "saut_pas_un_saut");
+                return;
+            }
             if (SautParActionActif())
             {
                 // Le message arrive AVANT que le decollage ne s'affiche (tampon d'interpolation) : c'est la fenetre
@@ -10759,7 +10809,14 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             }
         }
     }
-    else if (!g_suspendreCorrections && deriveHorizontale > kCorrectionMiniM
+    // ⛔ RETOURS DU PLAYTEST 2 (2026-09-26, R4 « pas bien au sol ») — la verticale seule ouvre
+    // aussi la correction. Avant, tout exigeait `deriveHorizontale > 0,25 m` : un corps bien placé
+    // en X/Y mais deux mètres sous sa cible n'était JAMAIS corrigé. Mesuré dans le journal client
+    // du playtest (lignes `[vert 6]`, branche mobile) : 50 relevés sur 321 au-delà d'un mètre,
+    // dont `dh=0.088 ECART.z=-2.197` en course dans une montée. Le seuil vertical reste celui de
+    // `corrigeZ` (0,5 m) : en dessous, le sol appartient toujours au moteur.
+    else if (!g_suspendreCorrections
+             && (deriveHorizontale > kCorrectionMiniM || std::fabs(dz) > kSeuilVerticalM)
              && derive <= kSautFrancM)
     {
         // Résorption douce. On ne touche NI à la commande de marche (elle continue d'animer), ni
@@ -11032,8 +11089,15 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
 
     // Sans relance (F-PLY-425) : entree et allure inchangees, visee encore loin -> on laisse
     // la marche en cours se derouler, quels que soient le plafond et l'ecart de visee ci-dessous.
+    // ⛔ RETOURS DU PLAYTEST 2 (2026-09-26, R1/R3) — PLAFOND DE TEMPS. Sans lui, une marche que le
+    // moteur a abandonnee (reaction, commande concurrente, teleport qui l'annule) n'etait JAMAIS
+    // relancee tant que le joueur ne changeait ni de direction ni d'allure : `suivi.commande`
+    // restait vrai, l'avatar restait plante. Une reemission toutes les 2 s au plus resynchronise
+    // sans cout visible : `useStart` ne vaut vrai que si `!suivi.commande`, donc pas de depart
+    // rejoue sur une marche en cours.
+    static constexpr float kRelanceMaxS = 2.0f;
     if (g_marcheSansRelance && g_pilotageParEntrees && suivi.commande && suivi.viseeValide
-        && !entreeAChange && !allureAChange)
+        && !entreeAChange && !allureAChange && suivi.depuisS < kRelanceMaxS)
     {
         static constexpr float kResteAvantRelanceM = 2.0f;
         const auto iciGarde = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
