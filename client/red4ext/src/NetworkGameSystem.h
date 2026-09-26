@@ -329,6 +329,8 @@ struct SuiviAvatar
     /// debut de l'image suivante mesure l'application, independamment du mouvement de la cabine.
     float ciblePassagerPrecedenteZ = 0.0f;
     bool ciblePassagerPrecedenteValide = false;
+    /// Temps passe avec un ecart > 3 m (palier de recalage, retours du playtest 2).
+    float depuisEcartLargeS = 0.0f;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai

@@ -10862,7 +10862,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
           g_ecartApresPose = std::sqrt(rpasx * rpasx + rpasy * rpasy + rpasz * rpasz); }
     }
 
-    if (!g_suspendreCorrections && derive > kSautFrancM)
+    // ⛔ RETOURS DU PLAYTEST 2 (2026-09-26, R4 « complètement à côté ») — UN PALIER entre la
+    // correction douce et les 15 m. Journal client du playtest : écart en sprint p90 3,15 m, max
+    // 8,72 m, qui DURAIT, parce que rien ne se déclenche avant 15 m. Un écart de plus de 3 m TENU
+    // plus d'une demi-seconde est placé franc. La condition de durée est ce qui évite de retomber
+    // dans les sautillements de 2-3 m du 2026-08-13 (un pic isolé ne déclenche rien). Pas en l'air :
+    // l'écriture directe y porte déjà la position.
+    static constexpr float kPalierM = 3.0f;
+    static constexpr float kPalierTenuS = 0.5f;
+    auto& suiviPalier = g_suiviAvatars[networkId];
+    suiviPalier.depuisEcartLargeS =
+        (derive > kPalierM && !enLair) ? suiviPalier.depuisEcartLargeS + deltaTime : 0.0f;
+    const bool palierAtteint = suiviPalier.depuisEcartLargeS >= kPalierTenuS;
+    if (palierAtteint)
+    {
+        suiviPalier.depuisEcartLargeS = 0.0f;
+        SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER derive=%.2fm tenue > %.1fs", networkId, derive,
+                           kPalierTenuS);
+    }
+    if (!g_suspendreCorrections && (derive > kSautFrancM || palierAtteint))
     {
         // ⚠️ CE CHEMIN EST LE PLUS IMPORTANT À JOURNALISER, et il ne l'était pas.
         //
