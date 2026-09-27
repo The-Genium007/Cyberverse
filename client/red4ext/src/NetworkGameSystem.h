@@ -18,6 +18,7 @@
 #include "Main.h"
 #include "PlayerActionTracker.h"
 #include "PlayerSync/TamponInterpolation.h"
+#include "PlayerSync/IdentiteStatique.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
 #include "RED4ext/Scripting/Natives/Generated/Vector4.hpp"
 #include "RED4ext/Scripting/Natives/entEntityID.hpp"
@@ -3043,6 +3044,23 @@ public:
     // Apparence faisant autorite deja connue pour ce statique, ou CName nulle si le serveur n'a
     // rien dit. Sert au REJEU : une apparence peut arriver avant que le PNJ ne soit streame, auquel
     // cas l'application echoue et doit se refaire a son attachement.
+    // ⛔ RETOURS DU PLAYTEST 2 (R9/R10) — le PNJ local est-il bien CELUI que le halo decrit ?
+    // Meme record et meme endroit (tolerance `kToleranceIdentiteM`), sinon on ne le rhabille pas :
+    // le journal du 2026-09-25 montre un corps d'homme recevant l'apparence d'une femme. Sans
+    // reference (entree sans position), on laisse faire — comportement d'avant. Verifie par
+    // `tests/verif_identite_statique.cpp`.
+    bool Tessera_MemePnjStatique(RED4ext::ent::EntityID cible, uint64_t recordLocal, float x,
+                                 float y, float z) const
+    {
+        const auto it = g_rosterStatiques.find(cible.hash);
+        const bool connue = it != g_rosterStatiques.end();
+        const auto verdict = Tessera::Sync::JugerIdentiteStatique(
+            connue, connue ? it->second.record : 0, recordLocal, connue ? x - it->second.x : 0.0f,
+            connue ? y - it->second.y : 0.0f, connue ? z - it->second.z : 0.0f);
+        return verdict == Tessera::Sync::IdentiteStatique::Meme
+            || verdict == Tessera::Sync::IdentiteStatique::SansReference;
+    }
+
     RED4ext::CName Tessera_ApparenceStatiqueConnue(RED4ext::ent::EntityID cible) const
     {
         const auto it = g_apparencesStatiques.find(cible.hash);
@@ -3145,6 +3163,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_Journal);
     RTTI_METHOD(Tessera_RapporterStatique);
     RTTI_METHOD(Tessera_ApparenceStatiqueConnue);
+    RTTI_METHOD(Tessera_MemePnjStatique);
     RTTI_METHOD(Tessera_CelluleConnue);
     RTTI_METHOD(Tessera_CobayeApparence);
     RTTI_METHOD(Tessera_DemanderPromotion);

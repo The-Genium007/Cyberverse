@@ -178,6 +178,7 @@ public native class NetworkGameSystem extends IGameSystem {
     // Apparence déjà connue pour ce statique, ou CName nulle. Sert au REJEU : le serveur diffuse
     // sans filtre de distance, donc une apparence peut arriver AVANT que le PNJ ne soit chargé.
     public native func Tessera_ApparenceStatiqueConnue(cible: EntityID) -> CName;
+    public native func Tessera_MemePnjStatique(cible: EntityID, recordLocal: Uint64, x: Float, y: Float, z: Float) -> Bool;
     // SONDE one-shot — voir AppearanceProbe.reds. Renvoie une apparence DIFFÉRENTE déjà vue pour ce
     // record (donc valide), ou une CName nulle.
     public native func Tessera_CobayeApparence(record: Uint64, apparence: CName) -> CName;
@@ -1601,6 +1602,15 @@ public native class NetworkGameSystem extends IGameSystem {
         //   · SANS-EFFET → le moteur a refusé — c'est ce cas-là qu'il faut corriger.
         let pantin = entite as ScriptedPuppet;
         if IsDefined(pantin) {
+            // ⛔ RETOURS DU PLAYTEST 2 (R9/R10) : l'identifiant ne suffit pas, il a deja designe un
+            // AUTRE PNJ chez nous (un corps d'homme recevant l'apparence d'une femme). On verifie
+            // record + position contre ce que le halo a decrit. `true` : ne pas reessayer — ce
+            // n'est pas « pas maintenant », c'est « pas lui ».
+            let ici = entite.GetWorldPosition();
+            if !this.Tessera_MemePnjStatique(cible, TDBID.ToNumber(pantin.GetRecordID()), ici.X, ici.Y, ici.Z) {
+                this.Tessera_Journal(s"[Hydra] VERDICT=AUTRE-PNJ demandee=\(NameToString(apparence)) local=\(NameToString(pantin.GetCurrentAppearanceName()))");
+                return true;
+            }
             let origine = pantin.GetCurrentAppearanceName();
             if Equals(origine, apparence) {
                 this.Tessera_Journal(s"[Hydra] VERDICT=DEJA-BON \(origine)");
