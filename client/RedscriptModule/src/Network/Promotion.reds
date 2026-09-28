@@ -27,12 +27,29 @@ module Cyberverse.Network.Managers
 // ⚠️ On n'intercepte RIEN : `wrappedMethod()` d'abord, sans condition. La mort se déroule
 // normalement, on ajoute seulement une demande.
 
+//
+// ── 2026-09-28 : l'ancre descend d'un cran, sur `OnIncapacitated` (F-PNJ-218) ────────────────
+//
+// `OnDied` n'est pas l'entonnoir : c'en est un descendant. `OnIncapacitated()` (déclarée en propre
+// sur `ScriptedPuppet`, `scriptedPuppet.script:2805`) est le SEUL point traversé à la fois par la
+// mort (`OnDied` l'appelle) et par la mise à terre NON létale (`HandleDefeated`). Avec l'ancre sur
+// `OnDied`, un passant ASSOMMÉ ne partait jamais : l'autre joueur le voyait debout.
+//
+// ⚠️ Pas de doublon : `OnIncapacitated` sort tôt si le pantin est déjà incapacité, et on ne
+// promeut que si ce n'était pas le cas AVANT l'appel. `OnDied` n'est plus accroché du tout.
+//
+// ⚠️ Limite connue : un passant assommé PUIS achevé ne renvoie rien la seconde fois (le jeu
+// n'appelle plus `OnIncapacitated`) — le serveur le garde « à terre », pas « mort ».
 @wrapMethod(ScriptedPuppet)
-protected func OnDied() -> Void {
+protected func OnIncapacitated() -> Void {
+    let deja = this.IsIncapacitated();
     wrappedMethod();
+    if deja {
+        return;
+    }
     let reseau = GameInstance.GetNetworkGameSystem();
     if IsDefined(reseau) {
-        TesseraPromouvoirSiFigurant(reseau, this.GetEntityID());
+        TesseraPromouvoirSiFigurant(reseau, this.GetEntityID(), this.IsDead());
     }
 }
 
@@ -60,7 +77,7 @@ protected func OnDied() -> Void {
 //      répliquer un état de mort. L'autre joueur verra donc quelqu'un debout là où l'initiateur a
 //      un cadavre. C'est incohérent, c'est su, et c'est utile en attendant : un mannequin immobile
 //      est exactement ce qu'il faut pour vérifier que l'apparence transmise est la bonne.
-public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: EntityID) -> Void {
+public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: EntityID, mort: Bool) -> Void {
     if !EntityID.IsDefined(cible) || reseau.Tessera_EstEntiteReseau(cible) {
         return;
     }
@@ -75,10 +92,9 @@ public func TesseraPromouvoirSiFigurant(reseau: ref<NetworkGameSystem>, cible: E
         // `GetWorldYaw()` rend déjà des DEGRÉS (`entity.script:26`) — pas de conversion, et surtout
         // pas de `Rad2Deg` : cette fonction n'existe pas dans les scripts du jeu.
         pos.X, pos.Y, pos.Z, pantin.GetWorldYaw(),
-        // `true` sans condition : le seul déclencheur de promotion est aujourd'hui `OnDied`. Le jour
-        // où un autre s'y branche, ce booléen devra venir de lui — d'où un paramètre plutôt qu'une
-        // constante côté serveur.
-        true);
+        // Tiré de l'état réel par l'appelant : un assommé n'est pas un mort (F-PNJ-218). `OnDied`
+        // pose `SetIsDead(true)` AVANT d'appeler `OnIncapacitated`, donc `IsDead()` y est juste.
+        mort);
 
     // Le pantin LOCAL cède la place à celui du serveur — sinon le tireur voit DEUX cadavres, le
     // sien et le promu. Mesuré en jeu le 2026-08-08 : « ça fait un doublon ».

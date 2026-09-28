@@ -144,6 +144,9 @@ public native class NetworkGameSystem extends IGameSystem {
     // dont le serveur peut disparaître : socket tombée (Gateway parti) contre socket vivante mais
     // muette (Shard tombé). Le second cas n'a AUCUN autre symptôme côté client.
     public native func Tessera_SilenceMs() -> Int32;
+    // Heure du serveur estimee (ms Unix), 0 avant le premier snapshot date. Meme regle de
+    // deploiement conjoint : `RTTI_METHOD(Tessera_HeureServeurMs)` dans la DLL.
+    public native func Tessera_HeureServeurMs() -> Uint64;
 
     // Essais de reconnexion consécutifs depuis la dernière connexion réussie. 0 = aucun en cours.
     // L'écran d'attente ne parle de « reconnexion » que si ce compteur bouge : tant qu'il vaut 0,

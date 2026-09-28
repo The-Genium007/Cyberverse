@@ -6584,6 +6584,16 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
 // ses preuves sur l'etranglement des stimulus.
 static constexpr float kSeuilVariationPermille = 20.0f;
 
+uint64_t NetworkGameSystem::Tessera_HeureServeurMs() const
+{
+    if (g_horlogeServeur.Observations() == 0)
+    {
+        return 0;
+    }
+    return g_horlogeServeur.TempsServeurMs(
+        static_cast<std::uint64_t>(Tessera::Sync::Telemetrie::Maintenant()));
+}
+
 int32_t NetworkGameSystem::Tessera_RapporterVariation(float pourcentCourant, uint32_t cause)
 {
     if (m_pInterface == nullptr || pourcentCourant < 0.0f)

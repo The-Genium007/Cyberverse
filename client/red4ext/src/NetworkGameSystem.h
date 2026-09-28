@@ -1842,6 +1842,12 @@ public:
     // le 2026-08-15 (F-PLY-054) — un tampon plein d'echantillons perimes affiche `ech=48`,
     // `extrapolation=0 %`, un tableau de bord parfaitement sain, pendant que plus rien ne bouge a
     // l'ecran. C'est l'instant de la DERNIERE ARRIVEE qui dit si le fil est vivant, rien d'autre.
+    // Heure du SERVEUR estimee par ce client (ms depuis l'epoque Unix), 0 tant qu'aucun snapshot
+    // date n'est arrive. C'est la seule horloge que deux machines partagent : l'ecartometre
+    // (Tessera, tools/ecartometre) date ses vidages avec elle, sinon deux PC compareraient leurs
+    // quartz (des dizaines de ms, soit 45 cm pour une voiture a 15 m/s).
+    uint64_t Tessera_HeureServeurMs() const;
+
     int32_t Tessera_SilenceMs() const
     {
         if (!g_horlogeRendu.Amorcee())
@@ -3158,6 +3164,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_Faim);
     RTTI_METHOD(Tessera_Soif);
     RTTI_METHOD(Tessera_SilenceMs);
+    RTTI_METHOD(Tessera_HeureServeurMs);
     RTTI_METHOD(Tessera_TentativesReconnexion);
     RTTI_METHOD(Tessera_ReconnecterMaintenant);
     RTTI_METHOD(Tessera_Journal);
