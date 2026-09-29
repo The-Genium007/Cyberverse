@@ -182,10 +182,16 @@ table PlayerState { id:ulong; position:QVec3; yaw:ushort; locomotion:ubyte; move
 // nouvelle destination, ou ÉVÉNEMENT (un coup de feu, et il faut fuir). Le client jette sa file dès
 // qu'il voit un numéro supérieur. Sans lui, un ordre en retard ressusciterait une promenade au
 // milieu d'une fusillade — c'est le champ qui rend la panique synchronisable.
+// `cle` (2026-09-29, monde partagé lot 5, spec `2026-09-29-monde-partage-determinisme-lots-3-6-design.md`
+// §4) : la CLÉ D'INDIVIDU dérivée du PNJ promu — la même sur toutes les machines (§2.2 de la spec du
+// 26). Un client qui a le jumeau natif de cette clé l'ADOPTE (le retire de sa dérivation et le
+// place sous les ordres du serveur) au lieu d'en faire naître un second. `0` = pas de clé : un
+// PNJ nominatif, une brique de foule serveur, ou une promotion d'avant les clés — comportement
+// d'aujourd'hui (refabrication).
 table NpcState { id:ulong; archetype:uint; position:QVec3; yaw:ushort;
                  locomotion:ubyte; move_dir:ubyte; flags:ubyte; sustained:uint; behavior:ubyte;
                  space_id:uint; target:ulong; move_target:QVec3;
-                 move_queue:[QVec3]; move_seq:uint; }
+                 move_queue:[QVec3]; move_seq:uint; cle:ulong; }
 
 // Véhicule AUTONOME orchestré serveur (trafic — spec véhicules autonomes §1/§3). PAS le triplet
 // biped d'A : un véhicule a une `speed` scalaire (magnitude quantifiée ushort, direction = `yaw`)
@@ -814,7 +820,42 @@ table StimReport { nature:ubyte; radius:ushort; target:ulong; }
 // rend `0` pour tout objet du décor, donc le client envoie ce qu'il faut pour la retrouver — même
 // idée que le figurant ci-dessus, appliquée à une voiture. `record` porte alors l'ARCHÉTYPE
 // véhicule (pas un id PNJ), `appearance`/`mort` sont ignorés côté serveur pour ce kind.
-table PromotionRequest { record:ulong (id: 0); appearance:ulong (id: 1); position:QVec3 (id: 2); yaw:ushort (id: 3); mort:bool (id: 4); kind:ubyte = 0 (id: 5); }
+// `cle` / `cause` (ajoutés 2026-09-29, monde partagé lot 5.1) : la clé d'individu dérivée du pantin
+// (0 = inconnue → refabrication d'aujourd'hui) et la cause retenue par Lucas (spec E3) — 0 contact,
+// 1 arrêt par un joueur, 2 témoin. Avec une clé, le serveur ARBITRE : deux demandes pour la même
+// clé rendent le MÊME id réseau (idempotence), et il tient un plafond par maille et un débit par
+// client (`promus.rs`). Sans clé, rien ne change pour un client d'avant.
+table PromotionRequest { record:ulong (id: 0); appearance:ulong (id: 1); position:QVec3 (id: 2); yaw:ushort (id: 3); mort:bool (id: 4); kind:ubyte = 0 (id: 5); cle:ulong (id: 6); cause:ubyte = 0 (id: 7); }
+
+// --- Monde partagé : le mode dérivé, la clé du monde, les clés suspendues (spec 2026-09-29 §3.1, §6) ---
+
+// Client -> shard : « voici les tables que MON jeu charge, et ma densité de foule VIVANTE ».
+// `empreinte` : FNV-1a 64 de `<variante>|<voies>|<profils>|<fragments>` tel que le client le lit
+// dans la mémoire du moteur (méthode = sonde T0b). Le shard compare à la sienne : un écart veut
+// dire que ce client dériverait une AUTRE ville en silence (F-PNJ-193) — il reste alors en foule
+// locale, et le journal le dit (C10). `densite` : la valeur vivante de `CrowdDensity` (C4) ;
+// cachée n'est pas forcée, et un réglage différent change le nombre de membres.
+// Le Gateway relaie ce message au shard sans l'interpréter, comme `PromotionRequest`.
+table TablesReport { empreinte:ulong; densite:ubyte; }
+
+// Shard -> client, en réponse à `TablesReport` : la clé du monde et le verdict.
+// `graine` : la graine du serveur (§2.2 de la spec du 26) — le seul octet de réseau que coûte la
+// dérivation. `mode` : 0 = foule locale (tables ou densité différentes, ou serveur sans graine),
+// 1 = dérivé. `suspendus` : les clés d'individus actuellement PROMUES, que la dérivation doit
+// sauter (sinon un nouveau venu verrait l'individu marcher tranquillement à ref(t) pendant que
+// les autres le voient fuir). Ensuite, `NpcState.cle` porte l'état vivant, et `Rendu` la sortie.
+// `origine_heure_monde_ms` / `echelle_temps` : l'heure du monde = ((ts_ms − origine) × échelle)
+// depuis minuit — la PHASE (Morning/Day/Evening/Night) se calcule depuis l'horloge murale du
+// serveur, jamais depuis l'heure de jeu locale, qui peut différer de 6 minutes entre deux clients
+// (F-PNJ-184). 0/0 = non renseigné.
+table MondePartage { graine:ulong; mode:ubyte; empreinte_serveur:ulong; suspendus:[ulong];
+                     origine_heure_monde_ms:ulong; echelle_temps:float; }
+
+// Shard -> clients : ces clés sont RENDUES à la dérivation (reconvergence, gravité 1, spec §2.4).
+// Chaque client retire le corps promu hors vue (`MarkDespawnCandidate`, F-PNJ-225) et remet la clé
+// dans sa dérivation ; l'individu réapparaît à ref(t) sous la garde de champ (F-PNJ-227). Rien à
+// rattraper : ref(t) est une fonction du temps, la même partout.
+table Rendu { cles:[ulong]; }
 
 // --- PNJ statiques : rendre leur apparence commune à tous les clients ---
 
@@ -1130,8 +1171,8 @@ table ConsoleLine { level:ubyte; text:string; }
 table StaffMode { on:bool; }
 
 // --- unions : NOUVEAUX membres APPENDÉS EN FIN (jamais réordonner l'existant) ---
-union ClientMsg { Join, PositionUpdate, ClientTimeReport, AdminCommand, Leave, PlayerActionReport, EmoteReport, CreateCharacter, SelectCharacter, DeleteCharacter, EntityInteraction, InteractionChoice, ElevatorCall, VehicleInput, EquipmentReport, StimReport, PromotionRequest, StaticNpcReport, RespawnRequest, HealthReport, DeviceCall, AvatarProjectionReport, GarmentReport }
-union ServerMsg { Snapshot, Kicked, WorldState, CommandResult, PermissionSync, PositionCorrection, ShardAssignment, PlayerEvent, CharacterList, CharacterResult, QueueStatus, InteractionOpen, InteractionResult, ElevatorStateMsg, AppearanceSync, ConfigSync, StaticAppearance, HealthSync, CellAppearances, ActionCatalog, IdentitesConnues, InventaireAutoritaire, DeviceStateMsg, CommandCatalog, ConsoleLine, StaffMode, PostureResult }
+union ClientMsg { Join, PositionUpdate, ClientTimeReport, AdminCommand, Leave, PlayerActionReport, EmoteReport, CreateCharacter, SelectCharacter, DeleteCharacter, EntityInteraction, InteractionChoice, ElevatorCall, VehicleInput, EquipmentReport, StimReport, PromotionRequest, StaticNpcReport, RespawnRequest, HealthReport, DeviceCall, AvatarProjectionReport, GarmentReport, TablesReport }
+union ServerMsg { Snapshot, Kicked, WorldState, CommandResult, PermissionSync, PositionCorrection, ShardAssignment, PlayerEvent, CharacterList, CharacterResult, QueueStatus, InteractionOpen, InteractionResult, ElevatorStateMsg, AppearanceSync, ConfigSync, StaticAppearance, HealthSync, CellAppearances, ActionCatalog, IdentitesConnues, InventaireAutoritaire, DeviceStateMsg, CommandCatalog, ConsoleLine, StaffMode, PostureResult, MondePartage, Rendu }
 table ClientEnvelope { msg:ClientMsg; }
 table ServerEnvelope { msg:ServerMsg; }
 

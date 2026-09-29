@@ -166,6 +166,15 @@ struct StimReportBuilder;
 struct PromotionRequest;
 struct PromotionRequestBuilder;
 
+struct TablesReport;
+struct TablesReportBuilder;
+
+struct MondePartage;
+struct MondePartageBuilder;
+
+struct Rendu;
+struct RenduBuilder;
+
 struct StaticNpcReport;
 struct StaticNpcReportBuilder;
 
@@ -254,11 +263,12 @@ enum ClientMsg : uint8_t {
   ClientMsg_DeviceCall = 21,
   ClientMsg_AvatarProjectionReport = 22,
   ClientMsg_GarmentReport = 23,
+  ClientMsg_TablesReport = 24,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_GarmentReport
+  ClientMsg_MAX = ClientMsg_TablesReport
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[24] {
+inline const ClientMsg (&EnumValuesClientMsg())[25] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -283,13 +293,14 @@ inline const ClientMsg (&EnumValuesClientMsg())[24] {
     ClientMsg_HealthReport,
     ClientMsg_DeviceCall,
     ClientMsg_AvatarProjectionReport,
-    ClientMsg_GarmentReport
+    ClientMsg_GarmentReport,
+    ClientMsg_TablesReport
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[25] = {
+  static const char * const names[26] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -314,13 +325,14 @@ inline const char * const *EnumNamesClientMsg() {
     "DeviceCall",
     "AvatarProjectionReport",
     "GarmentReport",
+    "TablesReport",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_GarmentReport)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_TablesReport)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -421,6 +433,10 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::GarmentReport> {
   static const ClientMsg enum_value = ClientMsg_GarmentReport;
 };
 
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::TablesReport> {
+  static const ClientMsg enum_value = ClientMsg_TablesReport;
+};
+
 template <bool B = false>
 bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ClientMsg type);
 template <bool B = false>
@@ -455,11 +471,13 @@ enum ServerMsg : uint8_t {
   ServerMsg_ConsoleLine = 25,
   ServerMsg_StaffMode = 26,
   ServerMsg_PostureResult = 27,
+  ServerMsg_MondePartage = 28,
+  ServerMsg_Rendu = 29,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_PostureResult
+  ServerMsg_MAX = ServerMsg_Rendu
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[28] {
+inline const ServerMsg (&EnumValuesServerMsg())[30] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -488,13 +506,15 @@ inline const ServerMsg (&EnumValuesServerMsg())[28] {
     ServerMsg_CommandCatalog,
     ServerMsg_ConsoleLine,
     ServerMsg_StaffMode,
-    ServerMsg_PostureResult
+    ServerMsg_PostureResult,
+    ServerMsg_MondePartage,
+    ServerMsg_Rendu
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[29] = {
+  static const char * const names[31] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -523,13 +543,15 @@ inline const char * const *EnumNamesServerMsg() {
     "ConsoleLine",
     "StaffMode",
     "PostureResult",
+    "MondePartage",
+    "Rendu",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_PostureResult)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_Rendu)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -644,6 +666,14 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaffMode> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::PostureResult> {
   static const ServerMsg enum_value = ServerMsg_PostureResult;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::MondePartage> {
+  static const ServerMsg enum_value = ServerMsg_MondePartage;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::Rendu> {
+  static const ServerMsg enum_value = ServerMsg_Rendu;
 };
 
 template <bool B = false>
@@ -1188,7 +1218,8 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_TARGET = 24,
     VT_MOVE_TARGET = 26,
     VT_MOVE_QUEUE = 28,
-    VT_MOVE_SEQ = 30
+    VT_MOVE_SEQ = 30,
+    VT_CLE = 32
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -1232,6 +1263,9 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t move_seq() const {
     return GetField<uint32_t>(VT_MOVE_SEQ, 0);
   }
+  uint64_t cle() const {
+    return GetField<uint64_t>(VT_CLE, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1250,6 +1284,7 @@ struct NpcState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_MOVE_QUEUE) &&
            verifier.VerifyVector(move_queue()) &&
            VerifyField<uint32_t>(verifier, VT_MOVE_SEQ, 4) &&
+           VerifyField<uint64_t>(verifier, VT_CLE, 8) &&
            verifier.EndTable();
   }
 };
@@ -1300,6 +1335,9 @@ struct NpcStateBuilder {
   void add_move_seq(uint32_t move_seq) {
     fbb_.AddElement<uint32_t>(NpcState::VT_MOVE_SEQ, move_seq, 0);
   }
+  void add_cle(uint64_t cle) {
+    fbb_.AddElement<uint64_t>(NpcState::VT_CLE, cle, 0);
+  }
   explicit NpcStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1326,8 +1364,10 @@ inline ::flatbuffers::Offset<NpcState> CreateNpcState(
     uint64_t target = 0,
     const cyberpunk_rp::protocol::QVec3 *move_target = nullptr,
     ::flatbuffers::Offset<::flatbuffers::Vector<const cyberpunk_rp::protocol::QVec3 *>> move_queue = 0,
-    uint32_t move_seq = 0) {
+    uint32_t move_seq = 0,
+    uint64_t cle = 0) {
   NpcStateBuilder builder_(_fbb);
+  builder_.add_cle(cle);
   builder_.add_target(target);
   builder_.add_id(id);
   builder_.add_move_seq(move_seq);
@@ -1360,7 +1400,8 @@ inline ::flatbuffers::Offset<NpcState> CreateNpcStateDirect(
     uint64_t target = 0,
     const cyberpunk_rp::protocol::QVec3 *move_target = nullptr,
     const std::vector<cyberpunk_rp::protocol::QVec3> *move_queue = nullptr,
-    uint32_t move_seq = 0) {
+    uint32_t move_seq = 0,
+    uint64_t cle = 0) {
   auto move_queue__ = move_queue ? _fbb.CreateVectorOfStructs<cyberpunk_rp::protocol::QVec3>(*move_queue) : 0;
   return cyberpunk_rp::protocol::CreateNpcState(
       _fbb,
@@ -1377,7 +1418,8 @@ inline ::flatbuffers::Offset<NpcState> CreateNpcStateDirect(
       target,
       move_target,
       move_queue__,
-      move_seq);
+      move_seq,
+      cle);
 }
 
 struct VehicleOccupant FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -4654,7 +4696,9 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_POSITION = 8,
     VT_YAW = 10,
     VT_MORT = 12,
-    VT_KIND = 14
+    VT_KIND = 14,
+    VT_CLE = 16,
+    VT_CAUSE = 18
   };
   uint64_t record() const {
     return GetField<uint64_t>(VT_RECORD, 0);
@@ -4674,6 +4718,12 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint8_t kind() const {
     return GetField<uint8_t>(VT_KIND, 0);
   }
+  uint64_t cle() const {
+    return GetField<uint64_t>(VT_CLE, 0);
+  }
+  uint8_t cause() const {
+    return GetField<uint8_t>(VT_CAUSE, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -4683,6 +4733,8 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint16_t>(verifier, VT_YAW, 2) &&
            VerifyField<uint8_t>(verifier, VT_MORT, 1) &&
            VerifyField<uint8_t>(verifier, VT_KIND, 1) &&
+           VerifyField<uint64_t>(verifier, VT_CLE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_CAUSE, 1) &&
            verifier.EndTable();
   }
 };
@@ -4709,6 +4761,12 @@ struct PromotionRequestBuilder {
   void add_kind(uint8_t kind) {
     fbb_.AddElement<uint8_t>(PromotionRequest::VT_KIND, kind, 0);
   }
+  void add_cle(uint64_t cle) {
+    fbb_.AddElement<uint64_t>(PromotionRequest::VT_CLE, cle, 0);
+  }
+  void add_cause(uint8_t cause) {
+    fbb_.AddElement<uint8_t>(PromotionRequest::VT_CAUSE, cause, 0);
+  }
   explicit PromotionRequestBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -4727,15 +4785,235 @@ inline ::flatbuffers::Offset<PromotionRequest> CreatePromotionRequest(
     const cyberpunk_rp::protocol::QVec3 *position = nullptr,
     uint16_t yaw = 0,
     bool mort = false,
-    uint8_t kind = 0) {
+    uint8_t kind = 0,
+    uint64_t cle = 0,
+    uint8_t cause = 0) {
   PromotionRequestBuilder builder_(_fbb);
+  builder_.add_cle(cle);
   builder_.add_appearance(appearance);
   builder_.add_record(record);
   builder_.add_position(position);
   builder_.add_yaw(yaw);
+  builder_.add_cause(cause);
   builder_.add_kind(kind);
   builder_.add_mort(mort);
   return builder_.Finish();
+}
+
+struct TablesReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef TablesReportBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_EMPREINTE = 4,
+    VT_DENSITE = 6
+  };
+  uint64_t empreinte() const {
+    return GetField<uint64_t>(VT_EMPREINTE, 0);
+  }
+  uint8_t densite() const {
+    return GetField<uint8_t>(VT_DENSITE, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_EMPREINTE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_DENSITE, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct TablesReportBuilder {
+  typedef TablesReport Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_empreinte(uint64_t empreinte) {
+    fbb_.AddElement<uint64_t>(TablesReport::VT_EMPREINTE, empreinte, 0);
+  }
+  void add_densite(uint8_t densite) {
+    fbb_.AddElement<uint8_t>(TablesReport::VT_DENSITE, densite, 0);
+  }
+  explicit TablesReportBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<TablesReport> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<TablesReport>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<TablesReport> CreateTablesReport(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t empreinte = 0,
+    uint8_t densite = 0) {
+  TablesReportBuilder builder_(_fbb);
+  builder_.add_empreinte(empreinte);
+  builder_.add_densite(densite);
+  return builder_.Finish();
+}
+
+struct MondePartage FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef MondePartageBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_GRAINE = 4,
+    VT_MODE = 6,
+    VT_EMPREINTE_SERVEUR = 8,
+    VT_SUSPENDUS = 10,
+    VT_ORIGINE_HEURE_MONDE_MS = 12,
+    VT_ECHELLE_TEMPS = 14
+  };
+  uint64_t graine() const {
+    return GetField<uint64_t>(VT_GRAINE, 0);
+  }
+  uint8_t mode() const {
+    return GetField<uint8_t>(VT_MODE, 0);
+  }
+  uint64_t empreinte_serveur() const {
+    return GetField<uint64_t>(VT_EMPREINTE_SERVEUR, 0);
+  }
+  const ::flatbuffers::Vector<uint64_t> *suspendus() const {
+    return GetPointer<const ::flatbuffers::Vector<uint64_t> *>(VT_SUSPENDUS);
+  }
+  uint64_t origine_heure_monde_ms() const {
+    return GetField<uint64_t>(VT_ORIGINE_HEURE_MONDE_MS, 0);
+  }
+  float echelle_temps() const {
+    return GetField<float>(VT_ECHELLE_TEMPS, 0.0f);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_GRAINE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_MODE, 1) &&
+           VerifyField<uint64_t>(verifier, VT_EMPREINTE_SERVEUR, 8) &&
+           VerifyOffset(verifier, VT_SUSPENDUS) &&
+           verifier.VerifyVector(suspendus()) &&
+           VerifyField<uint64_t>(verifier, VT_ORIGINE_HEURE_MONDE_MS, 8) &&
+           VerifyField<float>(verifier, VT_ECHELLE_TEMPS, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct MondePartageBuilder {
+  typedef MondePartage Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_graine(uint64_t graine) {
+    fbb_.AddElement<uint64_t>(MondePartage::VT_GRAINE, graine, 0);
+  }
+  void add_mode(uint8_t mode) {
+    fbb_.AddElement<uint8_t>(MondePartage::VT_MODE, mode, 0);
+  }
+  void add_empreinte_serveur(uint64_t empreinte_serveur) {
+    fbb_.AddElement<uint64_t>(MondePartage::VT_EMPREINTE_SERVEUR, empreinte_serveur, 0);
+  }
+  void add_suspendus(::flatbuffers::Offset<::flatbuffers::Vector<uint64_t>> suspendus) {
+    fbb_.AddOffset(MondePartage::VT_SUSPENDUS, suspendus);
+  }
+  void add_origine_heure_monde_ms(uint64_t origine_heure_monde_ms) {
+    fbb_.AddElement<uint64_t>(MondePartage::VT_ORIGINE_HEURE_MONDE_MS, origine_heure_monde_ms, 0);
+  }
+  void add_echelle_temps(float echelle_temps) {
+    fbb_.AddElement<float>(MondePartage::VT_ECHELLE_TEMPS, echelle_temps, 0.0f);
+  }
+  explicit MondePartageBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<MondePartage> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<MondePartage>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<MondePartage> CreateMondePartage(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t graine = 0,
+    uint8_t mode = 0,
+    uint64_t empreinte_serveur = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint64_t>> suspendus = 0,
+    uint64_t origine_heure_monde_ms = 0,
+    float echelle_temps = 0.0f) {
+  MondePartageBuilder builder_(_fbb);
+  builder_.add_origine_heure_monde_ms(origine_heure_monde_ms);
+  builder_.add_empreinte_serveur(empreinte_serveur);
+  builder_.add_graine(graine);
+  builder_.add_echelle_temps(echelle_temps);
+  builder_.add_suspendus(suspendus);
+  builder_.add_mode(mode);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<MondePartage> CreateMondePartageDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t graine = 0,
+    uint8_t mode = 0,
+    uint64_t empreinte_serveur = 0,
+    const std::vector<uint64_t> *suspendus = nullptr,
+    uint64_t origine_heure_monde_ms = 0,
+    float echelle_temps = 0.0f) {
+  auto suspendus__ = suspendus ? _fbb.CreateVector<uint64_t>(*suspendus) : 0;
+  return cyberpunk_rp::protocol::CreateMondePartage(
+      _fbb,
+      graine,
+      mode,
+      empreinte_serveur,
+      suspendus__,
+      origine_heure_monde_ms,
+      echelle_temps);
+}
+
+struct Rendu FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef RenduBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_CLES = 4
+  };
+  const ::flatbuffers::Vector<uint64_t> *cles() const {
+    return GetPointer<const ::flatbuffers::Vector<uint64_t> *>(VT_CLES);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_CLES) &&
+           verifier.VerifyVector(cles()) &&
+           verifier.EndTable();
+  }
+};
+
+struct RenduBuilder {
+  typedef Rendu Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_cles(::flatbuffers::Offset<::flatbuffers::Vector<uint64_t>> cles) {
+    fbb_.AddOffset(Rendu::VT_CLES, cles);
+  }
+  explicit RenduBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<Rendu> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<Rendu>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<Rendu> CreateRendu(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint64_t>> cles = 0) {
+  RenduBuilder builder_(_fbb);
+  builder_.add_cles(cles);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<Rendu> CreateRenduDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<uint64_t> *cles = nullptr) {
+  auto cles__ = cles ? _fbb.CreateVector<uint64_t>(*cles) : 0;
+  return cyberpunk_rp::protocol::CreateRendu(
+      _fbb,
+      cles__);
 }
 
 struct StaticNpcReport FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -6160,6 +6438,9 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::GarmentReport *msg_as_GarmentReport() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_GarmentReport ? static_cast<const cyberpunk_rp::protocol::GarmentReport *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::TablesReport *msg_as_TablesReport() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_TablesReport ? static_cast<const cyberpunk_rp::protocol::TablesReport *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -6260,6 +6541,10 @@ template<> inline const cyberpunk_rp::protocol::AvatarProjectionReport *ClientEn
 
 template<> inline const cyberpunk_rp::protocol::GarmentReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::GarmentReport>() const {
   return msg_as_GarmentReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::TablesReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::TablesReport>() const {
+  return msg_as_TablesReport();
 }
 
 struct ClientEnvelopeBuilder {
@@ -6387,6 +6672,12 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::PostureResult *msg_as_PostureResult() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_PostureResult ? static_cast<const cyberpunk_rp::protocol::PostureResult *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::MondePartage *msg_as_MondePartage() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_MondePartage ? static_cast<const cyberpunk_rp::protocol::MondePartage *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::Rendu *msg_as_Rendu() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_Rendu ? static_cast<const cyberpunk_rp::protocol::Rendu *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -6503,6 +6794,14 @@ template<> inline const cyberpunk_rp::protocol::StaffMode *ServerEnvelope::msg_a
 
 template<> inline const cyberpunk_rp::protocol::PostureResult *ServerEnvelope::msg_as<cyberpunk_rp::protocol::PostureResult>() const {
   return msg_as_PostureResult();
+}
+
+template<> inline const cyberpunk_rp::protocol::MondePartage *ServerEnvelope::msg_as<cyberpunk_rp::protocol::MondePartage>() const {
+  return msg_as_MondePartage();
+}
+
+template<> inline const cyberpunk_rp::protocol::Rendu *ServerEnvelope::msg_as<cyberpunk_rp::protocol::Rendu>() const {
+  return msg_as_Rendu();
 }
 
 struct ServerEnvelopeBuilder {
@@ -6634,6 +6933,10 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::GarmentReport *>(obj);
       return verifier.VerifyTable(ptr);
     }
+    case ClientMsg_TablesReport: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::TablesReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
     default: return true;
   }
 }
@@ -6763,6 +7066,14 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_PostureResult: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::PostureResult *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_MondePartage: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::MondePartage *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_Rendu: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::Rendu *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
