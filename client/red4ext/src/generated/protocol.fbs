@@ -420,6 +420,29 @@ table Snapshot { tick:ulong; players:[PlayerState]; npcs:[NpcState]; vehicles:[V
 
 // Client -> serveur, one-shot (saut, tir, reload, dodge, et émote one-shot type coucou).
 // action = enum extensible ; param = contexte (arme, id émote one-shot...).
+//
+// ── LE CONTRAT DE `param` POUR LE TIR (action = 1) ──────────────────────────────────────────
+//
+// `action` reprend `eACTION_*` du fork (`shared/protocol/serverbound/WorldPacketsServerBound.h`) :
+// **0 = eACTION_JUMP**, **1 = eACTION_RANGED_ATTACK**.
+//
+// Pour `action = 1`, `param` porte la **DIRECTION DU TIR**, empaquetée exactement comme le couple
+// de `PlayerState` : `param = (look_yaw << 16) | (look_pitch & 0xFFFF)` — `look_yaw` non signé,
+// `look_pitch` signé, mêmes encodages et mêmes défauts qu'au §`PositionUpdate`.
+//
+// ⚠️ **POURQUOI ÇA NE PEUT PAS SE LIRE DANS LE SNAPSHOT.** `look_yaw`/`look_pitch` y vivent, mais
+// à la cadence de DIFFUSION (25 Hz, soit 40 ms de granularité). Sur un mouvement de visée à
+// 300 °/s — banal — 40 ms font **12° d'erreur** : le traceur part visiblement à côté de ce que le
+// tireur visait. Un tir est un INSTANT, il doit porter sa propre direction.
+//
+// ⚠️ **Zéro octet ajouté, et zéro code serveur.** `param` fait 32 bits, le couple en fait
+// exactement 32, et l'arme est déjà connue par `AppearanceSpec.garments` (`drawn = true`) — donc
+// `param` était libre pour un tir. Le serveur relaie déjà ce champ sans l'interpréter.
+//
+// ⚠️ **La RAFALE ne passe pas par ici.** Un message par balle sature le canal fiable dès la
+// première fusillade (10-16 coups/s par tireur). On réplique la GÂCHETTE — début et fin — et
+// chaque observateur déroule la cadence localement : elle est en TweakDB, donc identique chez
+// tout le monde par construction (modset signé, TweakXL en dépendance de fondation, ADR 0020).
 table PlayerActionReport { action:ubyte; param:uint; }
 
 // Client -> serveur. Pose TENUE uniquement : start=true la commence, start=false la termine.
@@ -525,7 +548,29 @@ table CoffreContenu { contenant:ulong; capacite:ushort; lignes:[CoffreLigne]; }
 // de l'ADR 0022 : on réplique l'ÉVÉNEMENT, pas ses conséquences. Un message au lieu de mille
 // positions de fuyants. `target` n'est volontairement PAS relayé : il ne sert qu'à la décision
 // de promotion, qui est serveur.
-table PlayerEvent { actor:ulong; kind:ubyte; action:ubyte; param:uint; }
+// ── `tick` : LE CHAMP QUI MANQUAIT, ET IL EN CORRIGE CINQ D'UN COUP ─────────────────────────
+//
+// AJOUTÉ EN FIN DE TABLE (2026-09-21) — append-only, même discipline que `CharacterSummary` : un
+// client non régénéré lit la table sans broncher et voit `0`, c'est-à-dire le comportement d'avant.
+//
+// **Le défaut.** Un événement sans date se joue « à l'arrivée » chez l'observateur. Or la POSE du
+// même joueur, elle, est rendue avec le retard du tampon d'interpolation (100 ms par construction,
+// `TamponInterpolation.h`). L'événement et le corps partent donc à contretemps, d'exactement la
+// valeur de ce retard : **la flamme part d'un corps qui n'est pas encore dans la bonne posture.**
+//
+// `VehicleInput` porte son tick, et son propre commentaire dit pourquoi : « sans lui le serveur ne
+// peut ni ordonner, ni détecter un trou, ni dater une correction ». `Snapshot` porte `ts_ms`.
+// Le canal des événements joueur était le seul à ne rien porter — et il sert le tir, le saut, le
+// rechargement, l'esquive et l'émote one-shot. **Un champ, cinq comportements.**
+//
+// **Ce que c'est :** le `tick` serveur (même horloge que `Snapshot.tick`) au moment où l'action a
+// été REÇUE. Pas l'horloge du client — elle n'est pas comparable d'une machine à l'autre, et c'est
+// tout l'objet du filtre-min sur `ts_ms`.
+//
+// **Ce que le consommateur doit en faire :** jouer l'événement dans le MÊME référentiel temporel
+// que la pose, pas à la réception. `0` = un émetteur antérieur à ce champ → retomber sur
+// « à l'arrivée », l'ancien comportement.
+table PlayerEvent { actor:ulong; kind:ubyte; action:ubyte; param:uint; tick:ulong; }
 
 // --- flux d'arrivée : personnages (modèle multi, owner+character_id) ---
 // `base_record` + `appearance` AJOUTÉS EN FIN DE TABLE (2026-08-08) : sans eux, le lobby ne sait
@@ -761,7 +806,15 @@ table StimReport { nature:ubyte; radius:ushort; target:ulong; }
 //
 // Voyage ensuite dans `NpcState.behavior` (`ATerre`), qui existait déjà sur le fil et que le client
 // ignorait.
-table PromotionRequest { record:ulong; appearance:ulong; position:QVec3; yaw:ushort; mort:bool; }
+//
+// `kind` (ajouté 2026-09-29, chantier monde partagé, tâche 1.4) : 0 = figurant/PNJ (ADR 0022,
+// comportement d'origine — un client existant qui omet ce champ obtient 0 par défaut FlatBuffers,
+// donc exactement le comportement d'avant) ; 1 = voiture de DÉCOR volée (spec
+// `2026-09-26-monde-partage-promotion-incidents-design.md` §2.4, F-VEH-058 : la désignation native
+// rend `0` pour tout objet du décor, donc le client envoie ce qu'il faut pour la retrouver — même
+// idée que le figurant ci-dessus, appliquée à une voiture. `record` porte alors l'ARCHÉTYPE
+// véhicule (pas un id PNJ), `appearance`/`mort` sont ignorés côté serveur pour ce kind.
+table PromotionRequest { record:ulong (id: 0); appearance:ulong (id: 1); position:QVec3 (id: 2); yaw:ushort (id: 3); mort:bool (id: 4); kind:ubyte = 0 (id: 5); }
 
 // --- PNJ statiques : rendre leur apparence commune à tous les clients ---
 
