@@ -19,6 +19,7 @@
 #include "PlayerActionTracker.h"
 #include "PlayerSync/TamponInterpolation.h"
 #include "PlayerSync/IdentiteStatique.h"
+#include "PlayerSync/VoixEcriture.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
 #include "RED4ext/Scripting/Natives/Generated/Vector4.hpp"
 #include "RED4ext/Scripting/Natives/entEntityID.hpp"
@@ -858,6 +859,20 @@ private:
     int32_t m_faim = 1000;
     int32_t m_soif = 1000;
 
+    // --- Voix partagee (V4.2/VM3, chantier voix, 2026-09-30) ---
+    // Mon propre cid, appris de moi-meme par `HealthSync` (`mine = true`, voir HandleHealthSync)
+    // — c'est EXACTEMENT la source que la spec designe pour `monCid` (spec voix §0 « L'identite »).
+    // 0 = pas encore connu (avant le premier HealthSync `mine`) ; le lecteur du launcher n'a pas
+    // besoin de le distinguer d'un vrai cid nul, un cid serveur ne vaut jamais 0.
+    std::uint64_t m_monCid = 0;
+    // Demande PAR LA TOUCHE (`Tessera_VoixParle`, appele depuis Tessera_HudTalk) — publiee telle
+    // quelle dans la memoire partagee ; les securites reelles (V4.6 : alt-tab, 500 ms de silence,
+    // 60 s) sont du ressort du LAUNCHER, qui lit ce booleen et decide de l'emission.
+    bool m_voixAppuyee = false;
+    // L'ecrivain lui-meme : une section nommee Windows par PROCESSUS DE JEU, ouverte au premier
+    // appel de TrackPlayerPosition qui a une position a publier.
+    Tessera::Voix::EcrivainVoixPartagee m_ecrivainVoix;
+
     // Derniere sante locale CONNUE, en pourcentage (0-100). `-1` = jamais lue : le premier passage
     // ne rapporte donc rien, il ne fait qu'etablir la reference. Sans ce -1, l'entree en session
     // produirait un faux « gain de 100 % ».
@@ -1111,6 +1126,11 @@ private:
 protected:
     void PollIncomingMessages();
     void TrackPlayerPosition(float deltaTime);
+    /// Publie la memoire partagee voix (V4.2) : ma position/orientation, les avatars AFFICHES
+    /// par CE client (pas ceux que le serveur connait, voir VoixPartage.h), `V`, mon cid, un
+    /// battement de vie. Appelee depuis `TrackPlayerPosition`, donc au meme rythme que
+    /// `SendPositionUpdate` — pas de tick separe.
+    void EcrireVoixPartagee(float x, float y, float z, float forwardX, float forwardY, float forwardZ);
 
     // --- Couture protocole TesseraSynth (FlatBuffers) ---
     // Envoient un ClientEnvelope (Join / PositionUpdate) au serveur Rust autoritaire.
@@ -1821,6 +1841,15 @@ public:
     // franchissement du fil, meme regle que `nature` dans `Tessera_ReportStim`.
     int32_t Tessera_Faim() const { return m_faim; }
     int32_t Tessera_Soif() const { return m_soif; }
+
+    // --- Voix partagee (V4.2/VM3, chantier voix, 2026-09-30) ---
+    //
+    // Appele depuis `Tessera_HudTalk` (UiKitHud.reds) a chaque appui/relachement de la touche
+    // micro (`Tessera_PushToTalk`). Ne fait QUE memoriser l'etat : c'est `TrackPlayerPosition`,
+    // qui tourne chaque image, qui publie ce booleen (avec la position) dans la memoire
+    // partagee que lit le launcher — jamais ecrit directement d'ici, pour ne publier qu'UNE
+    // fois par image, au meme rythme que le reste de l'etat.
+    void Tessera_VoixParle(bool parle) { m_voixAppuyee = parle; }
 
     // Millisecondes ecoulees depuis le dernier `Snapshot` RECU. -1 = aucun snapshot n'est encore
     // arrive (chargement, session sans serveur) — a ne jamais confondre avec zero, qui veut dire
@@ -3289,6 +3318,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_SacItemQuantite);
     RTTI_METHOD(Tessera_PreserverTaille);
     RTTI_METHOD(Tessera_PreserverId);
+    RTTI_METHOD(Tessera_VoixParle);
     RTTI_PROPERTY(FullyConnected);
     RTTI_PROPERTY(playerActionTracker);
     RTTI_ALIAS("Cyberverse.Network.Managers.NetworkGameSystem");

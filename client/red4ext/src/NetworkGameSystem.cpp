@@ -6687,6 +6687,10 @@ void NetworkGameSystem::HandleHealthSync(const cyberpunk_rp::protocol::HealthSyn
 
     if (msg->mine())
     {
+        // Voix partagee (V4.2) : c'est ICI, et nulle part ailleurs, que le client apprend son
+        // PROPRE cid — voir le commentaire de `m_monCid` (NetworkGameSystem.h) et spec voix §0.
+        m_monCid = msg->id();
+
         // Etat de coma pousse par le SERVEUR. `-1` quand on est vivant : « pas de decompte » et
         // « decompte a zero » ne doivent pas se confondre — la seconde autorise l'hopital.
         if (msg->health() == 0)
@@ -7850,10 +7854,75 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
         }
         this->SendPositionUpdate(g_robotOrigineX + pose.dx, g_robotOrigineY + pose.dy,
                                  g_robotOrigineZ + pose.dz, pose.yaw, pose.locomotion);
+        // Voix partagee (V4.2) : la position ANNONCEE, exactement celle de SendPositionUpdate
+        // ci-dessus — voir le plan (tableau V4.2 : "ma position | celle de PositionUpdate, deja
+        // envoyee"). En mode robot ce n'est pas la position REELLE de l'entite (le robot ne la
+        // deplace pas), mais c'est bien ce que le reste du protocole considere comme MA position ;
+        // publier autre chose ici desaccorderait la voix du reste du jeu. Sert aussi d'instrument
+        // reproductible pour VM3 (sondage), sans dependre d'une entree WASD injectee (F-PLF-032 :
+        // les entrees injectees sont ignorees par le moteur).
+        {
+            const float yawRad = pose.yaw * 3.14159265f / 180.0f;
+            this->EcrireVoixPartagee(g_robotOrigineX + pose.dx, g_robotOrigineY + pose.dy,
+                                     g_robotOrigineZ + pose.dz, std::cos(yawRad), std::sin(yawRad), 0.0f);
+        }
         return;
     }
 
+    // Voix partagee (V4.2) : MA position reelle. Convention devant/X, droite/Y — NON VERIFIEE
+    // (le champ n'est encore consomme par personne, voir VoixPartage.h : "ecrite mais non
+    // consommee en mono"), a corriger le jour ou la spatialisation (lot 7) en depend reellement.
+    {
+        const float yawRad = Yaw * 3.14159265f / 180.0f;
+        this->EcrireVoixPartagee(X, Y, Z, std::cos(yawRad), std::sin(yawRad), 0.0f);
+    }
+
     this->SendPositionUpdate(X, Y, Z, Yaw);
+}
+
+void NetworkGameSystem::EcrireVoixPartagee(float x, float y, float z, float forwardX, float forwardY,
+                                            float forwardZ)
+{
+    // Battement de vie : incremente a CHAQUE ecriture, donc a chaque image ou le joueur est en
+    // monde (m_gameRestored, deja garanti par l'appelant). C'est lui, pas l'horloge murale, que
+    // le launcher observe pour detecter un jeu fige/ferme (VoixPartage.h, regle R8/V4.6).
+    static std::uint32_t s_battementVoix = 0;
+    ++s_battementVoix;
+
+    Tessera::Voix::EtatVoixPartage etat{};
+    etat.battementDeVie = s_battementVoix;
+    etat.monCid = m_monCid;
+    etat.vAppuyee = m_voixAppuyee ? 1u : 0u;
+    etat.auditeurPositionX = x;
+    etat.auditeurPositionY = y;
+    etat.auditeurPositionZ = z;
+    etat.auditeurOrientationX = forwardX;
+    etat.auditeurOrientationY = forwardY;
+    etat.auditeurOrientationZ = forwardZ;
+
+    // Les avatars AFFICHES par CE client : `m_networkedEntitiesLookup` donne tout le roster
+    // reseau, `GetDynamicEntity` ne rend une position que pour ceux qui ont effectivement un
+    // corps ici — exactement la distinction que le format veut (VoixPartage.h : « pas ceux que
+    // le serveur connait, ceux que CE client a effectivement poses »).
+    std::uint32_t compte = 0;
+    for (const auto& [networkId, entityId] : m_networkedEntitiesLookup)
+    {
+        if (compte >= Tessera::Voix::kAvatarsMax)
+        {
+            break;
+        }
+        const auto entite = Cyberverse::Utils::GetDynamicEntity(entityId);
+        if (!entite.has_value())
+        {
+            continue;
+        }
+        const auto position = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+        etat.avatars[compte] = Tessera::Voix::AvatarPartage{networkId, position.X, position.Y, position.Z};
+        ++compte;
+    }
+    etat.nombreAvatars = compte;
+
+    m_ecrivainVoix.Ecrire(etat);
 }
 
 void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)

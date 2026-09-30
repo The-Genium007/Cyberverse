@@ -660,6 +660,12 @@ public native class NetworkGameSystem extends IGameSystem {
     public native func Tessera_PreserverId(index: Int32) -> String;
     public native func Tessera_SignalerGeste(code: Uint32, debut: Bool) -> Bool;
 
+    // Voix partagée (V4.2/VM3, chantier voix, 2026-09-30) — appelé depuis `Tessera_HudTalk`
+    // (UiKitHud.reds) à chaque appui/relâchement de la touche micro. Mémorise seulement l'état ;
+    // c'est `TrackPlayerPosition` (NetworkGameSystem.cpp) qui publie ce booléen, à chaque image,
+    // dans la mémoire partagée `Local\TesseraVoix-<pid>` que lit le launcher.
+    public native func Tessera_VoixParle(parle: Bool) -> Void;
+
 
     public func SpawnTransientEntity(entityName: TweakDBID, worldPosition: Vector4, worldOrientation: Quaternion) -> EntityID {
         let npcSpec = new DynamicEntitySpec();
