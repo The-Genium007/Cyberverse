@@ -88,6 +88,9 @@ struct InteractionResultBuilder;
 struct PostureResult;
 struct PostureResultBuilder;
 
+struct VehicleMountResult;
+struct VehicleMountResultBuilder;
+
 struct CoffreLigne;
 struct CoffreLigneBuilder;
 
@@ -264,11 +267,12 @@ enum ClientMsg : uint8_t {
   ClientMsg_AvatarProjectionReport = 22,
   ClientMsg_GarmentReport = 23,
   ClientMsg_TablesReport = 24,
+  ClientMsg_VehiclePlayerState = 25,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_TablesReport
+  ClientMsg_MAX = ClientMsg_VehiclePlayerState
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[25] {
+inline const ClientMsg (&EnumValuesClientMsg())[26] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -294,13 +298,14 @@ inline const ClientMsg (&EnumValuesClientMsg())[25] {
     ClientMsg_DeviceCall,
     ClientMsg_AvatarProjectionReport,
     ClientMsg_GarmentReport,
-    ClientMsg_TablesReport
+    ClientMsg_TablesReport,
+    ClientMsg_VehiclePlayerState
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[26] = {
+  static const char * const names[27] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -326,13 +331,14 @@ inline const char * const *EnumNamesClientMsg() {
     "AvatarProjectionReport",
     "GarmentReport",
     "TablesReport",
+    "VehiclePlayerState",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_TablesReport)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_VehiclePlayerState)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -437,6 +443,10 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::TablesReport> {
   static const ClientMsg enum_value = ClientMsg_TablesReport;
 };
 
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::VehiclePlayerState> {
+  static const ClientMsg enum_value = ClientMsg_VehiclePlayerState;
+};
+
 template <bool B = false>
 bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ClientMsg type);
 template <bool B = false>
@@ -473,11 +483,12 @@ enum ServerMsg : uint8_t {
   ServerMsg_PostureResult = 27,
   ServerMsg_MondePartage = 28,
   ServerMsg_Rendu = 29,
+  ServerMsg_VehicleMountResult = 30,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_Rendu
+  ServerMsg_MAX = ServerMsg_VehicleMountResult
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[30] {
+inline const ServerMsg (&EnumValuesServerMsg())[31] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -508,13 +519,14 @@ inline const ServerMsg (&EnumValuesServerMsg())[30] {
     ServerMsg_StaffMode,
     ServerMsg_PostureResult,
     ServerMsg_MondePartage,
-    ServerMsg_Rendu
+    ServerMsg_Rendu,
+    ServerMsg_VehicleMountResult
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[31] = {
+  static const char * const names[32] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -545,13 +557,14 @@ inline const char * const *EnumNamesServerMsg() {
     "PostureResult",
     "MondePartage",
     "Rendu",
+    "VehicleMountResult",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_Rendu)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_VehicleMountResult)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -674,6 +687,10 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::MondePartage> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::Rendu> {
   static const ServerMsg enum_value = ServerMsg_Rendu;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::VehicleMountResult> {
+  static const ServerMsg enum_value = ServerMsg_VehicleMountResult;
 };
 
 template <bool B = false>
@@ -1488,7 +1505,8 @@ struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_PROPRIETAIRE = 20,
     VT_VERROUILLE = 22,
     VT_DEGATS = 24,
-    VT_RADIO_STATION = 26
+    VT_RADIO_STATION = 26,
+    VT_CLE = 28
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -1526,6 +1544,9 @@ struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint8_t radio_station() const {
     return GetField<uint8_t>(VT_RADIO_STATION, 0);
   }
+  uint64_t cle() const {
+    return GetField<uint64_t>(VT_CLE, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1543,6 +1564,7 @@ struct VehicleState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_VERROUILLE, 1) &&
            VerifyField<uint8_t>(verifier, VT_DEGATS, 1) &&
            VerifyField<uint8_t>(verifier, VT_RADIO_STATION, 1) &&
+           VerifyField<uint64_t>(verifier, VT_CLE, 8) &&
            verifier.EndTable();
   }
 };
@@ -1587,6 +1609,9 @@ struct VehicleStateBuilder {
   void add_radio_station(uint8_t radio_station) {
     fbb_.AddElement<uint8_t>(VehicleState::VT_RADIO_STATION, radio_station, 0);
   }
+  void add_cle(uint64_t cle) {
+    fbb_.AddElement<uint64_t>(VehicleState::VT_CLE, cle, 0);
+  }
   explicit VehicleStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1611,8 +1636,10 @@ inline ::flatbuffers::Offset<VehicleState> CreateVehicleState(
     uint64_t proprietaire = 0,
     bool verrouille = false,
     uint8_t degats = 0,
-    uint8_t radio_station = 0) {
+    uint8_t radio_station = 0,
+    uint64_t cle = 0) {
   VehicleStateBuilder builder_(_fbb);
+  builder_.add_cle(cle);
   builder_.add_proprietaire(proprietaire);
   builder_.add_passenger(passenger);
   builder_.add_id(id);
@@ -1641,7 +1668,8 @@ inline ::flatbuffers::Offset<VehicleState> CreateVehicleStateDirect(
     uint64_t proprietaire = 0,
     bool verrouille = false,
     uint8_t degats = 0,
-    uint8_t radio_station = 0) {
+    uint8_t radio_station = 0,
+    uint64_t cle = 0) {
   auto occupants__ = occupants ? _fbb.CreateVector<::flatbuffers::Offset<cyberpunk_rp::protocol::VehicleOccupant>>(*occupants) : 0;
   return cyberpunk_rp::protocol::CreateVehicleState(
       _fbb,
@@ -1656,7 +1684,8 @@ inline ::flatbuffers::Offset<VehicleState> CreateVehicleStateDirect(
       proprietaire,
       verrouille,
       degats,
-      radio_station);
+      radio_station,
+      cle);
 }
 
 struct VehicleInput FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2950,6 +2979,78 @@ inline ::flatbuffers::Offset<PostureResult> CreatePostureResult(
   builder_.add_emplacement(emplacement);
   builder_.add_reason(reason);
   builder_.add_ok(ok);
+  return builder_.Finish();
+}
+
+struct VehicleMountResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef VehicleMountResultBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_VEHICLE = 4,
+    VT_SEAT = 6,
+    VT_ACCEPTE = 8,
+    VT_RAISON = 10
+  };
+  uint64_t vehicle() const {
+    return GetField<uint64_t>(VT_VEHICLE, 0);
+  }
+  uint8_t seat() const {
+    return GetField<uint8_t>(VT_SEAT, 0);
+  }
+  bool accepte() const {
+    return GetField<uint8_t>(VT_ACCEPTE, 0) != 0;
+  }
+  uint8_t raison() const {
+    return GetField<uint8_t>(VT_RAISON, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_VEHICLE, 8) &&
+           VerifyField<uint8_t>(verifier, VT_SEAT, 1) &&
+           VerifyField<uint8_t>(verifier, VT_ACCEPTE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_RAISON, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct VehicleMountResultBuilder {
+  typedef VehicleMountResult Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_vehicle(uint64_t vehicle) {
+    fbb_.AddElement<uint64_t>(VehicleMountResult::VT_VEHICLE, vehicle, 0);
+  }
+  void add_seat(uint8_t seat) {
+    fbb_.AddElement<uint8_t>(VehicleMountResult::VT_SEAT, seat, 0);
+  }
+  void add_accepte(bool accepte) {
+    fbb_.AddElement<uint8_t>(VehicleMountResult::VT_ACCEPTE, static_cast<uint8_t>(accepte), 0);
+  }
+  void add_raison(uint8_t raison) {
+    fbb_.AddElement<uint8_t>(VehicleMountResult::VT_RAISON, raison, 0);
+  }
+  explicit VehicleMountResultBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<VehicleMountResult> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<VehicleMountResult>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<VehicleMountResult> CreateVehicleMountResult(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t vehicle = 0,
+    uint8_t seat = 0,
+    bool accepte = false,
+    uint8_t raison = 0) {
+  VehicleMountResultBuilder builder_(_fbb);
+  builder_.add_vehicle(vehicle);
+  builder_.add_raison(raison);
+  builder_.add_accepte(accepte);
+  builder_.add_seat(seat);
   return builder_.Finish();
 }
 
@@ -4698,7 +4799,8 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_MORT = 12,
     VT_KIND = 14,
     VT_CLE = 16,
-    VT_CAUSE = 18
+    VT_CAUSE = 18,
+    VT_SIEGE = 20
   };
   uint64_t record() const {
     return GetField<uint64_t>(VT_RECORD, 0);
@@ -4724,6 +4826,9 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint8_t cause() const {
     return GetField<uint8_t>(VT_CAUSE, 0);
   }
+  uint8_t siege() const {
+    return GetField<uint8_t>(VT_SIEGE, 255);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -4735,6 +4840,7 @@ struct PromotionRequest FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint8_t>(verifier, VT_KIND, 1) &&
            VerifyField<uint64_t>(verifier, VT_CLE, 8) &&
            VerifyField<uint8_t>(verifier, VT_CAUSE, 1) &&
+           VerifyField<uint8_t>(verifier, VT_SIEGE, 1) &&
            verifier.EndTable();
   }
 };
@@ -4767,6 +4873,9 @@ struct PromotionRequestBuilder {
   void add_cause(uint8_t cause) {
     fbb_.AddElement<uint8_t>(PromotionRequest::VT_CAUSE, cause, 0);
   }
+  void add_siege(uint8_t siege) {
+    fbb_.AddElement<uint8_t>(PromotionRequest::VT_SIEGE, siege, 255);
+  }
   explicit PromotionRequestBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -4787,13 +4896,15 @@ inline ::flatbuffers::Offset<PromotionRequest> CreatePromotionRequest(
     bool mort = false,
     uint8_t kind = 0,
     uint64_t cle = 0,
-    uint8_t cause = 0) {
+    uint8_t cause = 0,
+    uint8_t siege = 255) {
   PromotionRequestBuilder builder_(_fbb);
   builder_.add_cle(cle);
   builder_.add_appearance(appearance);
   builder_.add_record(record);
   builder_.add_position(position);
   builder_.add_yaw(yaw);
+  builder_.add_siege(siege);
   builder_.add_cause(cause);
   builder_.add_kind(kind);
   builder_.add_mort(mort);
@@ -6441,6 +6552,9 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::TablesReport *msg_as_TablesReport() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_TablesReport ? static_cast<const cyberpunk_rp::protocol::TablesReport *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::VehiclePlayerState *msg_as_VehiclePlayerState() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_VehiclePlayerState ? static_cast<const cyberpunk_rp::protocol::VehiclePlayerState *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -6545,6 +6659,10 @@ template<> inline const cyberpunk_rp::protocol::GarmentReport *ClientEnvelope::m
 
 template<> inline const cyberpunk_rp::protocol::TablesReport *ClientEnvelope::msg_as<cyberpunk_rp::protocol::TablesReport>() const {
   return msg_as_TablesReport();
+}
+
+template<> inline const cyberpunk_rp::protocol::VehiclePlayerState *ClientEnvelope::msg_as<cyberpunk_rp::protocol::VehiclePlayerState>() const {
+  return msg_as_VehiclePlayerState();
 }
 
 struct ClientEnvelopeBuilder {
@@ -6678,6 +6796,9 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::Rendu *msg_as_Rendu() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_Rendu ? static_cast<const cyberpunk_rp::protocol::Rendu *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::VehicleMountResult *msg_as_VehicleMountResult() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_VehicleMountResult ? static_cast<const cyberpunk_rp::protocol::VehicleMountResult *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -6802,6 +6923,10 @@ template<> inline const cyberpunk_rp::protocol::MondePartage *ServerEnvelope::ms
 
 template<> inline const cyberpunk_rp::protocol::Rendu *ServerEnvelope::msg_as<cyberpunk_rp::protocol::Rendu>() const {
   return msg_as_Rendu();
+}
+
+template<> inline const cyberpunk_rp::protocol::VehicleMountResult *ServerEnvelope::msg_as<cyberpunk_rp::protocol::VehicleMountResult>() const {
+  return msg_as_VehicleMountResult();
 }
 
 struct ServerEnvelopeBuilder {
@@ -6935,6 +7060,10 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ClientMsg_TablesReport: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::TablesReport *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_VehiclePlayerState: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::VehiclePlayerState *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
@@ -7074,6 +7203,10 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_Rendu: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::Rendu *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_VehicleMountResult: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::VehicleMountResult *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

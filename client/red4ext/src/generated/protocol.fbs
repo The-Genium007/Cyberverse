@@ -227,7 +227,12 @@ table VehicleOccupant { seat:ubyte; client:ulong; }
 // décroît que par une réparation explicite, sinon un changement de conducteur réparerait la voiture.
 table VehicleState { id:ulong; archetype:uint; position:QVec3; yaw:ushort; speed:ushort;
                      passenger:ulong; space_id:uint; occupants:[VehicleOccupant];
-                     proprietaire:ulong; verrouille:bool; degats:ubyte; radio_station:ubyte; }
+                     proprietaire:ulong; verrouille:bool; degats:ubyte; radio_station:ubyte;
+                     cle:ulong; }
+// `cle` (2026-09-30, ADR 0054) : la cle de la voiture de la RUE dont ce vehicule est la promotion
+// (`0x56 << 56 | EntityID natif`), 0 = vehicule ne du serveur (manifeste, garage). Un client qui a
+// un jumeau natif de meme cle, meme record, a moins de 3 m, l'ADOPTE au lieu d'en faire naitre un
+// second. Append pur : un client anterieur voit 0 et fait naitre comme avant.
 
 // --- Véhicule PILOTÉ joueur — niveau 2, réplication d'inputs (ADR 0011, spec 2026-07-21 §3) ---
 
@@ -260,6 +265,11 @@ table VehicleInput { vehicle:ulong; tick:ulong; throttle:ubyte; brake:ubyte;
 table VehiclePlayerState { id:ulong; record:ulong; position:Vec3; orientation:Quat;
                            linear_velocity:Vec3; angular_velocity:Vec3;
                            driver:ulong; seat_occupancy:ubyte; flags:ubyte; }
+// ⭐ 2026-09-30 (ADR 0054 §4) : BRANCHE. La meme table sert dans les DEUX sens. Client -> serveur
+// (membre de `ClientMsg`, non fiable) : le conducteur au siege 0 d'une voiture reseau rapporte la
+// pose de SA voiture ; le serveur ne l'accepte que du conducteur enregistre et la borne. Serveur ->
+// clients (`Snapshot.vehicles_player`) : les temoins la rendent par interpolation datee, extrapolee
+// par les vitesses. `driver`, `record` et `seat_occupancy` sont ignores dans le sens montant.
 
 // --- Apparence & équipement (spec 2026-07-23 §4.1) ---
 
@@ -511,6 +521,13 @@ table InteractionResult { session_id:ulong; ok:bool; payload:[ubyte]; }
 // donner un banc. `reason` : 0=accepte/libere, 1=inconnu, 2=occupe,
 // 3=trop_loin, 4=pose_joueur_absente.
 table PostureResult { emplacement:ulong; ok:bool; reason:ubyte; }
+
+// Verdict d'un montage vehicule (`EntityInteraction` kind = 3), ADR 0054 §5. Le client s'assied
+// localement AVANT que le serveur tranche (le moteur monte le joueur tout seul) ; sans ce verdict,
+// un refus laissait le joueur assis chez lui et a pied pour tous les autres (F-VEH-204). Sur
+// `accepte = false`, le client fait DESCENDRE le joueur local. `raison` : 0 = accepte,
+// 1 = vehicule inconnu, 2 = siege pris, 3 = verrouille, 4 = trop loin.
+table VehicleMountResult { vehicle:ulong; seat:ubyte; accepte:bool; raison:ubyte; }
 
 // ── LE COFFRE DE VÉHICULE ──────────────────────────────────────────────────────────────────
 //
@@ -825,7 +842,10 @@ table StimReport { nature:ubyte; radius:ushort; target:ulong; }
 // 1 arrêt par un joueur, 2 témoin. Avec une clé, le serveur ARBITRE : deux demandes pour la même
 // clé rendent le MÊME id réseau (idempotence), et il tient un plafond par maille et un débit par
 // client (`promus.rs`). Sans clé, rien ne change pour un client d'avant.
-table PromotionRequest { record:ulong (id: 0); appearance:ulong (id: 1); position:QVec3 (id: 2); yaw:ushort (id: 3); mort:bool (id: 4); kind:ubyte = 0 (id: 5); cle:ulong (id: 6); cause:ubyte = 0 (id: 7); }
+table PromotionRequest { record:ulong (id: 0); appearance:ulong (id: 1); position:QVec3 (id: 2); yaw:ushort (id: 3); mort:bool (id: 4); kind:ubyte = 0 (id: 5); cle:ulong (id: 6); cause:ubyte = 0 (id: 7); siege:ubyte = 255 (id: 8); }
+// `siege` (2026-09-30, ADR 0054, kind = 1 seulement) : l'index du siege ou le demandeur est DEJA
+// assis dans la voiture de la rue qu'il fait promouvoir. 255 = pas monte (defaut : un client
+// anterieur ne fait asseoir personne). Le serveur l'assied a ce siege apres la promotion.
 
 // --- Monde partagé : le mode dérivé, la clé du monde, les clés suspendues (spec 2026-09-29 §3.1, §6) ---
 
@@ -1171,8 +1191,8 @@ table ConsoleLine { level:ubyte; text:string; }
 table StaffMode { on:bool; }
 
 // --- unions : NOUVEAUX membres APPENDÉS EN FIN (jamais réordonner l'existant) ---
-union ClientMsg { Join, PositionUpdate, ClientTimeReport, AdminCommand, Leave, PlayerActionReport, EmoteReport, CreateCharacter, SelectCharacter, DeleteCharacter, EntityInteraction, InteractionChoice, ElevatorCall, VehicleInput, EquipmentReport, StimReport, PromotionRequest, StaticNpcReport, RespawnRequest, HealthReport, DeviceCall, AvatarProjectionReport, GarmentReport, TablesReport }
-union ServerMsg { Snapshot, Kicked, WorldState, CommandResult, PermissionSync, PositionCorrection, ShardAssignment, PlayerEvent, CharacterList, CharacterResult, QueueStatus, InteractionOpen, InteractionResult, ElevatorStateMsg, AppearanceSync, ConfigSync, StaticAppearance, HealthSync, CellAppearances, ActionCatalog, IdentitesConnues, InventaireAutoritaire, DeviceStateMsg, CommandCatalog, ConsoleLine, StaffMode, PostureResult, MondePartage, Rendu }
+union ClientMsg { Join, PositionUpdate, ClientTimeReport, AdminCommand, Leave, PlayerActionReport, EmoteReport, CreateCharacter, SelectCharacter, DeleteCharacter, EntityInteraction, InteractionChoice, ElevatorCall, VehicleInput, EquipmentReport, StimReport, PromotionRequest, StaticNpcReport, RespawnRequest, HealthReport, DeviceCall, AvatarProjectionReport, GarmentReport, TablesReport, VehiclePlayerState }
+union ServerMsg { Snapshot, Kicked, WorldState, CommandResult, PermissionSync, PositionCorrection, ShardAssignment, PlayerEvent, CharacterList, CharacterResult, QueueStatus, InteractionOpen, InteractionResult, ElevatorStateMsg, AppearanceSync, ConfigSync, StaticAppearance, HealthSync, CellAppearances, ActionCatalog, IdentitesConnues, InventaireAutoritaire, DeviceStateMsg, CommandCatalog, ConsoleLine, StaffMode, PostureResult, MondePartage, Rendu, VehicleMountResult }
 table ClientEnvelope { msg:ClientMsg; }
 table ServerEnvelope { msg:ServerMsg; }
 
