@@ -4378,7 +4378,7 @@ void NetworkGameSystem::HandlePositionCorrection(const cyberpunk_rp::protocol::P
         DequantPos(pos->x()), DequantPos(pos->y()), DequantPos(pos->z()), 1.0f
     };
     const float yaw = DequantYaw(correction->yaw());
-    const uint8_t reason = correction->reason(); // 0=Spawn, 1=AntiCheat, 2=Resync (diagnostic uniquement)
+    const uint8_t reason = correction->reason(); // 0=Spawn, 1=AntiCheat, 2=Resync, 3=Blocage entre joueurs
 
     // Téléporte le JOUEUR LOCAL à la position autoritaire du serveur. Même facilité que pour les
     // avatars distants (confirmée fonctionnelle en jeu, cf. SetEntityPosition) mais appliquée au
@@ -4391,7 +4391,18 @@ void NetworkGameSystem::HandlePositionCorrection(const cyberpunk_rp::protocol::P
         return;
     }
 
-    const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yaw };
+    // reason 3 = BLOCAGE entre joueurs (serveur, 2026-09-30) : le serveur refuse l'avance et renvoie le
+    // joueur au bord du contact, SUR SON PROPRE CHEMIN d'approche (jamais de cote : pas de mur). Le recul
+    // est petit (vitesse x aller-retour) et on GARDE l'orientation courante : imposer le yaw du serveur
+    // ferait tourner la camera a chaque contact.
+    float yawApplique = yaw;
+    if (reason == 3)
+    {
+        const auto orientation = Cyberverse::Utils::Entity_GetWorldOrientation(player);
+        const auto [Roll, Pitch, YawCourant] = Cyberverse::Utils::Quaternion_ToEulerAngles(orientation);
+        yawApplique = YawCourant;
+    }
+    const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yawApplique };
     const auto teleportFacility = Red::GetGameSystem<RED4ext::TeleportationFacility>();
     if (!Red::CallVirtual(teleportFacility, "Teleport", player, worldPosition, angles))
     {
@@ -10873,12 +10884,58 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     auto& suiviPalier = g_suiviAvatars[networkId];
     suiviPalier.depuisEcartLargeS =
         (derive > kPalierM && !enLair) ? suiviPalier.depuisEcartLargeS + deltaTime : 0.0f;
+    // L'instrument du palier : la derive relue a l'image SUIVANTE (l'ecriture du moveComponent n'est
+    // visible dans la transformation monde qu'a la passe d'apres). `apres` < 0,5 m = le placement a pris.
+    if (suiviPalier.palierAvantM >= 0.0f)
+    {
+        SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER suivi avant=%.2fm apres=%.2fm", networkId,
+                           suiviPalier.palierAvantM, derive);
+        suiviPalier.palierAvantM = -1.0f;
+    }
     const bool palierAtteint = suiviPalier.depuisEcartLargeS >= kPalierTenuS;
     if (palierAtteint)
     {
         suiviPalier.depuisEcartLargeS = 0.0f;
         SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER derive=%.2fm tenue > %.1fs", networkId, derive,
                            kPalierTenuS);
+    }
+    // ⛔ LES PALIERS EN SERIE (bloc 1 du 2026-09-30 : 5,51 -> 4,80 -> 4,35 -> 4,02 -> 3,48 m, un par
+    // 0,5 s, en sprint). Fiche du consommateur (ADR 0034) du placement franc par `SetEntityPosition` :
+    //   Cible        : `AITeleportCommand.position`, via `TeleportPuppet` (+ facility, inerte sur un
+    //                  pantin a IA, F-PLY-070/506)
+    //   Lecteurs     : 1 — `TeleportCommandHandler`, premiere `Update` 200 a 267 ms apres `Activate`
+    //                  (F-PLY-328, source CDPR)
+    //   Alimente     : la position du corps, a la destination FIGEE a l'empilage
+    //   Domaine      : une position monde, lue une fois, >= 200 ms apres l'envoi
+    //   Hors domaine : annulee avant lecture -> rien
+    //   Qui d'AUTRE  : ⛔ NOUS, A L'IMAGE SUIVANTE. Avec 3 m d'ecart, la correction douce ci-dessus
+    //                  tourne a chaque image (`deriveHorizontale > 0,25 m`) et son `TeleportPuppet`
+    //                  fait `CancelOrInterruptCommand(n"AITeleportCommand")` AVANT d'envoyer le sien
+    //                  (NetworkGameSystem.reds). Le teleport du palier vit donc UNE image (~16 ms),
+    //                  jamais les 200 ms qu'il faut a son lecteur. Le palier n'etait qu'une correction
+    //                  douce de plus — d'ou ~0,5 m gagne par 0,5 s, la vitesse de rattrapage de la
+    //                  marche. Et `commande = false` relancait la marche (phase de depart en course).
+    // On ecrit donc le palier dans l'entree active du moveComponent (F-PLY-337 : la seule ecriture de
+    // position prouvee, sans commande d'IA, donc rien a annuler) et on NE TOUCHE PAS a la marche. Le
+    // franc > 15 m garde `SetEntityPosition` (spawn, reapparition). Repli sur l'ancien chemin si le
+    // natif refuse. ⚠️ Non vu en jeu : `PALIER suivi ... apres=` le tranche (F-PLY-337 a ete mesure sur
+    // un corps IMMOBILE ; sur un corps en marche, c'est la question ouverte).
+    if (!g_suspendreCorrections && palierAtteint && derive <= kSautFrancM)
+    {
+        int32_t raison = -1;
+        const bool appel =
+            Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", raison, entityId, positionVoulue);
+        if (appel && raison == 0)
+        {
+            ++g_statsRoster.recalagesAvatar;
+            suiviPalier.palierAvantM = derive;
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECALAGE derive=%.2fm allure=%u ech=%zu direct%s", networkId,
+                               derive, static_cast<unsigned>(pose.locomotion), g_tamponsJoueurs[networkId].Nombre(),
+                               pose.extrapolee ? " EXTRAPOLE" : "");
+            return;
+        }
+        SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER direct refuse raison=%d -> AITeleportCommand", networkId,
+                           raison);
     }
     if (!g_suspendreCorrections && (derive > kSautFrancM || palierAtteint))
     {
