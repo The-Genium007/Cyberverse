@@ -334,6 +334,8 @@ struct SuiviAvatar
     float depuisEcartLargeS = 0.0f;
     /// Derive au moment du dernier palier ecrit en direct ; >= 0 = a relire a l'image suivante (instrument).
     float palierAvantM = -1.0f;
+    /// Sonde F-PLY-601 (`TESSERA_SONDE_DOUCE_UNE`) : temps depuis l'unique correction douce ; < 0 = libre.
+    float sondeDouceS = -1.0f;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai

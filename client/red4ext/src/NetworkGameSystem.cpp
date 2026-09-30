@@ -713,6 +713,13 @@ static constexpr float kSautReceptionS = 0.5f;    // absorption + retour debout
 // invisible), clips du jeu de REACTIONS (corps deforme).
 static constexpr const char* kActionSautNom = "CallSquad";
 
+/// Sonde F-PLY-601 : une correction douce isolee (voir la branche douce de `PiloterAvatar`).
+static bool SondeDouceUneActive()
+{
+    static const bool actif = std::getenv("TESSERA_SONDE_DOUCE_UNE") != nullptr;
+    return actif;
+}
+
 static bool SautDirectActif()
 {
     static const bool actif = []() {
@@ -10865,12 +10872,42 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // x 200 = 8000 commandes/s, ce qui est DANS la zone qui a fait tomber le jeu. Une commande
         // de teleport n'est pas une commande de marche et rien ne dit qu'elle coute pareil — mais
         // tant que ce n'est pas mesure, ce chemin n'est valide qu'a faible densite.
-        SetEntityPosition(entityId, pas, pose.yaw);
+        // ⚗️ SONDE F-PLY-601 (`TESSERA_SONDE_DOUCE_UNE=1`, eteinte par defaut) : UNE seule correction
+        // douce, pleine (sur la cible), puis plus rien pendant 1 s, et la derive a chaque image.
+        // Tranche la contradiction F-PLY-328 / F-PLY-085 : une marche de >= 0,5 m en une image entre
+        // 150 et 350 ms apres l'appel = l'`AITeleportCommand` isole est lu (et la famine par
+        // reemission est reelle) ; aucune marche = il ne l'est pas, et ce qui deplace l'avatar est ailleurs.
+        const bool kSondeDouceUne = SondeDouceUneActive();
+        auto& sonde = g_suiviAvatars[networkId];
+        const bool sondeRetient = kSondeDouceUne && sonde.sondeDouceS >= 0.0f;
+        if (!sondeRetient)
+        {
+        const RED4ext::Vector4 cibleSonde = kSondeDouceUne ? positionVoulue : pas;
+        SetEntityPosition(entityId, cibleSonde, pose.yaw);
+        if (kSondeDouceUne)
+        {
+            sonde.sondeDouceS = 0.0f;
+            SDK->logger->InfoF(PLUGIN, "[sonde-douce %llu] APPEL derive=%.2fm", networkId, derive);
+        }
         { auto& s = g_suiviAvatars[networkId];
-          s.placeX = pas.X; s.placeY = pas.Y; s.depuisPlaceS = 0.0f; s.placeZ = pas.Z; s.placeValide = true;
+          s.placeX = cibleSonde.X; s.placeY = cibleSonde.Y; s.depuisPlaceS = 0.0f; s.placeZ = cibleSonde.Z; s.placeValide = true;
           const auto relupas = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
-          const float rpasx = relupas.X - pas.X, rpasy = relupas.Y - pas.Y, rpasz = relupas.Z - pas.Z;
+          const float rpasx = relupas.X - cibleSonde.X, rpasy = relupas.Y - cibleSonde.Y, rpasz = relupas.Z - cibleSonde.Z;
           g_ecartApresPose = std::sqrt(rpasx * rpasx + rpasy * rpasy + rpasz * rpasz); }
+        }
+    }
+    if (SondeDouceUneActive())
+    {
+        auto& sonde = g_suiviAvatars[networkId];
+        if (sonde.sondeDouceS >= 0.0f)
+        {
+            sonde.sondeDouceS += deltaTime;
+            SDK->logger->InfoF(PLUGIN, "[sonde-douce %llu] t=%.3fs derive=%.2fm", networkId, sonde.sondeDouceS, derive);
+            if (sonde.sondeDouceS >= 1.0f)
+            {
+                sonde.sondeDouceS = -1.0f;
+            }
+        }
     }
 
     // ⛔ RETOURS DU PLAYTEST 2 (2026-09-26, R4 « complètement à côté ») — UN PALIER entre la
