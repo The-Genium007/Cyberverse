@@ -14,6 +14,7 @@ set(PROJECT_SRC_FILES
   NetworkGameSystem.cpp
   TesseraEsthetiqueV.cpp
   TesseraSpawnEnrichi.cpp
+  TesseraVoiesFoule.cpp
   PlayerActionTracker.cpp
 )
 

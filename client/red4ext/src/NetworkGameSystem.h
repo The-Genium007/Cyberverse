@@ -1340,6 +1340,14 @@ public:
     Red::CString Tessera_LireComposantBrut(const Red::Handle<RED4ext::IScriptable>& composant,
                                            int32_t offset, int32_t nombre) const;
 
+    /// T0b / T0c du monde partage (F-PNJ-244) : lit le SYSTEME DE VOIES de la foule en suivant
+    /// gameCommunitySystem+0xd0 -> CrowdSystem+0x640 -> +0x140 (`TesseraVoiesFoule.cpp`).
+    /// En-tete toujours rendu (phase, compteur `+0x90`, nombre de voies, portes) ; puis jusqu'a
+    /// `max` voies, toutes si `cleVoie == 0`, sinon celles dont la cle 64 bits vaut `cleVoie`,
+    /// avec leurs fragments `debut-fin=crowdCreationDataIndex`. `max = 0` : en-tete seul, assez
+    /// leger pour une lecture par image. Chaine VIDE si un maillon manque.
+    Red::CString Tessera_LireVoiesFoule(uint64_t cleVoie, int32_t max) const;
+
     Red::CString Tessera_GetServerShard() const { return Red::CString(m_serverShard.c_str()); }
     Red::CString Tessera_GetServerOverlaps() const { return Red::CString(m_serverOverlapsCsv.c_str()); }
     int32_t Tessera_GetVisiblePlayerCount() const
@@ -3271,6 +3279,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_EcrireOffsetLocal);
     RTTI_METHOD(Tessera_LireMouvementBrut);
     RTTI_METHOD(Tessera_LireComposantBrut);
+    RTTI_METHOD(Tessera_LireVoiesFoule);
     RTTI_METHOD(Tessera_PoserJoueurLocalPorte);
     RTTI_METHOD(Tessera_JoueurLocalPorte);
     RTTI_METHOD(Tessera_AvatarPorteParPlateforme);

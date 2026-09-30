@@ -563,6 +563,9 @@ public native class NetworkGameSystem extends IGameSystem {
     /// Le meme lecteur, mais depuis la BASE du composant — pour le composant d'ANIMATION, que
     /// F-PLY-408 designe comme le candidat suivant.
     public native func Tessera_LireComposantBrut(composant: ref<IScriptable>, offset: Int32, nombre: Int32) -> String;
+    // T0b/T0c du monde partage (F-PNJ-244) : le systeme de voies de la foule, lu en suivant
+    // gameCommunitySystem -> CrowdSystem -> gestionnaire pietons. `max = 0` : en-tete seul.
+    public native func Tessera_LireVoiesFoule(cleVoie: Uint64, max: Int32) -> String;
     /// Placement visuel d'un passager sans empiler d'ordre IA. `moveComponent` est opaque au
     /// script ; le natif borne, ecrit puis relit son entree active (F-PLY-337).
     /// 0 = écrit ; 1 = corps introuvable ; 2 = moveComponent introuvable ; 3 = natif refusé.
