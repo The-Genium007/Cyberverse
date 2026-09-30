@@ -2141,14 +2141,27 @@ public:
 
     int32_t Tessera_CoffreSeq() const { return m_coffreSeq; }
 
-    /// L'`EntityID` LOCALE du vehicule dont on tient le coffre — pas l'id reseau. C'est celle-la
+    /// L'`EntityID` LOCALE du contenant dont on tient le coffre — pas l'id reseau. C'est celle-la
     /// que redscript sait manipuler ; la traduction vit ici, ou vit la table.
+    ///
+    /// ⚠️ CORRIGE LE 2026-09-30 (F-DEV-031). `m_coffreVehicule` porte DEUX SORTES d'identifiants
+    /// (voir `protocol.fbs` sur `CoffreContenu.contenant`, et le commentaire au-dessus de
+    /// `m_coffreEstContenant`) : l'id RESEAU d'un vehicule (a traduire via
+    /// `m_networkedEntitiesLookup`), OU l'`EntityID` de JEU d'un appareil du monde — deja locale,
+    /// deja directement utilisable. Chercher la seconde dans la table des vehicules reseau ne la
+    /// trouve jamais : la native rendait `vide`, et `VehiculeCoffre.reds` abandonnait
+    /// "definitivement" a chaque ouverture de caisse. Le genre de session (`m_coffreEstContenant`)
+    /// dit laquelle des deux on tient — c'est la seule information qui le dise.
     RED4ext::ent::EntityID Tessera_CoffreVehicule() const
     {
         RED4ext::ent::EntityID vide{};
         if (m_coffreVehicule == 0)
         {
             return vide;
+        }
+        if (m_coffreEstContenant)
+        {
+            return RED4ext::ent::EntityID{m_coffreVehicule};
         }
         const auto it = m_networkedEntitiesLookup.find(m_coffreVehicule);
         return (it == m_networkedEntitiesLookup.end()) ? vide : it->second;
