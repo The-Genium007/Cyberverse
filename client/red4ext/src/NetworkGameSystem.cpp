@@ -2211,6 +2211,9 @@ void NetworkGameSystem::PollIncomingMessages()
                     break;
                 // ⭐ LA CONSOLE — cable le 2026-08-30. Avant, ces deux messages tombaient dans
                 // le `default` juste en dessous : le serveur repondait, le client JETAIT.
+                case cyberpunk_rp::protocol::ServerMsg_VehicleMountResult:
+                    HandleVehicleMountResult(env->msg_as_VehicleMountResult());
+                    break;
                 case cyberpunk_rp::protocol::ServerMsg_CommandResult:
                 {
                     const auto* r = env->msg_as_CommandResult();
@@ -8122,6 +8125,59 @@ static void PlacerVehiculeComplet(RED4ext::ent::EntityID entityId, const Tessera
     const RED4ext::Vector4 position{ p.pos[0], p.pos[1], p.pos[2], 1.0f };
     Red::CallVirtual(Red::GetGameSystem<RED4ext::TeleportationFacility>(), "Teleport", cible, position,
                      angles);
+}
+
+void NetworkGameSystem::HandleVehicleMountResult(const cyberpunk_rp::protocol::VehicleMountResult* r)
+{
+    if (r == nullptr)
+    {
+        return;
+    }
+    if (r->accepte())
+    {
+        SDK->logger->InfoF(PLUGIN, "[montage] accepte par le serveur vehicule=%llu siege=%u", r->vehicle(),
+                           static_cast<unsigned>(r->seat()));
+        return;
+    }
+    static const char* const kRaisons[] = { "inconnue", "vehicule inconnu", "siege pris",
+                                            "verrouille", "trop loin" };
+    const unsigned raison = r->raison();
+    const char* nomRaison = raison < sizeof(kRaisons) / sizeof(kRaisons[0]) ? kRaisons[raison] : "?";
+
+    // « Monte DANS CE vehicule » se lit sur le jeu (couche B), pas sur `g_vehiculeLocalMonte` qui
+    // ne dit que le siege 0 : un refus pour un siege passager doit faire descendre aussi.
+    bool monteDedans = false;
+    RED4ext::ent::EntityID vehicule{};
+    if (const auto it = m_networkedEntitiesLookup.find(r->vehicle()); it != m_networkedEntitiesLookup.end())
+    {
+        vehicule = it->second;
+        const auto joueur = Cyberverse::Utils::GetPlayer();
+        EtatObserve obs{};
+        monteDedans = joueur && LireEtatObserve(joueur->entityID, obs) && obs.attache
+            && obs.parent == vehicule;
+    }
+    SDK->logger->WarnF(PLUGIN, "[montage] refuse par le serveur vehicule=%llu siege=%u raison=%s (%u)%s",
+                       r->vehicle(), static_cast<unsigned>(r->seat()), nomRaison, raison,
+                       monteDedans ? " - je descends" : " - je ne suis pas dedans, rien a faire");
+    if (!monteDedans)
+    {
+        return;
+    }
+    auto* facility = FacadeMontage();
+    const auto joueur = Cyberverse::Utils::GetPlayer();
+    auto requete = Red::MakeScriptedHandle<RED4ext::game::mounting::UnmountingRequest>();
+    if (facility != nullptr && joueur && requete)
+    {
+        // Recette de `TesseraHarness.veh.descendre` : parent + enfant, sans siege (Unmount retire
+        // l'occupant de TOUT siege).
+        requete->lowLevelMountingInfo.parentId = vehicule;
+        requete->lowLevelMountingInfo.childId = joueur->entityID;
+        Red::CallVirtual(facility, "Unmount", requete);
+    }
+    if (g_vehiculeLocalMonte == r->vehicle())
+    {
+        g_vehiculeLocalMonte = 0;
+    }
 }
 
 bool NetworkGameSystem::AdopterVoitureNative(uint64_t idServeur, uint64_t cle, uint32_t archetype,

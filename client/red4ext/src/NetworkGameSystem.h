@@ -45,7 +45,7 @@ namespace cyberpunk_rp::protocol {
     // `const CharacterList*` comme `const int` et l'erreur sort a l'APPEL, sous la forme
     // « impossible de convertir 'const CharacterList *' en 'const int' » — un message qui pointe
     // vers l'appelant alors que le defaut est ici. Piege deja paye une fois (2026-08-07).
-    struct CharacterList; struct CharacterResult;
+    struct CharacterList; struct CharacterResult; struct VehicleMountResult; struct Rendu;
     // Piege paye une SECONDE fois le 2026-08-08 : `HandleHealthSync` a ete declaree plus bas sans
     // passer par ici, et le build entier tombait sur « 'HealthSync' n'est pas membre de
     // cyberpunk_rp::protocol ». Consequence en chaine : plus de DLL, donc un `.reds` deja deploye
@@ -1099,6 +1099,8 @@ private:
                               const RED4ext::Vector4& position);
     /// ADR 0054 §3/§6 : retire une voiture ADOPTEE des tables reseau SANS detruire l'entite.
     void RelacherVoiture(uint64_t idServeur);
+    /// ADR 0054 §5 : verdict de montage du serveur ; un refus fait descendre le joueur local.
+    void HandleVehicleMountResult(const cyberpunk_rp::protocol::VehicleMountResult* r);
     /// Applique une pose échantillonnée à UN avatar : ordre de marche vers le point de visée si
     /// besoin, plus recalage si la dérive est trop grande.
     void PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
