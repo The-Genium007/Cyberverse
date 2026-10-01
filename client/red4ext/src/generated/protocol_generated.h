@@ -235,6 +235,18 @@ struct ConsoleLineBuilder;
 struct StaffMode;
 struct StaffModeBuilder;
 
+struct StaffSubscribe;
+struct StaffSubscribeBuilder;
+
+struct StaffEvent;
+struct StaffEventBuilder;
+
+struct StaffWarning;
+struct StaffWarningBuilder;
+
+struct StaffWarningAck;
+struct StaffWarningAckBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -268,11 +280,13 @@ enum ClientMsg : uint8_t {
   ClientMsg_GarmentReport = 23,
   ClientMsg_TablesReport = 24,
   ClientMsg_VehiclePlayerState = 25,
+  ClientMsg_StaffSubscribe = 26,
+  ClientMsg_StaffWarningAck = 27,
   ClientMsg_MIN = ClientMsg_NONE,
-  ClientMsg_MAX = ClientMsg_VehiclePlayerState
+  ClientMsg_MAX = ClientMsg_StaffWarningAck
 };
 
-inline const ClientMsg (&EnumValuesClientMsg())[26] {
+inline const ClientMsg (&EnumValuesClientMsg())[28] {
   static const ClientMsg values[] = {
     ClientMsg_NONE,
     ClientMsg_Join,
@@ -299,13 +313,15 @@ inline const ClientMsg (&EnumValuesClientMsg())[26] {
     ClientMsg_AvatarProjectionReport,
     ClientMsg_GarmentReport,
     ClientMsg_TablesReport,
-    ClientMsg_VehiclePlayerState
+    ClientMsg_VehiclePlayerState,
+    ClientMsg_StaffSubscribe,
+    ClientMsg_StaffWarningAck
   };
   return values;
 }
 
 inline const char * const *EnumNamesClientMsg() {
-  static const char * const names[27] = {
+  static const char * const names[29] = {
     "NONE",
     "Join",
     "PositionUpdate",
@@ -332,13 +348,15 @@ inline const char * const *EnumNamesClientMsg() {
     "GarmentReport",
     "TablesReport",
     "VehiclePlayerState",
+    "StaffSubscribe",
+    "StaffWarningAck",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameClientMsg(ClientMsg e) {
-  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_VehiclePlayerState)) return "";
+  if (::flatbuffers::IsOutRange(e, ClientMsg_NONE, ClientMsg_StaffWarningAck)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesClientMsg()[index];
 }
@@ -447,6 +465,14 @@ template<> struct ClientMsgTraits<cyberpunk_rp::protocol::VehiclePlayerState> {
   static const ClientMsg enum_value = ClientMsg_VehiclePlayerState;
 };
 
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::StaffSubscribe> {
+  static const ClientMsg enum_value = ClientMsg_StaffSubscribe;
+};
+
+template<> struct ClientMsgTraits<cyberpunk_rp::protocol::StaffWarningAck> {
+  static const ClientMsg enum_value = ClientMsg_StaffWarningAck;
+};
+
 template <bool B = false>
 bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const void *obj, ClientMsg type);
 template <bool B = false>
@@ -484,11 +510,13 @@ enum ServerMsg : uint8_t {
   ServerMsg_MondePartage = 28,
   ServerMsg_Rendu = 29,
   ServerMsg_VehicleMountResult = 30,
+  ServerMsg_StaffEvent = 31,
+  ServerMsg_StaffWarning = 32,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_VehicleMountResult
+  ServerMsg_MAX = ServerMsg_StaffWarning
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[31] {
+inline const ServerMsg (&EnumValuesServerMsg())[33] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -520,13 +548,15 @@ inline const ServerMsg (&EnumValuesServerMsg())[31] {
     ServerMsg_PostureResult,
     ServerMsg_MondePartage,
     ServerMsg_Rendu,
-    ServerMsg_VehicleMountResult
+    ServerMsg_VehicleMountResult,
+    ServerMsg_StaffEvent,
+    ServerMsg_StaffWarning
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[32] = {
+  static const char * const names[34] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -558,13 +588,15 @@ inline const char * const *EnumNamesServerMsg() {
     "MondePartage",
     "Rendu",
     "VehicleMountResult",
+    "StaffEvent",
+    "StaffWarning",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_VehicleMountResult)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_StaffWarning)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -691,6 +723,14 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::Rendu> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::VehicleMountResult> {
   static const ServerMsg enum_value = ServerMsg_VehicleMountResult;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaffEvent> {
+  static const ServerMsg enum_value = ServerMsg_StaffEvent;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaffWarning> {
+  static const ServerMsg enum_value = ServerMsg_StaffWarning;
 };
 
 template <bool B = false>
@@ -4033,16 +4073,21 @@ inline ::flatbuffers::Offset<ClientTimeReport> CreateClientTimeReport(
 struct AdminCommand FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef AdminCommandBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
-    VT_TEXT = 4
+    VT_TEXT = 4,
+    VT_REQUEST_ID = 6
   };
   const ::flatbuffers::String *text() const {
     return GetPointer<const ::flatbuffers::String *>(VT_TEXT);
+  }
+  uint32_t request_id() const {
+    return GetField<uint32_t>(VT_REQUEST_ID, 0);
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyOffset(verifier, VT_TEXT) &&
            verifier.VerifyString(text()) &&
+           VerifyField<uint32_t>(verifier, VT_REQUEST_ID, 4) &&
            verifier.EndTable();
   }
 };
@@ -4053,6 +4098,9 @@ struct AdminCommandBuilder {
   ::flatbuffers::uoffset_t start_;
   void add_text(::flatbuffers::Offset<::flatbuffers::String> text) {
     fbb_.AddOffset(AdminCommand::VT_TEXT, text);
+  }
+  void add_request_id(uint32_t request_id) {
+    fbb_.AddElement<uint32_t>(AdminCommand::VT_REQUEST_ID, request_id, 0);
   }
   explicit AdminCommandBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -4067,26 +4115,31 @@ struct AdminCommandBuilder {
 
 inline ::flatbuffers::Offset<AdminCommand> CreateAdminCommand(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    ::flatbuffers::Offset<::flatbuffers::String> text = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> text = 0,
+    uint32_t request_id = 0) {
   AdminCommandBuilder builder_(_fbb);
+  builder_.add_request_id(request_id);
   builder_.add_text(text);
   return builder_.Finish();
 }
 
 inline ::flatbuffers::Offset<AdminCommand> CreateAdminCommandDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
-    const char *text = nullptr) {
+    const char *text = nullptr,
+    uint32_t request_id = 0) {
   auto text__ = text ? _fbb.CreateString(text) : 0;
   return cyberpunk_rp::protocol::CreateAdminCommand(
       _fbb,
-      text__);
+      text__,
+      request_id);
 }
 
 struct CommandResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef CommandResultBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_SUCCESS = 4,
-    VT_MESSAGE = 6
+    VT_MESSAGE = 6,
+    VT_REQUEST_ID = 8
   };
   bool success() const {
     return GetField<uint8_t>(VT_SUCCESS, 0) != 0;
@@ -4094,12 +4147,16 @@ struct CommandResult FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::String *message() const {
     return GetPointer<const ::flatbuffers::String *>(VT_MESSAGE);
   }
+  uint32_t request_id() const {
+    return GetField<uint32_t>(VT_REQUEST_ID, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint8_t>(verifier, VT_SUCCESS, 1) &&
            VerifyOffset(verifier, VT_MESSAGE) &&
            verifier.VerifyString(message()) &&
+           VerifyField<uint32_t>(verifier, VT_REQUEST_ID, 4) &&
            verifier.EndTable();
   }
 };
@@ -4113,6 +4170,9 @@ struct CommandResultBuilder {
   }
   void add_message(::flatbuffers::Offset<::flatbuffers::String> message) {
     fbb_.AddOffset(CommandResult::VT_MESSAGE, message);
+  }
+  void add_request_id(uint32_t request_id) {
+    fbb_.AddElement<uint32_t>(CommandResult::VT_REQUEST_ID, request_id, 0);
   }
   explicit CommandResultBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -4128,8 +4188,10 @@ struct CommandResultBuilder {
 inline ::flatbuffers::Offset<CommandResult> CreateCommandResult(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     bool success = false,
-    ::flatbuffers::Offset<::flatbuffers::String> message = 0) {
+    ::flatbuffers::Offset<::flatbuffers::String> message = 0,
+    uint32_t request_id = 0) {
   CommandResultBuilder builder_(_fbb);
+  builder_.add_request_id(request_id);
   builder_.add_message(message);
   builder_.add_success(success);
   return builder_.Finish();
@@ -4138,12 +4200,14 @@ inline ::flatbuffers::Offset<CommandResult> CreateCommandResult(
 inline ::flatbuffers::Offset<CommandResult> CreateCommandResultDirect(
     ::flatbuffers::FlatBufferBuilder &_fbb,
     bool success = false,
-    const char *message = nullptr) {
+    const char *message = nullptr,
+    uint32_t request_id = 0) {
   auto message__ = message ? _fbb.CreateString(message) : 0;
   return cyberpunk_rp::protocol::CreateCommandResult(
       _fbb,
       success,
-      message__);
+      message__,
+      request_id);
 }
 
 struct PermissionSync FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -6467,6 +6531,256 @@ inline ::flatbuffers::Offset<StaffMode> CreateStaffMode(
   return builder_.Finish();
 }
 
+struct StaffSubscribe FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef StaffSubscribeBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SUJET = 4,
+    VT_ACTIF = 6
+  };
+  const ::flatbuffers::String *sujet() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_SUJET);
+  }
+  bool actif() const {
+    return GetField<uint8_t>(VT_ACTIF, 1) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_SUJET) &&
+           verifier.VerifyString(sujet()) &&
+           VerifyField<uint8_t>(verifier, VT_ACTIF, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct StaffSubscribeBuilder {
+  typedef StaffSubscribe Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_sujet(::flatbuffers::Offset<::flatbuffers::String> sujet) {
+    fbb_.AddOffset(StaffSubscribe::VT_SUJET, sujet);
+  }
+  void add_actif(bool actif) {
+    fbb_.AddElement<uint8_t>(StaffSubscribe::VT_ACTIF, static_cast<uint8_t>(actif), 1);
+  }
+  explicit StaffSubscribeBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<StaffSubscribe> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<StaffSubscribe>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<StaffSubscribe> CreateStaffSubscribe(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> sujet = 0,
+    bool actif = true) {
+  StaffSubscribeBuilder builder_(_fbb);
+  builder_.add_sujet(sujet);
+  builder_.add_actif(actif);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<StaffSubscribe> CreateStaffSubscribeDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *sujet = nullptr,
+    bool actif = true) {
+  auto sujet__ = sujet ? _fbb.CreateString(sujet) : 0;
+  return cyberpunk_rp::protocol::CreateStaffSubscribe(
+      _fbb,
+      sujet__,
+      actif);
+}
+
+struct StaffEvent FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef StaffEventBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SUJET = 4,
+    VT_CHARGE_JSON = 6
+  };
+  const ::flatbuffers::String *sujet() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_SUJET);
+  }
+  const ::flatbuffers::String *charge_json() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_CHARGE_JSON);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_SUJET) &&
+           verifier.VerifyString(sujet()) &&
+           VerifyOffset(verifier, VT_CHARGE_JSON) &&
+           verifier.VerifyString(charge_json()) &&
+           verifier.EndTable();
+  }
+};
+
+struct StaffEventBuilder {
+  typedef StaffEvent Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_sujet(::flatbuffers::Offset<::flatbuffers::String> sujet) {
+    fbb_.AddOffset(StaffEvent::VT_SUJET, sujet);
+  }
+  void add_charge_json(::flatbuffers::Offset<::flatbuffers::String> charge_json) {
+    fbb_.AddOffset(StaffEvent::VT_CHARGE_JSON, charge_json);
+  }
+  explicit StaffEventBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<StaffEvent> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<StaffEvent>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<StaffEvent> CreateStaffEvent(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> sujet = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> charge_json = 0) {
+  StaffEventBuilder builder_(_fbb);
+  builder_.add_charge_json(charge_json);
+  builder_.add_sujet(sujet);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<StaffEvent> CreateStaffEventDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *sujet = nullptr,
+    const char *charge_json = nullptr) {
+  auto sujet__ = sujet ? _fbb.CreateString(sujet) : 0;
+  auto charge_json__ = charge_json ? _fbb.CreateString(charge_json) : 0;
+  return cyberpunk_rp::protocol::CreateStaffEvent(
+      _fbb,
+      sujet__,
+      charge_json__);
+}
+
+struct StaffWarning FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef StaffWarningBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_MOTIF = 4,
+    VT_TEXTE = 6,
+    VT_ID = 8
+  };
+  const ::flatbuffers::String *motif() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_MOTIF);
+  }
+  const ::flatbuffers::String *texte() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_TEXTE);
+  }
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_MOTIF) &&
+           verifier.VerifyString(motif()) &&
+           VerifyOffset(verifier, VT_TEXTE) &&
+           verifier.VerifyString(texte()) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct StaffWarningBuilder {
+  typedef StaffWarning Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_motif(::flatbuffers::Offset<::flatbuffers::String> motif) {
+    fbb_.AddOffset(StaffWarning::VT_MOTIF, motif);
+  }
+  void add_texte(::flatbuffers::Offset<::flatbuffers::String> texte) {
+    fbb_.AddOffset(StaffWarning::VT_TEXTE, texte);
+  }
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(StaffWarning::VT_ID, id, 0);
+  }
+  explicit StaffWarningBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<StaffWarning> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<StaffWarning>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<StaffWarning> CreateStaffWarning(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> motif = 0,
+    ::flatbuffers::Offset<::flatbuffers::String> texte = 0,
+    uint64_t id = 0) {
+  StaffWarningBuilder builder_(_fbb);
+  builder_.add_id(id);
+  builder_.add_texte(texte);
+  builder_.add_motif(motif);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<StaffWarning> CreateStaffWarningDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *motif = nullptr,
+    const char *texte = nullptr,
+    uint64_t id = 0) {
+  auto motif__ = motif ? _fbb.CreateString(motif) : 0;
+  auto texte__ = texte ? _fbb.CreateString(texte) : 0;
+  return cyberpunk_rp::protocol::CreateStaffWarning(
+      _fbb,
+      motif__,
+      texte__,
+      id);
+}
+
+struct StaffWarningAck FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef StaffWarningAckBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_ID = 4
+  };
+  uint64_t id() const {
+    return GetField<uint64_t>(VT_ID, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_ID, 8) &&
+           verifier.EndTable();
+  }
+};
+
+struct StaffWarningAckBuilder {
+  typedef StaffWarningAck Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_id(uint64_t id) {
+    fbb_.AddElement<uint64_t>(StaffWarningAck::VT_ID, id, 0);
+  }
+  explicit StaffWarningAckBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<StaffWarningAck> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<StaffWarningAck>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<StaffWarningAck> CreateStaffWarningAck(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t id = 0) {
+  StaffWarningAckBuilder builder_(_fbb);
+  builder_.add_id(id);
+  return builder_.Finish();
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -6554,6 +6868,12 @@ struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const cyberpunk_rp::protocol::VehiclePlayerState *msg_as_VehiclePlayerState() const {
     return msg_type() == cyberpunk_rp::protocol::ClientMsg_VehiclePlayerState ? static_cast<const cyberpunk_rp::protocol::VehiclePlayerState *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::StaffSubscribe *msg_as_StaffSubscribe() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_StaffSubscribe ? static_cast<const cyberpunk_rp::protocol::StaffSubscribe *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::StaffWarningAck *msg_as_StaffWarningAck() const {
+    return msg_type() == cyberpunk_rp::protocol::ClientMsg_StaffWarningAck ? static_cast<const cyberpunk_rp::protocol::StaffWarningAck *>(msg()) : nullptr;
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -6663,6 +6983,14 @@ template<> inline const cyberpunk_rp::protocol::TablesReport *ClientEnvelope::ms
 
 template<> inline const cyberpunk_rp::protocol::VehiclePlayerState *ClientEnvelope::msg_as<cyberpunk_rp::protocol::VehiclePlayerState>() const {
   return msg_as_VehiclePlayerState();
+}
+
+template<> inline const cyberpunk_rp::protocol::StaffSubscribe *ClientEnvelope::msg_as<cyberpunk_rp::protocol::StaffSubscribe>() const {
+  return msg_as_StaffSubscribe();
+}
+
+template<> inline const cyberpunk_rp::protocol::StaffWarningAck *ClientEnvelope::msg_as<cyberpunk_rp::protocol::StaffWarningAck>() const {
+  return msg_as_StaffWarningAck();
 }
 
 struct ClientEnvelopeBuilder {
@@ -6799,6 +7127,12 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::VehicleMountResult *msg_as_VehicleMountResult() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_VehicleMountResult ? static_cast<const cyberpunk_rp::protocol::VehicleMountResult *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::StaffEvent *msg_as_StaffEvent() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_StaffEvent ? static_cast<const cyberpunk_rp::protocol::StaffEvent *>(msg()) : nullptr;
+  }
+  const cyberpunk_rp::protocol::StaffWarning *msg_as_StaffWarning() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_StaffWarning ? static_cast<const cyberpunk_rp::protocol::StaffWarning *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -6927,6 +7261,14 @@ template<> inline const cyberpunk_rp::protocol::Rendu *ServerEnvelope::msg_as<cy
 
 template<> inline const cyberpunk_rp::protocol::VehicleMountResult *ServerEnvelope::msg_as<cyberpunk_rp::protocol::VehicleMountResult>() const {
   return msg_as_VehicleMountResult();
+}
+
+template<> inline const cyberpunk_rp::protocol::StaffEvent *ServerEnvelope::msg_as<cyberpunk_rp::protocol::StaffEvent>() const {
+  return msg_as_StaffEvent();
+}
+
+template<> inline const cyberpunk_rp::protocol::StaffWarning *ServerEnvelope::msg_as<cyberpunk_rp::protocol::StaffWarning>() const {
+  return msg_as_StaffWarning();
 }
 
 struct ServerEnvelopeBuilder {
@@ -7064,6 +7406,14 @@ inline bool VerifyClientMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ClientMsg_VehiclePlayerState: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::VehiclePlayerState *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_StaffSubscribe: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaffSubscribe *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ClientMsg_StaffWarningAck: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaffWarningAck *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
@@ -7207,6 +7557,14 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_VehicleMountResult: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::VehicleMountResult *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_StaffEvent: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaffEvent *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_StaffWarning: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaffWarning *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
