@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "PlayerSync/HorlogeServeur.h"
+#include "PlayerSync/TamponVehicule.h"
 #include "PlayerSync/Robot.h"
 #include "PlayerSync/Telemetrie.h"
 
@@ -920,6 +921,8 @@ StatsRoster g_statsRoster;
 Tessera::Sync::HorlogeRendu g_horlogeRendu;
 std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
+/// ADR 0054 §4 : echantillons dates des voitures conduites par un AUTRE joueur, par id serveur.
+std::map<uint64_t, Tessera::Sync::TamponVehicule> g_tamponsVehicules;
 
 // Habillage : au plus dix tentatives par tenue, cadencees a l'HORLOGE.
 //
@@ -3896,6 +3899,52 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         }
     }
 
+    // ── ADR 0054 §4 : LES VOITURES CONDUITES SE LISSENT, ELLES NE SE TELEPORTENT PLUS ─────────
+    //
+    // Un id present dans `vehicles_player` porte la pose PROPRE de la voiture (rapportee par son
+    // conducteur : quaternion complet + vitesses). On l'empile, date par `Snapshot.ts_ms`, et
+    // `RendreVoituresConduites` la pose a chaque frame a `maintenant - delai`. `applyPose` ne la
+    // touche plus (voir la boucle ci-dessous) ; la casse, les occupants et la presence restent
+    // traites ici comme avant. Ma propre voiture (g_vehiculeLocalMonte) n'est jamais empilee.
+    std::set<uint64_t> lisses;
+    if (const auto* conduites = snapshot->vehicles_player())
+    {
+        const double tMs = snapshot->ts_ms() != 0
+            ? static_cast<double>(snapshot->ts_ms())
+            : static_cast<double>(g_horlogeServeur.TempsServeurMs(
+                  static_cast<std::uint64_t>(Tessera::Sync::Telemetrie::Maintenant())));
+        for (const auto* vp : *conduites)
+        {
+            if (vp == nullptr || vp->position() == nullptr || vp->orientation() == nullptr
+                || vp->id() == g_vehiculeLocalMonte)
+            {
+                continue;
+            }
+            Tessera::Sync::EchantillonVehicule e;
+            e.tMs = tMs;
+            e.pos[0] = vp->position()->x(); e.pos[1] = vp->position()->y(); e.pos[2] = vp->position()->z();
+            e.q[0] = vp->orientation()->x(); e.q[1] = vp->orientation()->y();
+            e.q[2] = vp->orientation()->z(); e.q[3] = vp->orientation()->w();
+            if (const auto* v = vp->linear_velocity())
+            {
+                e.vit[0] = v->x(); e.vit[1] = v->y(); e.vit[2] = v->z();
+            }
+            if (g_tamponsVehicules.find(vp->id()) == g_tamponsVehicules.end())
+            {
+                SDK->logger->InfoF(PLUGIN, "[vehicule-lisse] id=%llu : pose conduite recue, lissage arme "
+                                   "(plus de teleportation au snapshot)", vp->id());
+            }
+            g_tamponsVehicules[vp->id()].Empiler(e);
+            lisses.insert(vp->id());
+        }
+    }
+    // Une voiture qui n'est plus conduite (ou plus rapportee depuis 1 s cote serveur) rend sa
+    // pose au chemin classique ; son tampon ne doit pas survivre.
+    for (auto it = g_tamponsVehicules.begin(); it != g_tamponsVehicules.end();)
+    {
+        it = lisses.contains(it->first) ? std::next(it) : g_tamponsVehicules.erase(it);
+    }
+
     const auto* vehicles = snapshot->vehicles();
     // ── LA TRACE QUI SEPARE TROIS PANNES QUI SE RESSEMBLENT ────────────────────────────────
     //
@@ -3995,6 +4044,17 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 if (vs->id() == g_vehiculeLocalMonte)
                 {
                     present.insert(vs->id());
+                    continue;
+                }
+                if (lisses.contains(vs->id()))
+                {
+                    // Pose lissee par `RendreVoituresConduites`. Ici on ne fait que la NAISSANCE
+                    // (applyPose sait faire naitre ; une entite connue n'est pas repositionnee).
+                    present.insert(vs->id());
+                    if (m_networkedEntitiesLookup.find(vs->id()) == m_networkedEntitiesLookup.end())
+                    {
+                        applyPose(vs->id(), vs->position(), vs->yaw(), 0);
+                    }
                     continue;
                 }
                 // ── ON NE TELEPORTE PAS UNE VOITURE QUI N'A PAS BOUGE ─────────────────
@@ -7866,8 +7926,71 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
     this->SendPositionUpdate(X, Y, Z, Yaw);
 }
 
+/// Pose une voiture avec son orientation COMPLETE (tangage et roulis compris). Meme chemin que
+/// `PlacerSansCommande` (cast en gameObject, F-PLY-070) ; seul l'angle change : le quaternion du
+/// fil passe par `Quaternion.ToEulerAngles` du jeu. non mesure - hypothese : la convention
+/// d'`EulerAngles` de `Teleport` est celle de `ToEulerAngles` (meme famille de natives).
+static void PlacerVehiculeComplet(RED4ext::ent::EntityID entityId, const Tessera::Sync::PoseVehicule& p)
+{
+    const auto entity = Cyberverse::Utils::GetDynamicEntity(entityId);
+    if (!entity.has_value())
+    {
+        return;
+    }
+    const auto cible = Red::Cast<RED4ext::game::Object>(entity.value());
+    if (!cible)
+    {
+        return;
+    }
+    const RED4ext::Quaternion q{ p.q[0], p.q[1], p.q[2], p.q[3] };
+    const auto angles = Cyberverse::Utils::Quaternion_ToEulerAngles(q);
+    const RED4ext::Vector4 position{ p.pos[0], p.pos[1], p.pos[2], 1.0f };
+    Red::CallVirtual(Red::GetGameSystem<RED4ext::TeleportationFacility>(), "Teleport", cible, position,
+                     angles);
+}
+
+void NetworkGameSystem::RendreVoituresConduites()
+{
+    if (g_tamponsVehicules.empty() || g_horlogeServeur.Observations() == 0)
+    {
+        return;
+    }
+    // Meme delai que les avatars (adaptatif a la gigue, >= 100 ms), mais sur la timeline `ts_ms`.
+    const double t =
+        static_cast<double>(g_horlogeServeur.TempsServeurMs(
+            static_cast<std::uint64_t>(Tessera::Sync::Telemetrie::Maintenant())))
+        - g_horlogeRendu.DelaiCourant() * 1000.0;
+    size_t rendues = 0;
+    size_t extrapolees = 0;
+    for (const auto& [id, tampon] : g_tamponsVehicules)
+    {
+        const auto it = m_networkedEntitiesLookup.find(id);
+        if (it == m_networkedEntitiesLookup.end() || id == g_vehiculeLocalMonte)
+        {
+            continue;
+        }
+        Tessera::Sync::PoseVehicule pose;
+        if (!tampon.Rendre(t, pose))
+        {
+            continue;
+        }
+        PlacerVehiculeComplet(it->second, pose);
+        ++rendues;
+        extrapolees += pose.extrapolee ? 1 : 0;
+    }
+    static std::chrono::steady_clock::time_point s_dernier{};
+    const auto maintenant = std::chrono::steady_clock::now();
+    if (rendues > 0 && maintenant - s_dernier >= std::chrono::seconds(2))
+    {
+        s_dernier = maintenant;
+        SDK->logger->InfoF(PLUGIN, "[vehicule-lisse] rendues=%zu extrapolees=%zu delai=%.0f ms", rendues,
+                           extrapolees, g_horlogeRendu.DelaiCourant() * 1000.0);
+    }
+}
+
 void NetworkGameSystem::RendreAvatarsDistants(const float deltaTime)
 {
+    RendreVoituresConduites();
     g_tempsLocalS += static_cast<double>(deltaTime);
     if (!g_horlogeRendu.Amorcee())
     {

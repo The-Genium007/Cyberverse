@@ -1086,6 +1086,9 @@ private:
     /// `loco_lag`/`loco_hybrid`) : commande de marche CONTINUE pour l'animation, `Teleport` de
     /// recalage pour la position. Le Teleport ne casse pas l'animation tant que la commande tourne.
     void RendreAvatarsDistants(float deltaTime);
+    /// ADR 0054 §4 : pose, a chaque frame, les voitures CONDUITES par un autre joueur a
+    /// `maintenant - delai` d'apres `g_tamponsVehicules`, orientation complete.
+    void RendreVoituresConduites();
     /// Applique une pose échantillonnée à UN avatar : ordre de marche vers le point de visée si
     /// besoin, plus recalage si la dérive est trop grande.
     void PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
