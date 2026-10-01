@@ -1092,6 +1092,13 @@ private:
     /// ADR 0054 §4 : envoie `VehiclePlayerState` si le joueur local conduit (siege 0) une voiture
     /// reseau. Appele a la cadence de `PositionUpdate`.
     void EnvoyerPoseConduite();
+    /// ADR 0054 §3 : un `VehicleState` inconnu porte une `cle` -> adopte l'entite native jumelle
+    /// (la mienne si j'ai propose cette cle, sinon l'entite d'EntityID `cle & 0x00FF..` de meme
+    /// record a moins de 3 m). Rend true si adoptee (inscrite sous l'id serveur).
+    bool AdopterVoitureNative(uint64_t idServeur, uint64_t cle, uint32_t archetype,
+                              const RED4ext::Vector4& position);
+    /// ADR 0054 §3/§6 : retire une voiture ADOPTEE des tables reseau SANS detruire l'entite.
+    void RelacherVoiture(uint64_t idServeur);
     /// Applique une pose échantillonnée à UN avatar : ordre de marche vers le point de visée si
     /// besoin, plus recalage si la dérive est trop grande.
     void PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,

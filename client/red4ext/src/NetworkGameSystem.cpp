@@ -932,6 +932,10 @@ struct VoitureEnAttente
     std::chrono::steady_clock::time_point demandeeA{};
 };
 std::map<uint64_t, VoitureEnAttente> g_voituresEnAttente;
+/// Ids serveur dont l'entite est NATIVE (adoptee) : elle ne se detruit JAMAIS, elle se relache.
+std::set<uint64_t> g_voituresAdoptees;
+/// id serveur -> cle, pour toute voiture portant une cle (adoptee ou nee) : le `Rendu` parle en cles.
+std::map<uint64_t, uint64_t> g_cleDeVoiture;
 
 // Habillage : au plus dix tentatives par tenue, cadencees a l'HORLOGE.
 //
@@ -4050,6 +4054,24 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                     }
                 }
 
+                // ── ADR 0054 §3 : ADOPTER LE JUMEAU AVANT DE FAIRE NAITRE ──────────────────────
+                if (vs->cle() != 0)
+                {
+                    g_cleDeVoiture[vs->id()] = vs->cle();
+                    if (m_networkedEntitiesLookup.find(vs->id()) == m_networkedEntitiesLookup.end()
+                        && vs->position() != nullptr)
+                    {
+                        const RED4ext::Vector4 pv = { DequantPos(vs->position()->x()),
+                                                      DequantPos(vs->position()->y()),
+                                                      DequantPos(vs->position()->z()), 1.0f };
+                        if (AdopterVoitureNative(vs->id(), vs->cle(), vs->archetype(), pv))
+                        {
+                            // Pas de repositionnement ce tour-ci : le jumeau est DEJA la.
+                            present.insert(vs->id());
+                            continue;
+                        }
+                    }
+                }
                 if (vs->id() == g_vehiculeLocalMonte)
                 {
                     present.insert(vs->id());
@@ -4363,6 +4385,14 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         const auto absent = g_absentsDepuis.find(it->first);
         const bool echu = absent != g_absentsDepuis.end()
             && maintenant - absent->second >= kGraceDisparitionS;
+        if (echu && g_voituresAdoptees.contains(it->first))
+        {
+            // ADR 0054 : une entite ADOPTEE est native, elle ne se detruit JAMAIS. On la relache.
+            const uint64_t id = it->first;
+            ++it;
+            RelacherVoiture(id);
+            continue;
+        }
         if (echu)
         {
             g_absentsDepuis.erase(it->first);
@@ -6283,7 +6313,10 @@ void NetworkGameSystem::OublierLeMondeCharge(const char* raison)
     };
     for (const auto& [id, entite] : m_networkedEntitiesLookup)
     {
-        rendre(entite);
+        if (!g_voituresAdoptees.contains(id)) // une entite adoptee est NATIVE : jamais detruite
+        {
+            rendre(entite);
+        }
         g_telemetrie.OublierEntite(id);
     }
     for (const auto& [id, entite] : g_ancienCorpsEnSursis)
@@ -6318,6 +6351,11 @@ void NetworkGameSystem::OublierLeMondeCharge(const char* raison)
     g_essaisCadavre.clear();
     // Les statiques du monde suivant sont des entites NEUVES : leur apparence est a reappliquer.
     g_apparencesAppliquees.clear();
+    // ADR 0054 : les entites natives du monde suivant sont neuves ; rien de l'ancien ne vaut plus.
+    g_tamponsVehicules.clear();
+    g_voituresEnAttente.clear();
+    g_voituresAdoptees.clear();
+    g_cleDeVoiture.clear();
     g_vehiculeLocalMonte = 0;
     g_cabineJoueurLocal = 0;
     g_localEtaitEnLair = false;
@@ -8084,6 +8122,87 @@ static void PlacerVehiculeComplet(RED4ext::ent::EntityID entityId, const Tessera
     const RED4ext::Vector4 position{ p.pos[0], p.pos[1], p.pos[2], 1.0f };
     Red::CallVirtual(Red::GetGameSystem<RED4ext::TeleportationFacility>(), "Teleport", cible, position,
                      angles);
+}
+
+bool NetworkGameSystem::AdopterVoitureNative(uint64_t idServeur, uint64_t cle, uint32_t archetype,
+                                             const RED4ext::Vector4& position)
+{
+    constexpr uint64_t kMasqueEntityId = 0x00FFFFFFFFFFFFFFull;
+    constexpr float kPorteeJumeauM = 3.0f;
+    RED4ext::ent::EntityID cible{};
+    const char* origine = nullptr;
+    float ecart = 0.0f;
+
+    if (const auto propre = g_voituresEnAttente.find(cle); propre != g_voituresEnAttente.end())
+    {
+        // L'INITIATEUR adopte toujours : sa voiture native EST le jumeau (il est assis dedans).
+        cible = propre->second.entite;
+        origine = "initiateur";
+    }
+    else
+    {
+        // Un TEMOIN cherche le jumeau : meme EntityID, meme record, a moins de 3 m.
+        // non mesure - hypothese (F-VEH-024) : l'EntityID d'une voiture du decor est le meme chez
+        // tous les clients, ET les 56 bits bas suffisent a le retrouver (le masque coupe l'octet
+        // haut). Sonde V11 ; sinon la voiture nait comme avant (saut accepte, ADR 0054 Q4).
+        cible.hash = cle & kMasqueEntityId;
+        const auto entite = Cyberverse::Utils::GetDynamicEntity(cible);
+        if (!entite.has_value())
+        {
+            return false;
+        }
+        const auto vehicule = Red::Cast<RED4ext::VehicleObject>(entite.value());
+        if (!vehicule)
+        {
+            return false;
+        }
+        const auto record = Cyberverse::Utils::VehicleObject_GetRecordID(vehicule);
+        if (static_cast<uint32_t>(record.value) != archetype)
+        {
+            return false;
+        }
+        const auto p = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+        const float dx = p.X - position.X, dy = p.Y - position.Y, dz = p.Z - position.Z;
+        ecart = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (ecart > kPorteeJumeauM)
+        {
+            return false;
+        }
+        origine = "jumeau";
+    }
+
+    m_networkedEntitiesLookup[idServeur] = cible;
+    g_voituresAdoptees.insert(idServeur);
+    g_cleDeVoiture[idServeur] = cle;
+    SDK->logger->InfoF(PLUGIN, "[vehicule] adopte id=%llu cle=%llx (%s, ecart=%.2f m, entite %llu)",
+                       idServeur, cle, origine, ecart, cible.hash);
+    if (const auto propre = g_voituresEnAttente.find(cle); propre != g_voituresEnAttente.end())
+    {
+        // Au siege 0 : je conduis, la voiture devient la mienne (plus de pose serveur, pose montante).
+        if (propre->second.siege == 0)
+        {
+            g_vehiculeLocalMonte = idServeur;
+        }
+        g_voituresEnAttente.erase(propre);
+    }
+    return true;
+}
+
+void NetworkGameSystem::RelacherVoiture(uint64_t idServeur)
+{
+    SDK->logger->InfoF(PLUGIN, "[vehicule] relache id=%llu (entite native conservee)", idServeur);
+    m_networkedEntitiesLookup.erase(idServeur);
+    g_voituresAdoptees.erase(idServeur);
+    g_cleDeVoiture.erase(idServeur);
+    g_tamponsVehicules.erase(idServeur);
+    g_absentsDepuis.erase(idServeur);
+    m_degatsConnus.erase(idServeur);
+    m_appliedAppearance.erase(idServeur);
+    g_dernieresCibles.erase(idServeur);
+    if (g_vehiculeLocalMonte == idServeur)
+    {
+        g_vehiculeLocalMonte = 0;
+    }
 }
 
 void NetworkGameSystem::RendreVoituresConduites()
