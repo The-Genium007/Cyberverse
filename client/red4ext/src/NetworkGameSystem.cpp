@@ -2214,6 +2214,9 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_VehicleMountResult:
                     HandleVehicleMountResult(env->msg_as_VehicleMountResult());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_Rendu:
+                    HandleRendu(env->msg_as_Rendu());
+                    break;
                 case cyberpunk_rp::protocol::ServerMsg_CommandResult:
                 {
                     const auto* r = env->msg_as_CommandResult();
@@ -8177,6 +8180,51 @@ void NetworkGameSystem::HandleVehicleMountResult(const cyberpunk_rp::protocol::V
     if (g_vehiculeLocalMonte == r->vehicle())
     {
         g_vehiculeLocalMonte = 0;
+    }
+}
+
+void NetworkGameSystem::HandleRendu(const cyberpunk_rp::protocol::Rendu* r)
+{
+    if (r == nullptr || r->cles() == nullptr)
+    {
+        return;
+    }
+    constexpr uint64_t kEtiquetteVoitureRue = 0x56;
+    for (const uint64_t cle : *r->cles())
+    {
+        if ((cle >> 56) != kEtiquetteVoitureRue)
+        {
+            continue; // autre espace de cles (population derivee) : pas notre affaire ici
+        }
+        g_voituresEnAttente.erase(cle);
+        uint64_t id = 0;
+        for (const auto& [idServeur, c] : g_cleDeVoiture)
+        {
+            if (c == cle)
+            {
+                id = idServeur;
+                break;
+            }
+        }
+        if (id == 0)
+        {
+            SDK->logger->InfoF(PLUGIN, "[vehicule] rendu cle=%llx : aucune voiture connue sous cette cle", cle);
+            continue;
+        }
+        if (g_voituresAdoptees.contains(id))
+        {
+            SDK->logger->InfoF(PLUGIN, "[vehicule] rendu cle=%llx id=%llu : adoptee, relachee", cle, id);
+            RelacherVoiture(id);
+        }
+        else
+        {
+            // Nee chez nous : on la detruit par le chemin d'absence (echeance posee dans le passe),
+            // au prochain snapshot ou le serveur ne la liste plus.
+            SDK->logger->InfoF(PLUGIN, "[vehicule] rendu cle=%llx id=%llu : nee chez nous, detruite", cle, id);
+            g_absentsDepuis[id] = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            g_cleDeVoiture.erase(id);
+            g_tamponsVehicules.erase(id);
+        }
     }
 }
 

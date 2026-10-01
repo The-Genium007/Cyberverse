@@ -1101,6 +1101,9 @@ private:
     void RelacherVoiture(uint64_t idServeur);
     /// ADR 0054 §5 : verdict de montage du serveur ; un refus fait descendre le joueur local.
     void HandleVehicleMountResult(const cyberpunk_rp::protocol::VehicleMountResult* r);
+    /// ADR 0054 §6 : `Rendu { cles }` - retrait d'une voiture promue (etiquette 0x56) : relachee si
+    /// adoptee, detruite si nee chez nous.
+    void HandleRendu(const cyberpunk_rp::protocol::Rendu* r);
     /// Applique une pose échantillonnée à UN avatar : ordre de marche vers le point de visée si
     /// besoin, plus recalage si la dérive est trop grande.
     void PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,
