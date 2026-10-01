@@ -71,6 +71,7 @@ namespace cyberpunk_rp::protocol {
     // declare AUSSI ici. L oublier ne donne pas « type inconnu » — le compilateur lit le
     // parametre comme `const int` et se plaint A L APPEL, plusieurs centaines de lignes plus loin.
     struct StaffMode;
+    struct StaffWarning;
     // Inventaire sous autorite serveur (ADR 0026). QUATRIEME fois que ce bloc est oublie —
     // 2026-08-13, avec exactement le message annonce ci-dessus (« impossible de convertir
     // 'const InventaireAutoritaire *' en 'const int' », qui pointe vers l'appelant alors que le
@@ -171,6 +172,17 @@ extern std::deque<LigneConsole> g_lignesConsole;
 /// `g_appareilsTotalRecus` : distinguer « rien n arrive » de « tout arrive et le script n en fait
 /// rien ». Deux pannes opposees, un seul ecran.
 extern int32_t g_lignesConsoleTotalRecues;
+
+/// AVERTISSEMENT STAFF a valider (lot W, R-7). Meme patron PULL que la console : le C++ range, le
+/// script TIRE. `id` reste un u64 cote C++ ; il voyage vers redscript en chaine decimale (redscript
+/// n'a pas de u64 sur lequel on puisse compter pour un identifiant de 64 bits).
+struct AvertissementRecu
+{
+    uint64_t id = 0;
+    std::string motif;
+    std::string texte;
+};
+extern std::deque<AvertissementRecu> g_avertissementsRecus;
 /// ⚠️ La file est BORNEE. Un client qui ne depile pas — parce que la console n est pas ouverte —
 /// ne doit pas faire croitre la memoire indefiniment. Au-dela, on jette les PLUS ANCIENNES et on
 /// le DIT dans la ligne suivante, jamais en silence.
@@ -1247,6 +1259,8 @@ protected:
     void HandleActionCatalog(const cyberpunk_rp::protocol::ActionCatalog* msg);
     void HandleCommandCatalog(const cyberpunk_rp::protocol::CommandCatalog* msg);
     void HandleStaffMode(const cyberpunk_rp::protocol::StaffMode* msg);
+    void HandleStaffWarning(const cyberpunk_rp::protocol::StaffWarning* msg);
+    void SendStaffWarningAck(uint64_t id);
     void HandlePostureResult(const cyberpunk_rp::protocol::PostureResult* msg);
     // Noms que ce joueur CONNAIT. En lot au join, a une entree a chaque presentation recue. On
     // ACCUMULE ici (contrairement au catalogue) : le message a une entree est un ajout, pas un
@@ -1945,6 +1959,33 @@ public:
     /// tomber `r6/scripts` entier.
     /// Le joueur local est-il en mode staff ? Lu par le HUD pour allumer son temoin.
     bool Tessera_ModeStaff() const { return m_modeStaff; }
+
+    /// AVERTISSEMENT STAFF, cote LECTURE (PULL). Depile le suivant et le rend sous la forme
+    /// **`"<id>|<motif>|<texte>"`** (id decimal ; les `|` du motif sont remplaces par `/`, le texte,
+    /// dernier champ, garde les siens). `""` quand la file est vide — etat normal.
+    Red::CString Tessera_ProchainAvertissement()
+    {
+        if (g_avertissementsRecus.empty())
+        {
+            return Red::CString("");
+        }
+        const AvertissementRecu a = g_avertissementsRecus.front();
+        g_avertissementsRecus.pop_front();
+        const std::string encode = std::to_string(a.id) + "|" + a.motif + "|" + a.texte;
+        return Red::CString(encode.c_str());
+    }
+
+    /// Le joueur a valide l'ecran : envoie `StaffWarningAck{id}`. `false` si l'id n'est pas un u64.
+    bool Tessera_AccuserAvertissement(Red::CString id)
+    {
+        const std::string s(id.c_str());
+        if (s.empty() || s.find_first_not_of("0123456789") != std::string::npos)
+        {
+            return false;
+        }
+        SendStaffWarningAck(std::strtoull(s.c_str(), nullptr, 10));
+        return true;
+    }
 
     int32_t Tessera_NombreCommandes() const { return static_cast<int32_t>(m_commandes.size()); }
 
@@ -3229,6 +3270,8 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     // deploient ENSEMBLE. Un `native func` sans backing dans la DLL deployee fait tomber TOUT
     // r6/scripts et le jeu se ferme sans un mot (F-PLF-020, F-PLF-023).
     RTTI_METHOD(Tessera_ModeStaff);
+    RTTI_METHOD(Tessera_ProchainAvertissement);
+    RTTI_METHOD(Tessera_AccuserAvertissement);
     RTTI_METHOD(Tessera_NombreCommandes);
     RTTI_METHOD(Tessera_CommandeNom);
     RTTI_METHOD(Tessera_CommandeAffichage);

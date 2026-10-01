@@ -489,6 +489,10 @@ public native class NetworkGameSystem extends IGameSystem {
     // temoin permanent du HUD tant que `/gm on` n'a pas ete defait par `/gm off`.
     public native func Tessera_ModeStaff() -> Bool;
 
+    // AVERTISSEMENT STAFF (lot W) : PULL, "<id>|<motif>|<texte>" ou "" ; l'accuse prend l'id decimal.
+    public native func Tessera_ProchainAvertissement() -> String;
+    public native func Tessera_AccuserAvertissement(id: String) -> Bool;
+
     // Les VALEURS proposables d'une commande (2026-09-01) — les joueurs connectes, pour `/tp`.
     // Zero pour toutes les autres. Rendent "" hors bornes.
     public native func Tessera_NombreValeurs(index: Int32) -> Int32;

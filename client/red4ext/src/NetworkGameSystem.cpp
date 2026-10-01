@@ -894,6 +894,7 @@ static void PousserLigneConsole(uint8_t niveau, std::string texte)
 
 std::deque<EtatAppareilRecu> g_appareilsRecus;
 std::deque<LigneConsole> g_lignesConsole;
+std::deque<AvertissementRecu> g_avertissementsRecus;
 int32_t g_lignesConsoleTotalRecues = 0;
 int32_t g_appareilsTotalRecus = 0;
 std::map<uint64_t, uint64_t> g_apparencesStatiques;
@@ -2187,6 +2188,9 @@ void NetworkGameSystem::PollIncomingMessages()
                     break;
                 case cyberpunk_rp::protocol::ServerMsg_StaffMode:
                     HandleStaffMode(env->msg_as_StaffMode());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_StaffWarning:
+                    HandleStaffWarning(env->msg_as_StaffWarning());
                     break;
                 case cyberpunk_rp::protocol::ServerMsg_PostureResult:
                     HandlePostureResult(env->msg_as_PostureResult());
@@ -4952,6 +4956,51 @@ void NetworkGameSystem::HandleStaffMode(const cyberpunk_rp::protocol::StaffMode*
     // au premier message manque, et plus rien ne la remettrait d aplomb.
     m_modeStaff = msg->on();
     SDK->logger->InfoF(PLUGIN, "StaffMode : %s", m_modeStaff ? "ON" : "OFF");
+}
+
+// ── L'AVERTISSEMENT STAFF (lot W) : le serveur envoie, le script tire, le joueur valide ──────
+void NetworkGameSystem::HandleStaffWarning(const cyberpunk_rp::protocol::StaffWarning* msg)
+{
+    if (msg == nullptr)
+    {
+        return;
+    }
+    // Un rejeu (R-8 : non valide = rejoue a chaque reconnexion) porte le MEME id : on ne l'empile
+    // pas deux fois s'il attend deja. Celui deja affiche est ecarte cote script.
+    for (const auto& a : g_avertissementsRecus)
+    {
+        if (a.id == msg->id())
+        {
+            return;
+        }
+    }
+    AvertissementRecu a;
+    a.id = msg->id();
+    a.motif = msg->motif() ? msg->motif()->str() : std::string();
+    a.texte = msg->texte() ? msg->texte()->str() : std::string();
+    for (auto& ch : a.motif)
+    {
+        if (ch == '|') { ch = '/'; }
+    }
+    SDK->logger->InfoF(PLUGIN, "StaffWarning recu : id=%llu", static_cast<unsigned long long>(a.id));
+    g_avertissementsRecus.push_back(std::move(a));
+}
+
+void NetworkGameSystem::SendStaffWarningAck(uint64_t id)
+{
+    if (m_pInterface == nullptr)
+    {
+        return;
+    }
+    // `Reliable` : un accuse perdu ferait rejouer l'avertissement a la prochaine connexion.
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ack = cyberpunk_rp::protocol::CreateStaffWarningAck(builder, id);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_StaffWarningAck, ack.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    SDK->logger->InfoF(PLUGIN, "StaffWarningAck envoye : id=%llu", static_cast<unsigned long long>(id));
 }
 
 void NetworkGameSystem::HandlePostureResult(const cyberpunk_rp::protocol::PostureResult* msg)
