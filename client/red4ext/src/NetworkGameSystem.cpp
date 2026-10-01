@@ -923,6 +923,15 @@ std::map<uint64_t, Tessera::Sync::TamponPose> g_tamponsJoueurs;
 std::map<uint64_t, SuiviAvatar> g_suiviAvatars;
 /// ADR 0054 §4 : echantillons dates des voitures conduites par un AUTRE joueur, par id serveur.
 std::map<uint64_t, Tessera::Sync::TamponVehicule> g_tamponsVehicules;
+/// ADR 0054 §1/§3 : voitures de la rue que CE client a proposees a la promotion, par cle. Quand le
+/// serveur annonce la cle, l'entite native est adoptee. `siege` = ou le joueur local s'est assis.
+struct VoitureEnAttente
+{
+    RED4ext::ent::EntityID entite;
+    uint32_t siege = 0;
+    std::chrono::steady_clock::time_point demandeeA{};
+};
+std::map<uint64_t, VoitureEnAttente> g_voituresEnAttente;
 
 // Habillage : au plus dix tentatives par tenue, cadencees a l'HORLOGE.
 //
@@ -4672,6 +4681,59 @@ void NetworkGameSystem::HandleConfigSync(const cyberpunk_rp::protocol::ConfigSyn
     }
     SDK->logger->InfoF(PLUGIN, "ConfigSync : %u valeur(s) appliquee(s), %u refusee(s)",
         applied, refused);
+}
+
+void NetworkGameSystem::DemanderPromotionVoiture(RED4ext::ent::EntityID entite, uint64_t record,
+                                                 uint64_t apparence, float x, float y, float z,
+                                                 float yawDegres, uint32_t siege)
+{
+    if (m_pInterface == nullptr || record == 0)
+    {
+        return;
+    }
+    constexpr uint64_t kEtiquetteVoitureRue = 0x5600000000000000ull;
+    constexpr uint64_t kMasqueEntityId = 0x00FFFFFFFFFFFFFFull;
+    const uint64_t cle = kEtiquetteVoitureRue | (entite.hash & kMasqueEntityId);
+
+    // Une demande par voiture et par 5 s : le serveur est idempotent par cle, mais son debit par
+    // client (promus.rs) ne l'est pas. Passe 5 s sans adoption, on re-propose (verdict perdu).
+    const auto maintenant = std::chrono::steady_clock::now();
+    auto& attente = g_voituresEnAttente[cle];
+    if (attente.demandeeA != std::chrono::steady_clock::time_point{}
+        && maintenant - attente.demandeeA < std::chrono::seconds(5))
+    {
+        return;
+    }
+    attente.entite = entite;
+    attente.siege = siege;
+    attente.demandeeA = maintenant;
+
+    // ⚠️ Le serveur refuse au-dela de 5 m de la derniere pose connue du JOUEUR. Une grande voiture
+    // a son origine loin du siege : si l'ecart depasse 4 m, on annonce la position du joueur.
+    float px = x, py = y, pz = z;
+    const auto joueur = Cyberverse::Utils::GetPlayer();
+    if (joueur)
+    {
+        const auto j = Cyberverse::Utils::Entity_GetWorldPosition(joueur);
+        const float dx = j.X - x, dy = j.Y - y, dz = j.Z - z;
+        if (dx * dx + dy * dy + dz * dz > 4.0f * 4.0f)
+        {
+            px = j.X; py = j.Y; pz = j.Z;
+        }
+    }
+
+    flatbuffers::FlatBufferBuilder builder;
+    const cyberpunk_rp::protocol::QVec3 position(QuantPos(px), QuantPos(py), QuantPos(pz));
+    const auto req = cyberpunk_rp::protocol::CreatePromotionRequest(
+        builder, record, apparence, &position, QuantYaw(yawDegres), /*mort=*/false, /*kind=*/1, cle,
+        /*cause=*/1, static_cast<uint8_t>(siege));
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_PromotionRequest, req.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    SDK->logger->InfoF(PLUGIN, "[vehicule] promotion demandee cle=%llx record=%llx apparence=%llx "
+                       "siege=%u a (%.1f, %.1f, %.1f)", cle, record, apparence, siege, px, py, pz);
 }
 
 bool NetworkGameSystem::SendPromotionRequest(uint64_t record, uint64_t apparence, float x, float y,

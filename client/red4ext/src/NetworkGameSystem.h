@@ -1295,6 +1295,10 @@ public:
     /// ou : il comprenait ces deux verbes depuis toujours, aucun client ne les a jamais envoyes.
     /// Zero octet de protocole ajoute.
     void RapporterMontage(uint64_t vehiculeReseau, uint32_t siege, bool monte);
+    /// ADR 0054 §1 : le joueur local vient de monter dans une voiture SANS id reseau (voiture de
+    /// la rue) -> `PromotionRequest` kind=1, cle = 0x56 | EntityID natif. Idempotent cote serveur.
+    void DemanderPromotionVoiture(RED4ext::ent::EntityID entite, uint64_t record, uint64_t apparence,
+                                  float x, float y, float z, float yawDegres, uint32_t siege);
 
     /// Voir la definition — rapporte la position choisie par le jeu, et FERME la session.
     bool SendRapportInvocation(float x, float y, float z);

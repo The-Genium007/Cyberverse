@@ -134,6 +134,15 @@ void PlayerActionTracker::OnMounting(RED4ext::Handle<RED4ext::game::mounting::Mo
     {
         reseau->RapporterMontage(idReseau, IndexDeSiege(event->relationship.slotId.id), true);
     }
+    else
+    {
+        // ADR 0054 §1 : une voiture de la RUE (sans id reseau) dans laquelle on monte se propose a
+        // la promotion. L'apparence est le CName du jeu, meme convention que `AppearanceSpec`.
+        RED4ext::CName apparence(static_cast<uint64_t>(0));
+        Red::CallVirtual(vehicleInstance, "GetCurrentAppearanceName", apparence);
+        reseau->DemanderPromotionVoiture(vehicleInstance->entityID, recordId.value, apparence.hash, X, Y,
+                                         Z, Yaw, IndexDeSiege(event->relationship.slotId.id));
+    }
 }
 
 void PlayerActionTracker::OnUnmounting(RED4ext::Handle<RED4ext::game::mounting::UnmountingEvent> event)
