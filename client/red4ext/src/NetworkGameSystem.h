@@ -1089,6 +1089,9 @@ private:
     /// ADR 0054 §4 : pose, a chaque frame, les voitures CONDUITES par un autre joueur a
     /// `maintenant - delai` d'apres `g_tamponsVehicules`, orientation complete.
     void RendreVoituresConduites();
+    /// ADR 0054 §4 : envoie `VehiclePlayerState` si le joueur local conduit (siege 0) une voiture
+    /// reseau. Appele a la cadence de `PositionUpdate`.
+    void EnvoyerPoseConduite();
     /// Applique une pose échantillonnée à UN avatar : ordre de marche vers le point de visée si
     /// besoin, plus recalage si la dérive est trop grande.
     void PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID entityId,

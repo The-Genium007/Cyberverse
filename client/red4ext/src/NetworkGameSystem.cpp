@@ -7822,6 +7822,79 @@ bool NetworkGameSystem::OnGameRestored()
     return res;
 }
 
+void NetworkGameSystem::EnvoyerPoseConduite()
+{
+    // ── ADR 0054 §4 : LE CONDUCTEUR RAPPORTE LA POSE DE SA VOITURE ───────────────────────────
+    //
+    // `g_vehiculeLocalMonte` n'est pose qu'au siege 0 (RapporterMontage) et verifie une fois par
+    // seconde contre le jeu : c'est exactement « le joueur local conduit une voiture reseau ».
+    // Le serveur n'accepte ce message QUE du conducteur enregistre et borne les valeurs.
+    static std::uint64_t s_idPrecedent = 0;
+    static std::chrono::steady_clock::time_point s_tPrecedent{};
+    static float s_posPrecedente[3] = {0.0f, 0.0f, 0.0f};
+    static std::chrono::steady_clock::time_point s_dernierBilan{};
+    static std::uint64_t s_envoyes = 0;
+
+    const uint64_t id = g_vehiculeLocalMonte;
+    if (id == 0 || m_pInterface == nullptr)
+    {
+        s_idPrecedent = 0;
+        return;
+    }
+    const auto it = m_networkedEntitiesLookup.find(id);
+    if (it == m_networkedEntitiesLookup.end())
+    {
+        return;
+    }
+    const auto entite = Cyberverse::Utils::GetDynamicEntity(it->second);
+    if (!entite.has_value())
+    {
+        return;
+    }
+    const auto p = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+    const auto q = Cyberverse::Utils::Entity_GetWorldOrientation(entite.value());
+    const auto maintenant = std::chrono::steady_clock::now();
+
+    // Vitesse lineaire : DIFFERENCE FINIE entre deux envois (pas d'accesseur moteur verifie —
+    // non mesure, hypothese). Zero au premier envoi d'une voiture. Angulaire : 0 (le temoin ne
+    // s'en sert pas : il interpole le quaternion entre deux echantillons).
+    float vit[3] = {0.0f, 0.0f, 0.0f};
+    if (s_idPrecedent == id)
+    {
+        const float dt = std::chrono::duration<float>(maintenant - s_tPrecedent).count();
+        if (dt > 0.001f)
+        {
+            vit[0] = (p.X - s_posPrecedente[0]) / dt;
+            vit[1] = (p.Y - s_posPrecedente[1]) / dt;
+            vit[2] = (p.Z - s_posPrecedente[2]) / dt;
+        }
+    }
+    s_idPrecedent = id;
+    s_tPrecedent = maintenant;
+    s_posPrecedente[0] = p.X; s_posPrecedente[1] = p.Y; s_posPrecedente[2] = p.Z;
+
+    flatbuffers::FlatBufferBuilder builder;
+    const cyberpunk_rp::protocol::Vec3 position(p.X, p.Y, p.Z);
+    const cyberpunk_rp::protocol::Quat orientation(q.i, q.j, q.k, q.r);
+    const cyberpunk_rp::protocol::Vec3 lineaire(vit[0], vit[1], vit[2]);
+    const cyberpunk_rp::protocol::Vec3 angulaire(0.0f, 0.0f, 0.0f);
+    const auto msg = cyberpunk_rp::protocol::CreateVehiclePlayerState(
+        builder, id, 0, &position, &orientation, &lineaire, &angulaire);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_VehiclePlayerState, msg.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_UnreliableNoNagle, nullptr);
+
+    ++s_envoyes;
+    if (maintenant - s_dernierBilan >= std::chrono::seconds(2))
+    {
+        s_dernierBilan = maintenant;
+        SDK->logger->InfoF(PLUGIN, "[vehicule-pose] envoyes=%llu vehicule=%llu pos=(%.1f, %.1f, %.1f) "
+                           "v=(%.1f, %.1f, %.1f)", s_envoyes, id, p.X, p.Y, p.Z, vit[0], vit[1], vit[2]);
+    }
+}
+
 void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
 {
     // ── 50 Hz, ALIGNÉ SUR LE TICK SERVEUR ──────────────────────────────────────────────────
@@ -7888,6 +7961,8 @@ void NetworkGameSystem::TrackPlayerPosition(float deltaTime)
         m_skipNextPositionUpdate = false;
         return;
     }
+
+    EnvoyerPoseConduite();
 
     const auto player = Cyberverse::Utils::GetPlayer();
     const auto [X, Y, Z, W] = Cyberverse::Utils::Entity_GetWorldPosition(player);
