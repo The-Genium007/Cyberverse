@@ -41,6 +41,8 @@ std::chrono::steady_clock::time_point g_robotDebut;
 int g_robotPhase = -1;
 
 #include "CommandLine.h"
+#include "Staff/HoteStaff.h"
+#include "Staff/PontStaff.h"
 #include "Main.h"
 #include "Utils.h"
 
@@ -486,6 +488,7 @@ void NetworkGameSystem::ConnectionStatusChangedCallback(SteamNetConnectionStatus
 
     if (pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_Connected)
     {
+        Tessera::Staff::Hote::Connexion(true);
         // Nom affiche : `TESSERA_DISPLAY_NAME` s'il est pose, sinon le nom de session Windows.
         //
         // Pourquoi cette surcharge existe : sur un serveur PRIVE (`identity.public = false`), la
@@ -554,6 +557,7 @@ void NetworkGameSystem::ConnectionStatusChangedCallback(SteamNetConnectionStatus
 
         if (estUnePanne)
         {
+            Tessera::Staff::Hote::Connexion(false);
             // GNS impose de fermer explicitement une connexion passee dans un de ces deux etats :
             // sans ce `CloseConnection`, le handle fuit et le socket reste reserve. C'est aussi ce
             // qui remet `m_hConnection` a `Invalid`, donc ce qui REOUVRE le garde de
@@ -927,6 +931,8 @@ static void PousserLigneConsole(uint8_t niveau, std::string texte)
 std::deque<EtatAppareilRecu> g_appareilsRecus;
 std::deque<LigneConsole> g_lignesConsole;
 std::deque<AvertissementRecu> g_avertissementsRecus;
+// HORS de la classe (allouee par le moteur : lui ajouter un membre corrompt la memoire voisine).
+static Tessera::Staff::Abonnements g_abonnementsStaff;
 int32_t g_lignesConsoleTotalRecues = 0;
 int32_t g_appareilsTotalRecus = 0;
 std::map<uint64_t, uint64_t> g_apparencesStatiques;
@@ -2151,6 +2157,8 @@ void NetworkGameSystem::PollIncomingMessages()
     {
         return;
     }
+
+    RelayerPontStaff();
     while (true)
     {
         ISteamNetworkingMessage* pIncomingMsg = nullptr;
@@ -2260,8 +2268,59 @@ void NetworkGameSystem::PollIncomingMessages()
                     {
                         // 1 = succes, 3 = erreur. Le niveau part avec le texte : sans lui, la
                         // console ne pourrait pas distinguer un refus d une confirmation.
-                        PousserLigneConsole(r->success() ? 1 : 3,
-                            r->message() ? r->message()->str() : std::string());
+                        const std::string texte = r->message() ? r->message()->str() : std::string();
+                        // Numero != 0 : la demande venait de la page staff, la reponse y retourne
+                        // (et pas dans la console, qui n a rien demande).
+                        if (r->request_id() != 0)
+                        {
+                            Tessera::Staff::Hote::VersPage(
+                                Tessera::Staff::JsonReponse(r->request_id(), r->success(), texte));
+                            break;
+                        }
+                        PousserLigneConsole(r->success() ? 1 : 3, texte);
+                    }
+                    break;
+                }
+                // -- INTERFACE STAFF (lot H3) --------------------------------------------------
+                case cyberpunk_rp::protocol::ServerMsg_PermissionSync:
+                {
+                    const auto* p = env->msg_as_PermissionSync();
+                    if (p)
+                    {
+                        std::vector<std::string> noeuds;
+                        if (p->nodes())
+                        {
+                            for (const auto* n : *p->nodes())
+                            {
+                                if (n) { noeuds.push_back(n->str()); }
+                            }
+                        }
+                        // Rang staff : c est ICI, et seulement ici, que l hote CEF se charge.
+                        Tessera::Staff::Hote::Droits(noeuds);
+                        // Le serveur pousse `PermissionSync` au Join : apres une reconnexion il a
+                        // oublie les abonnements, on les rejoue (lui seul decide s il les accorde).
+                        if (Tessera::Staff::RangEstStaff(noeuds))
+                        {
+                            for (const auto& sujet : g_abonnementsStaff.Actifs())
+                            {
+                                SendStaffSubscribe(sujet.c_str(), true);
+                            }
+                        }
+                        else
+                        {
+                            g_abonnementsStaff.Vider();
+                        }
+                    }
+                    break;
+                }
+                case cyberpunk_rp::protocol::ServerMsg_StaffEvent:
+                {
+                    const auto* e = env->msg_as_StaffEvent();
+                    if (e && e->sujet())
+                    {
+                        Tessera::Staff::Hote::VersPage(Tessera::Staff::JsonEvenement(
+                            e->sujet()->string_view(),
+                            e->charge_json() ? e->charge_json()->string_view() : std::string_view()));
                     }
                     break;
                 }
@@ -5341,7 +5400,7 @@ void NetworkGameSystem::SendDeviceCall(uint64_t device, uint8_t famille, uint8_t
 }
 
 // ── LE CANAL DE COMMANDE D'ADMINISTRATION ───────────────────────────────────────────────────
-void NetworkGameSystem::SendAdminCommand(const char* texte)
+void NetworkGameSystem::SendAdminCommand(const char* texte, uint32_t requestId)
 {
     if (m_pInterface == nullptr || texte == nullptr || *texte == '\0')
     {
@@ -5352,12 +5411,73 @@ void NetworkGameSystem::SendAdminCommand(const char* texte)
     // passe », ce qui est le pire retour possible sur un geste d'operateur.
     flatbuffers::FlatBufferBuilder builder;
     const auto texteOff = builder.CreateString(texte);
-    const auto cmd = cyberpunk_rp::protocol::CreateAdminCommand(builder, texteOff);
+    const auto cmd = cyberpunk_rp::protocol::CreateAdminCommand(builder, texteOff, requestId);
     const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
         builder, cyberpunk_rp::protocol::ClientMsg_AdminCommand, cmd.Union());
     builder.Finish(env);
     m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
         builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+// -- INTERFACE STAFF (lot H3) : le relais du pont, page -> serveur ----------------------------
+//
+// L AUTORITE NE BOUGE PAS : le serveur revalide chaque commande et chaque abonnement contre le
+// rang du compte. Ce relais ne donne aucun droit, il ouvre le tuyau a la page.
+void NetworkGameSystem::SendStaffSubscribe(const char* sujet, bool actif)
+{
+    if (m_pInterface == nullptr || m_hConnection == k_HSteamNetConnection_Invalid)
+    {
+        return;
+    }
+    flatbuffers::FlatBufferBuilder builder;
+    const auto sujetOff = builder.CreateString(sujet);
+    const auto abo = cyberpunk_rp::protocol::CreateStaffSubscribe(builder, sujetOff, actif);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_StaffSubscribe, abo.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+}
+
+void NetworkGameSystem::RelayerPontStaff()
+{
+    // Borne par passe : la page ne peut pas affamer la lecture du reseau. Le Gateway a son propre
+    // budget de messages par seconde, c est lui qui tranche au-dela.
+    std::string json;
+    for (int garde = 0; garde < 16 && Tessera::Staff::Hote::Tirer(json); ++garde)
+    {
+        Tessera::Staff::MessagePage m;
+        if (!Tessera::Staff::LireMessagePage(json, m))
+        {
+            continue; // deja filtre a l entree : ne devrait pas arriver
+        }
+        switch (m.type)
+        {
+        case Tessera::Staff::TypePage::Commande:
+            SendAdminCommand(m.texte.c_str(), m.requestId);
+            break;
+        case Tessera::Staff::TypePage::Abonner:
+            if (g_abonnementsStaff.Appliquer(m.sujet, m.actif))
+            {
+                SendStaffSubscribe(m.sujet.c_str(), m.actif);
+            }
+            else
+            {
+                SDK->logger->WarnF(PLUGIN, "[Staff] abonnement refuse (registre plein) : %s", m.sujet.c_str());
+            }
+            break;
+        case Tessera::Staff::TypePage::AvertissementVu:
+            SendStaffWarningAck(m.idAvertissement);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+bool NetworkGameSystem::Tessera_SourisStaffLibre() const
+{
+    return Tessera::Staff::Hote::SourisLibre();
 }
 
 // ── LE COFFRE : L'ETAT QUI DESCEND, LE RAPPORT QUI REMONTE ──────────────────────────────────

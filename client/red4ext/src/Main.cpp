@@ -1,4 +1,5 @@
 #include "NetworkGameSystem.h"
+#include "Staff/HoteStaff.h"
 
 #include <RED4ext/RED4ext.hpp>
 #include <RedLib.hpp>
@@ -42,6 +43,7 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
     }
     case RED4ext::v1::EMainReason::Unload:
     {
+        Tessera::Staff::Hote::Arreter();
         NetworkGameSystem::Unload();
         /*
          * Here you can free resources you allocated during initalization or during the time your plugin was executed.

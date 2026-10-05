@@ -7,6 +7,9 @@ set(PROJECT_HEADER_FILES
   PlayerActionTracker.h
         PlayerSync/TamponInterpolation.h
         CommandLine.h
+  Staff/PontStaff.h
+  Staff/HoteStaff.h
+  Staff/tessera_staff_hote.h
 )
 
 set(PROJECT_SRC_FILES
@@ -16,6 +19,7 @@ set(PROJECT_SRC_FILES
   TesseraSpawnEnrichi.cpp
   TesseraVoiesFoule.cpp
   PlayerActionTracker.cpp
+  Staff/HoteStaff.cpp
 )
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${PROJECT_HEADER_FILES} ${PROJECT_SRC_FILES})

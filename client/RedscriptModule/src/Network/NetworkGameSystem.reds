@@ -488,6 +488,8 @@ public native class NetworkGameSystem extends IGameSystem {
     // MODE STAFF (2026-08-31) — l'etat pousse par le serveur, pas une deduction. Allume le
     // temoin permanent du HUD tant que `/gm on` n'a pas ete defait par `/gm off`.
     public native func Tessera_ModeStaff() -> Bool;
+    // Interface staff (lot H3) : F2 a libere la souris pour la page CEF. Lu par UiKitStaffSouris.reds.
+    public native func Tessera_SourisStaffLibre() -> Bool;
 
     // AVERTISSEMENT STAFF (lot W) : PULL, "<id>|<motif>|<texte>" ou "" ; l'accuse prend l'id decimal.
     public native func Tessera_ProchainAvertissement() -> String;

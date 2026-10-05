@@ -1325,7 +1325,11 @@ protected:
     // cabine, jamais l'appui local — la boucle locale est coupee cote redscript.
     void SendElevatorCall(uint64_t elevatorId, int32_t floor);
     void SendDeviceCall(uint64_t device, uint8_t famille, uint8_t action, uint8_t etatObserve);
-    void SendAdminCommand(const char* texte);
+    /// `requestId` != 0 : la demande vient de la page staff, le serveur le recopie dans sa reponse.
+    void SendAdminCommand(const char* texte, uint32_t requestId = 0);
+    void SendStaffSubscribe(const char* sujet, bool actif);
+    /// Interface staff (lot H3) : vide ce que la page a dit vers le serveur. Une fois par passe reseau.
+    void RelayerPontStaff();
     // Signale l'entree (mount=true) ou la sortie d'une cabine. `kind=6/7` d'EntityInteraction.
     // Sert au RENDU chez les autres : le serveur relaie le porteur dans `PlayerState.frame`, et
     // l'observateur accroche l'interpolation de l'avatar a la cabine (ADR 0039).
@@ -2014,6 +2018,11 @@ public:
     /// tomber `r6/scripts` entier.
     /// Le joueur local est-il en mode staff ? Lu par le HUD pour allumer son temoin.
     bool Tessera_ModeStaff() const { return m_modeStaff; }
+
+    /// INTERFACE STAFF (lot H3) : F2 a-t-elle libere la souris pour la page ? Tire toutes les
+    /// 0,1 s par `UiKitStaffSouris.reds`, qui pose alors le contexte modal du jeu (PULL).
+    /// Toujours faux chez un joueur sans rang : l hote n est meme pas charge.
+    bool Tessera_SourisStaffLibre() const;
 
     /// AVERTISSEMENT STAFF, cote LECTURE (PULL). Depile le suivant et le rend sous la forme
     /// **`"<id>|<motif>|<texte>"`** (id decimal ; les `|` du motif sont remplaces par `/`, le texte,
@@ -3338,6 +3347,7 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     // deploient ENSEMBLE. Un `native func` sans backing dans la DLL deployee fait tomber TOUT
     // r6/scripts et le jeu se ferme sans un mot (F-PLF-020, F-PLF-023).
     RTTI_METHOD(Tessera_ModeStaff);
+    RTTI_METHOD(Tessera_SourisStaffLibre);
     RTTI_METHOD(Tessera_ProchainAvertissement);
     RTTI_METHOD(Tessera_AccuserAvertissement);
     RTTI_METHOD(Tessera_NombreCommandes);
