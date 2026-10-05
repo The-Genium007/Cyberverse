@@ -6807,9 +6807,15 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
                                  Red::CName(kActionSautNom), int32_t{1}, kSautImpulsionS, int32_t{-1});
                 g_suiviAvatars[event->actor()].impulsionParMessage = true;
             }
-            else
+            // 2026-10-01 : le message n'ARME plus qu'un horodatage (saut vs chute). Aucune poussee : avec les
+            // creneaux inverses (F-PLY-530) l'ancienne poussee `(vol, phase 0)` jouait la RECEPTION. Le clip part
+            // au decollage affiche (front `loco 6`), en phase avec l'arc (F-PLY-705).
+            g_suiviAvatars[event->actor()].sautAnnonceS =
+                std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (!SautParActionActif())
             {
-                Red::CallVirtual(this, "TesseraPousserFranchissement", pousse, acteur->second, true, 0, 0);
+                g_telemetrie.Evenement("action_recue", event->actor(), "saut_arme");
+                return;
             }
             g_telemetrie.Evenement("action_recue", event->actor(),
                                    pousse ? "saut" : "saut_refuse");
@@ -9918,16 +9924,33 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // balayage posait UNE valeur de 0 a 3 par saut : chaque saut ne jouait qu'une phase, figee —
         // d'ou le « on dirait qu'il grimpe » de Lucas. La sequence vraie : 0 au decollage, 1 en vol,
         // 2 a la reception, puis `None`.
-        static constexpr float kReceptionS = 0.7f;   // jump_walk_recover = 0,77 s
+        // RECONSTRUCTION DU SAUT (2026-10-01) : tout vient des nombres mesures de V.
+        static constexpr float kReceptionBreveS = 0.25f;   // clip jump_walk_startup v3 (reception breve, type 23, F-PLY-706)
+        static constexpr float kReceptionLourdeS = 0.59f;  // HardLand de V = 0,59 s (type 24, F-PLY-706)
+        static constexpr float kHauteurLourdeM = 5.5f;     // 23 jusqu'a 4,7 m, 24 a 6,2 m : seuil entre les deux (F-PLY-706)
+        static constexpr float kHauteurReceptionSeuleM = 1.0f; // chute SANS vol pousse : reception seulement au-dela de 1 m (decision 2026-10-05, option b)
+        static constexpr float kVitesseCourseMS = 2.5f;    // marche 1,78 / course 3,5 / sprint 7,5 m/s : famille sprint des 2,5 (F-PLY-705)
+        static constexpr double kFenetreAnnonceS = 0.3;    // message ACTION_SAUT <= 0,3 s avant le decollage affiche = saut, sinon chute
         // ⭐ LA CHUTE (Lucas, 2026-09-15 : « pareil pour la chute ») — le jeu derive range `fall_loop` et
         // `landing_hard` (1,73 s) sous `jump_sprint_*`, que le graphe choisit par `exploration.movementType = 2`.
         // Un saut de V redescend de ~1,5 m depuis son sommet : descendre de plus de kChuteM sous le point le plus
         // HAUT du vol, c'est une chute. (Pas la duree de vol : la chute de 3 m du test D3B ne dure que 1,3 s, autant
         // qu'un saut. Pas le point de decollage : le drapeau « en l'air » peut arriver avant la position — mesure
         // D3B 20:46, une seule chute reconnue sur quatre.)
-        static constexpr float kChuteM = 2.0f;
-        static constexpr float kReceptionChuteS = 1.6f;
         const bool parAction = SautParActionActif();
+        // Vitesse horizontale lissee, AU SOL seulement (en l'air elle monte de 0,5 a 1 m/s : on veut celle d'avant).
+        if (suiviPosture.vhConnue && deltaTime > 0.0001f && !enVolMaintenant)
+        {
+            const float dxh = pose.x - suiviPosture.vhPrecX, dyh = pose.y - suiviPosture.vhPrecY;
+            const float d = std::sqrt(dxh * dxh + dyh * dyh);
+            if (d < 3.0f)   // un saut de position (teleport, handoff) n'est pas une vitesse
+            {
+                suiviPosture.vhLissee += 0.25f * (d / deltaTime - suiviPosture.vhLissee);
+            }
+        }
+        suiviPosture.vhPrecX = pose.x;
+        suiviPosture.vhPrecY = pose.y;
+        suiviPosture.vhConnue = true;
         auto phaseAction = [&](int32_t phase, float duree) {
             bool ok = false;
             Red::CallVirtual(this, "TesseraSondeActionAnimation", ok, entityId, Red::CName(kActionSautNom), phase, duree,
@@ -9938,7 +9961,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         if (suiviPosture.receptionEnCours && !enVolMaintenant)
         {
             suiviPosture.depuisAtterrissageS += deltaTime;
-            const float finReception = parAction ? kSautReceptionS : (suiviPosture.chute ? kReceptionChuteS : kReceptionS);
+            const float finReception = parAction ? kSautReceptionS : (suiviPosture.chute ? kReceptionLourdeS : kReceptionBreveS);
             if (suiviPosture.depuisAtterrissageS >= finReception)
             {
                 suiviPosture.receptionEnCours = false;
@@ -9961,10 +9984,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // le creneau 1 (`loop`) l'est, et sa derniere image reste tenue au sol. On essaie donc les deux
             // creneaux qui MARCHENT : 1 en vol, 0 a la reception (avec l'animation de reception dans le
             // creneau `startup` de l'archive de sonde). `TESSERA_PHASES_INVERSEES=0` rend l'ordre d'origine.
-            // ⚠️ ÉTEINT PAR DÉFAUT depuis le 2026-09-18 : le saut dérivé n'est pas retenu (Lucas : « brancher toutes les
-            // animations sauf le saut »). L'archive LIVRÉE porte le saut PNJ d'origine, qui se joue dans l'ordre d'origine.
-            // `TESSERA_PHASES_INVERSEES=1` pour les archives de saut dérivé (réception dans le créneau `startup`).
-            static const bool kPhasesInversees = []{ const char* v = std::getenv("TESSERA_PHASES_INVERSEES"); return v && v[0] == '1'; }();
+            // 2026-10-01 : VRAI par defaut (l'archive livree est le derive v3) ; `=0` rend l'ordre d'origine.
+            static const bool kPhasesInversees = []{ const char* v = std::getenv("TESSERA_PHASES_INVERSEES"); return !(v && v[0] == '0'); }();
             suiviPosture.phaseFranchissement = kPhasesInversees ? (enVolMaintenant ? 1 : 0)
                                                                 : (enVolMaintenant ? 0 : 2);
             suiviPosture.receptionEnCours = !enVolMaintenant;
@@ -9978,13 +9999,31 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 suiviPosture.rattrapageAuContact = true;
                 suiviPosture.depuisContactRattrapageS = 0.0f;
             }
+            // Au contact : la reception se classe par la HAUTEUR de chute (zMax du vol - z du contact), pas par le fil.
+            const float hauteurChute = suiviPosture.zDecollage - pose.z;
             if (enVolMaintenant)
             {
                 suiviPosture.chute = false;
                 suiviPosture.zDecollage = pose.z;
             }
+            else
+            {
+                suiviPosture.chute = hauteurChute >= kHauteurLourdeM;
+            }
             suiviPosture.depuisAtterrissageS = 0.0f;
             bool franchi = false;
+            // Decollage : famille sprint des 2,5 m/s ; un decollage SANS annonce (< 0,3 s) est une chute : sprint si
+            // vh >= 2,5, sinon AUCUNE poussee (V qui tombe d'un trottoir ne saute pas : le gel du playtest 2).
+            const double maintenantS = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            const double ageAnnonce = maintenantS - suiviPosture.sautAnnonceS;
+            const bool annonce = ageAnnonce >= 0.0 && ageAnnonce <= kFenetreAnnonceS;
+            const int32_t famille = enVolMaintenant ? (suiviPosture.vhLissee >= kVitesseCourseMS ? 2 : 0)
+                                                    : (suiviPosture.chute ? 2 : 0);
+            // Decision du 2026-10-05 (question 1 du chantier saut, option b) : la RECEPTION ne se pousse que si le
+            // decollage a POUSSE un vol, ou si la chute depasse kHauteurReceptionSeuleM. Sans quoi V qui descend un
+            // trottoir (ni message, ni course : aucun vol pousse) recevrait une reception sur rien.
+            const bool poussable = enVolMaintenant ? (annonce || famille == 2)
+                                                   : (suiviPosture.volPousse || hauteurChute >= kHauteurReceptionSeuleM);
             if (parAction)
             {
                 if (enVolMaintenant && !g_suiviAvatars[networkId].impulsionParMessage)
@@ -10001,8 +10040,13 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             else
             {
             // A la reception, le type RESTE `Jump` (sinon on quitte l'etat avant `_recover`).
-            Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, true,
-                             suiviPosture.phaseFranchissement, suiviPosture.chute ? 2 : 0);
+            if (poussable)
+            {
+                Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, true,
+                                 suiviPosture.phaseFranchissement, famille);
+            }
+            // Le drapeau vit du decollage au contact : vrai si le vol a ete pousse, remis a faux au contact.
+            suiviPosture.volPousse = enVolMaintenant && poussable;
             }
             // ⛔ PLUS D'EVENEMENT `ActionStartup` / `ActionLoop` / `ActionRecovery` (retire le 2026-09-19, F-PLY-542).
             // Ils appartiennent a la machine `ActionAnimation` des PNJ, pas au saut (F-PLY-494) — et ils la
@@ -10017,17 +10061,16 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // directe. On les annule au decollage.
                 bool annule = false;
                 Red::CallVirtual(this, "TesseraAnnulerPlacements", annule, entityId);
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT phase=%d pose=%d",
-                                   static_cast<unsigned long long>(networkId),
-                                   suiviPosture.phaseFranchissement, franchi ? 1 : 0);
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT famille=%d vh=%.2f annonce=%d",
+                                   static_cast<unsigned long long>(networkId), famille,
+                                   suiviPosture.vhLissee, annonce ? 1 : 0);
             }
             if (!enVolMaintenant)
             {
                 // ⚗️ La RECEPTION ne s'affiche pas (F-PLY-528) : on veut savoir si la poussee part vraiment.
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECEPTION phase=%d type=%d pose=%d",
-                                   static_cast<unsigned long long>(networkId),
-                                   suiviPosture.phaseFranchissement, suiviPosture.chute ? 2 : 0,
-                                   franchi ? 1 : 0);
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECEPTION famille=%d hauteur=%.2f duree=%.2f pousse=%d",
+                                   static_cast<unsigned long long>(networkId), famille, hauteurChute,
+                                   suiviPosture.chute ? kReceptionLourdeS : kReceptionBreveS, poussable ? 1 : 0);
             }
             g_telemetrie.Evenement("franchissement", networkId,
                                    enVolMaintenant ? (franchi ? "decollage" : "decollage_refuse")
@@ -10037,26 +10080,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         {
             suiviPosture.depuisDecollageS += deltaTime;
             suiviPosture.zDecollage = std::max(suiviPosture.zDecollage, pose.z);
-            if (!suiviPosture.chute && suiviPosture.zDecollage - pose.z > kChuteM)
-            {
-                suiviPosture.chute = true;
-                bool chuteOk = false;
-                if (!parAction)
-                Red::CallVirtual(this, "TesseraPousserFranchissement", chuteOk, entityId, true, 1, 2);
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] CHUTE pose=%d",
-                                   static_cast<unsigned long long>(networkId), chuteOk ? 1 : 0);
-            }
             if (parAction && !suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= kSautVolDebutS)
             {
                 suiviPosture.boucleVolDemandee = true;
                 phaseAction(2, kSautVolS);
-            }
-            if (!parAction && !suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= 0.2f)
-            {
-                suiviPosture.boucleVolDemandee = true;
-                suiviPosture.phaseFranchissement = 1;   // idempotent si les phases sont inversees
-                bool enVolOk = false;
-                Red::CallVirtual(this, "TesseraPousserFranchissement", enVolOk, entityId, true, 1, 0);
             }
         }
     }
