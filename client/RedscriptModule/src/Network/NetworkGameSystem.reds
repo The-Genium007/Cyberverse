@@ -566,6 +566,11 @@ public native class NetworkGameSystem extends IGameSystem {
     // T0b/T0c du monde partage (F-PNJ-244) : le systeme de voies de la foule, lu en suivant
     // gameCommunitySystem -> CrowdSystem -> gestionnaire pietons. `max = 0` : en-tete seul.
     public native func Tessera_LireVoiesFoule(cleVoie: Uint64, max: Int32) -> String;
+    // Monde partage, hooks de foule derivee (A' a H) : trois sondes. Effet en jeu NON MESURE.
+    // Deploiement conjoint : RTTI_METHOD des trois dans la DLL (TesseraFouleDerivee.cpp).
+    public native func Tessera_FouleEtat() -> String;
+    public native func Tessera_FouleScores() -> String;
+    public native func Tessera_StubTeleportSonde(cible: EntityID, dx: Float, dy: Float) -> String;
     /// Placement visuel d'un passager sans empiler d'ordre IA. `moveComponent` est opaque au
     /// script ; le natif borne, ecrit puis relit son entree active (F-PLY-337).
     /// 0 = écrit ; 1 = corps introuvable ; 2 = moveComponent introuvable ; 3 = natif refusé.

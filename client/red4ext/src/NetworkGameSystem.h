@@ -40,7 +40,7 @@
 namespace cyberpunk_rp::protocol {
     struct Snapshot; struct PositionCorrection; struct ShardAssignment; struct StaticAppearance;
     struct WorldState; struct Kicked; struct AppearanceSync; struct ConfigSync; struct CellAppearances;
-    struct PlayerEvent;
+    struct PlayerEvent; struct MondePartage; struct Rendu;
     // ⚠️ Oublier une declaration avancee ici ne donne PAS « type inconnu » : le compilateur lit
     // `const CharacterList*` comme `const int` et l'erreur sort a l'APPEL, sous la forme
     // « impossible de convertir 'const CharacterList *' en 'const int' » — un message qui pointe
@@ -1347,6 +1347,18 @@ public:
     /// avec leurs fragments `debut-fin=crowdCreationDataIndex`. `max = 0` : en-tete seul, assez
     /// leger pour une lecture par image. Chaine VIDE si un maillon manque.
     Red::CString Tessera_LireVoiesFoule(uint64_t cleVoie, int32_t max) const;
+
+    /// Monde partage, hooks de foule derivee (`TesseraFouleDerivee.cpp`) — trois sondes.
+    /// `Tessera_FouleEtat` : mode, graine, hooks attaches, compteurs par decision.
+    /// `Tessera_FouleScores` : dernier prolongement de trajet vu par le hook E (S-L4h, S-L6b).
+    /// `Tessera_StubTeleportSonde` : T14, UN appel de la porte de teleportation du moteur sur
+    /// le stub d'un pieton rendu, deplace de (dx, dy) metres. EFFET EN JEU NON MESURE.
+    Red::CString Tessera_FouleEtat() const;
+    Red::CString Tessera_FouleScores() const;
+    Red::CString Tessera_StubTeleportSonde(RED4ext::ent::EntityID cible, float dx, float dy) const;
+    void HandleMondePartage(const cyberpunk_rp::protocol::MondePartage* monde);
+    void HandleRendu(const cyberpunk_rp::protocol::Rendu* rendu);
+    void EnvoyerTablesReport();
 
     Red::CString Tessera_GetServerShard() const { return Red::CString(m_serverShard.c_str()); }
     Red::CString Tessera_GetServerOverlaps() const { return Red::CString(m_serverOverlapsCsv.c_str()); }
@@ -3280,6 +3292,9 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_LireMouvementBrut);
     RTTI_METHOD(Tessera_LireComposantBrut);
     RTTI_METHOD(Tessera_LireVoiesFoule);
+    RTTI_METHOD(Tessera_FouleEtat);
+    RTTI_METHOD(Tessera_FouleScores);
+    RTTI_METHOD(Tessera_StubTeleportSonde);
     RTTI_METHOD(Tessera_PoserJoueurLocalPorte);
     RTTI_METHOD(Tessera_JoueurLocalPorte);
     RTTI_METHOD(Tessera_AvatarPorteParPlateforme);

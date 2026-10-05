@@ -1,4 +1,5 @@
 #include "NetworkGameSystem.h"
+#include "TesseraFouleDerivee.h"
 
 #include <RED4ext/RED4ext.hpp>
 #include <RedLib.hpp>
@@ -35,6 +36,9 @@ RED4EXT_C_EXPORT bool RED4EXT_CALL Main(RED4ext::v1::PluginHandle aHandle, RED4e
         }
 
         Red::TypeInfoRegistrar::RegisterDiscovered();
+        // Monde partage : hooks de foule derivee (A' a H). Attaches toujours ; sans interrupteur ni
+        // `MondePartage.mode == 1`, ils laissent passer le vanilla. EFFET EN JEU NON MESURE.
+        Tessera::Foule::Attacher(aSdk, aHandle);
         aSdk->logger->Info(aHandle, "Cyberverse has loaded");
         // TODO: Get rid of it or fix the hwnd lookup but maybe also the timing.
         // SetWindowText(GetActiveWindow(), "CyberVerse v0.0.1 - (c) 2023 MeFisto94");

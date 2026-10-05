@@ -1,4 +1,5 @@
 #include "NetworkGameSystem.h"
+#include "TesseraFouleDerivee.h"
 
 #include "TesseraEsthetiqueV.h"
 #include "TesseraSpawnEnrichi.h"
@@ -2148,6 +2149,12 @@ void NetworkGameSystem::PollIncomingMessages()
                 case cyberpunk_rp::protocol::ServerMsg_ConfigSync:
                     HandleConfigSync(env->msg_as_ConfigSync());
                     break;
+                case cyberpunk_rp::protocol::ServerMsg_MondePartage:
+                    HandleMondePartage(env->msg_as_MondePartage());
+                    break;
+                case cyberpunk_rp::protocol::ServerMsg_Rendu:
+                    HandleRendu(env->msg_as_Rendu());
+                    break;
                 case cyberpunk_rp::protocol::ServerMsg_PlayerEvent:
                     HandlePlayerEvent(env->msg_as_PlayerEvent());
                     break;
@@ -3662,6 +3669,9 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
     // et la télémétrie retombe sur l'heure locale, sans rien inventer.
     g_horlogeServeur.Observer(snapshot->ts_ms(),
                               static_cast<std::uint64_t>(Tessera::Sync::Telemetrie::Maintenant()));
+    // Les hooks de foule tournent sur des threads de job : ils ne lisent pas `g_horlogeServeur`,
+    // on leur publie l'heure estimee ici, sur le fil du jeu.
+    Tessera::Foule::PoserHeureServeur(Tessera_HeureServeurMs());
 
     // L'état de l'horloge, périodiquement — c'est la ligne qui permet de RE-CORRIGER tout le
     // fichier après coup si l'estimation s'avère mauvaise. À 25 Hz de diffusion, une fois par
@@ -4442,6 +4452,8 @@ void NetworkGameSystem::HandleShardAssignment(const cyberpunk_rp::protocol::Shar
 
     SDK->logger->InfoF(PLUGIN, "ShardAssignment recu: autoritatif=%s overlaps=[%s]",
         m_serverShard.c_str(), m_serverOverlapsCsv.c_str());
+    // Monde partage : le shard repond par `MondePartage` (graine, verdict).
+    EnvoyerTablesReport();
 }
 
 void NetworkGameSystem::HandleWorldState(const cyberpunk_rp::protocol::WorldState* state)
@@ -6583,6 +6595,64 @@ void NetworkGameSystem::HandlePlayerEvent(const cyberpunk_rp::protocol::PlayerEv
 // suite. C'est la regle « un SEUIL, pas une cadence » de la spec 2026-08-09 — la meme qui a fait
 // ses preuves sur l'etranglement des stimulus.
 static constexpr float kSeuilVariationPermille = 20.0f;
+
+// ── Monde partage : la cle du monde, et les trois sondes des hooks de foule ──────────────────
+// L'etat vit dans `TesseraFouleDerivee.cpp` (hors de la classe, allouee par le moteur).
+void NetworkGameSystem::EnvoyerTablesReport()
+{
+    if (m_pInterface == nullptr)
+    {
+        return;
+    }
+    // ⚠️ `empreinte = 0` et `densite = 0` sont des VALEURS NULLES, pas des mesures : la methode de
+    // lecture de l'empreinte des tables n'est pas arretee (T0b), et la valeur vivante de
+    // `CrowdDensity` n'a pas d'adresse connue (C4, non mesure). Un shard qui exige la concordance
+    // repondra `mode = 0` ; en dev, `TESSERA_FOULE_DERIVEE=1` active quand meme la derivation,
+    // avec la graine recue.
+    flatbuffers::FlatBufferBuilder builder;
+    const auto rapport = cyberpunk_rp::protocol::CreateTablesReport(builder, 0, 0);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_TablesReport, rapport.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    SDK->logger->Info(PLUGIN, "[foule] TablesReport envoye (empreinte=0, densite=0 : non lues)");
+}
+
+void NetworkGameSystem::HandleMondePartage(const cyberpunk_rp::protocol::MondePartage* monde)
+{
+    if (monde == nullptr)
+    {
+        return;
+    }
+    const auto* suspendus = monde->suspendus();
+    Tessera::Foule::RecevoirMondePartage(monde->graine(), monde->mode(), monde->empreinte_serveur(),
+        suspendus != nullptr ? suspendus->data() : nullptr, suspendus != nullptr ? suspendus->size() : 0);
+}
+
+void NetworkGameSystem::HandleRendu(const cyberpunk_rp::protocol::Rendu* rendu)
+{
+    const auto* cles = rendu != nullptr ? rendu->cles() : nullptr;
+    if (cles != nullptr)
+    {
+        Tessera::Foule::RecevoirRendu(cles->data(), cles->size());
+    }
+}
+
+Red::CString NetworkGameSystem::Tessera_FouleEtat() const
+{
+    return Red::CString(Tessera::Foule::Etat().c_str());
+}
+
+Red::CString NetworkGameSystem::Tessera_FouleScores() const
+{
+    return Red::CString(Tessera::Foule::Scores().c_str());
+}
+
+Red::CString NetworkGameSystem::Tessera_StubTeleportSonde(RED4ext::ent::EntityID cible, float dx, float dy) const
+{
+    return Red::CString(Tessera::Foule::StubTeleportSonde(cible.hash, dx, dy).c_str());
+}
 
 uint64_t NetworkGameSystem::Tessera_HeureServeurMs() const
 {

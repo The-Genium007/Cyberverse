@@ -7,6 +7,9 @@ set(PROJECT_HEADER_FILES
   PlayerActionTracker.h
         PlayerSync/TamponInterpolation.h
         CommandLine.h
+  TesseraFouleDerivee.h
+  FouleDerivee.hpp
+  PopulationDerivee.hpp
 )
 
 set(PROJECT_SRC_FILES
@@ -15,6 +18,7 @@ set(PROJECT_SRC_FILES
   TesseraEsthetiqueV.cpp
   TesseraSpawnEnrichi.cpp
   TesseraVoiesFoule.cpp
+  TesseraFouleDerivee.cpp
   PlayerActionTracker.cpp
 )
 
