@@ -185,6 +185,19 @@ inline std::uint64_t cle_place_garee(std::uint64_t graine_serveur, std::uint64_t
     return melanger(fnv1a64(octets, sizeof octets) ^ graine_serveur);
 }
 
+// Rampe d'effectif de la porte des voitures garees (14083b614) : clamp((50 - effectif) * 0.04, 0, 1).
+inline float rampe_garee(std::uint32_t effectif_local) {
+    const float v = (50.0f - static_cast<float>(effectif_local)) * 0.04f;
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+// Porte de Bernoulli, comparaison INCLUSIVE : f <= densite * rampe.
+inline bool presence_garee(std::uint64_t graine_serveur, std::uint64_t parking_space_id, std::uint64_t t_ms,
+                           float densite, std::uint32_t effectif_local) {
+    const std::uint64_t cle = cle_place_garee(graine_serveur, parking_space_id, cycle_garee(t_ms));
+    return fraction(cle, Selecteur::PresenceGaree) <= densite * rampe_garee(effectif_local);
+}
+
 // La cle du n-ieme prolongement du trajet (tous les 70 m, F-PNJ-211). `n + 1` : le
 // prolongement 0 doit deja differer de la cle nue.
 inline std::uint64_t cle_prolongement(std::uint64_t cle, std::uint32_t n) {

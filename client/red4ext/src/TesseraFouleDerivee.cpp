@@ -18,8 +18,8 @@
 //      l'etat d'origine, calculee sans le consommer.
 // Sans cle (individu inconnu) : vanilla, et un compteur « hors cle ».
 //
-// HORS PERIMETRE, vus dans le binaire et NON hookes (F-PNJ-26x, en cours d'ecriture par
-// l'orchestrateur) : `1408f2648` (Bernoulli sur le chemin de foule), `14012c9f8` x2 (reglages
+// HORS PERIMETRE, vus dans le binaire et NON hookes (recensement : F-PNJ-264) :
+// `1408f2648` (Bernoulli sur le chemin de foule), `14012c9f8` x2 (reglages
 // d'evitement « marbles »), `140417665` (victime au hasard quand un creneau deborde),
 // `140421e98` (idem, spawner de communaute), `140416c74`/`1405e7704`/`1405e7b58` (record au
 // hasard dans un vivier), `140411dcc` (table de paires du vehicule), `140887fbc` (position dans
@@ -847,7 +847,7 @@ float D_Delai(float* aBloc, float aX)
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 // E — `1405fdbe4` (liste d'entrees de 12 o., foncteur de score) → entree retenue, ou 0.
-// F-PNJ-211, 220, 229, 231 ; contenu des foncteurs : F-PNJ-26x (orchestrateur).
+// F-PNJ-211, 220, 229, 231 ; contenu des foncteurs : F-PNJ-260 a 262.
 //   Cible        : la valeur de RETOUR (pointeur sur le candidat retenu).
 //   Lecteurs     : 2 — `140408398` (pieton : la borne de fin du dernier segment, puis
 //                  l'extension recursive) et `1405fd0d8` (vehicule : la voie suivante).
@@ -857,7 +857,7 @@ float D_Delai(float* aBloc, float aX)
 //   Hors domaine : liste vide → 0 (vanilla) ; > 64 candidats → vanilla.
 //   Qui d'AUTRE  : personne (retour). MAIS LA LISTE ELLE-MEME DEPEND D'UN ETAT LOCAL : le
 //                  filtre d'occupation `141ca8ef0` retire les voies pleines AVANT nous, et le
-//                  score pieton depend de la position courante du passant (F-PNJ-26x). E rend
+//                  score pieton depend de la position courante du passant (F-PNJ-262, 263). E rend
 //                  « l'indice k » dans une liste qui peut differer entre deux clients — il
 //                  JOURNALISE donc candidats, scores et verdicts du filtre : c'est S-L4h.
 // Le foncteur est appele une fois de plus par candidat pour lire les scores (lecture seule,
@@ -978,7 +978,7 @@ std::uint8_t* D_RoueNormalisee(void* aListe, std::uint8_t* aFoncteur)
 // Le filtre d'occupation `141ca8ef0` (captures, candidat) → octet. COMPTEUR SEUL, rien n'est
 // change : il rend 0 quand l'occupation de la voie est sous sa capacite, 1 sinon ou quand le
 // candidat porte le drapeau `+3 & 1` (relu au decompile). Sens exact du 1 (« a retirer ») :
-// F-PNJ-26x. Le compte est remis a zero a chaque passage dans E, sur le meme thread.
+// F-PNJ-263. Le compte est remis a zero a chaque passage dans E, sur le meme thread.
 using Filtre_t = std::uint64_t (*)(void*, void*);
 Filtre_t o_FiltreOccupation = nullptr;
 

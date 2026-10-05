@@ -251,6 +251,31 @@ int main(int argc, char** argv) {
         }
     }
     {
+        const std::vector<std::string> presences = objets_de("presences_garees");
+        verifier(presences.size() >= 2, "section `presences_garees` absente ou trop courte");
+        for (const std::string& o : presences) {
+            unsigned long long graine = 0, place = 0, t_ms = 0, dens = 0, eff = 0, fpres = 0, presente = 0;
+            const bool complet = lire_entier(o, "graine", graine) && lire_entier(o, "place", place) &&
+                                 lire_entier(o, "t_ms", t_ms) && lire_entier(o, "densite_bits", dens) &&
+                                 lire_entier(o, "effectif", eff) && lire_entier(o, "f_presence", fpres) &&
+                                 lire_entier(o, "presente", presente);
+            verifier(complet, "présence garée incomplète : " + o);
+            if (!complet) {
+                continue;
+            }
+            const std::uint32_t d32 = static_cast<std::uint32_t>(dens);
+            float densite = 0.0f;
+            std::memcpy(&densite, &d32, 4);
+            const std::uint64_t cle = cle_place_garee(graine, place, cycle_garee(t_ms));
+            verifier(bits_de(fraction(cle, Selecteur::PresenceGaree)) == fpres,
+                     "f_presence divergent pour la place " + std::to_string(place));
+            verifier(static_cast<unsigned long long>(presence_garee(graine, place, t_ms, densite,
+                                                                    static_cast<std::uint32_t>(eff))) == presente,
+                     "présence garée divergente pour la place " + std::to_string(place));
+            ++verifies;
+        }
+    }
+    {
         const std::vector<std::string> emetteurs = objets_de("emetteurs");
         verifier(emetteurs.size() >= 5, "section `emetteurs` absente ou trop courte");
         bool un_cas_sans_candidat = false;

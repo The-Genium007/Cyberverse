@@ -140,6 +140,35 @@
       "t_ms": 18446744073709551615
     }
   ],
+  "presences_garees": [
+    {
+      "densite_bits": 1061997773,
+      "effectif": 0,
+      "f_presence": 1040578152,
+      "graine": 42,
+      "place": 7,
+      "presente": 1,
+      "t_ms": 1790000000000
+    },
+    {
+      "densite_bits": 1061997773,
+      "effectif": 49,
+      "f_presence": 1040578152,
+      "graine": 42,
+      "place": 7,
+      "presente": 0,
+      "t_ms": 1790000000000
+    },
+    {
+      "densite_bits": 1056964608,
+      "effectif": 10,
+      "f_presence": 1029752352,
+      "graine": 18446744073709551615,
+      "place": 3,
+      "presente": 1,
+      "t_ms": 0
+    }
+  ],
   "statiques": [
     {
       "cle": 6603144262649002859,
