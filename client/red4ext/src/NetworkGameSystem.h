@@ -556,6 +556,9 @@ struct SuiviAvatar
     bool vhConnue = false;
     /// Descente sous le point de decollage : bascule `exploration.movementType = 2` (chute, `fall_loop` + `landing_hard`).
     bool chute = false;
+    /// Le decollage a POUSSE un vol (annonce ou course) : la reception ne se pousse que dans ce cas, ou si la chute
+    /// depasse 1 m (decision du 2026-10-05, option b). Vrai du decollage au contact.
+    bool volPousse = false;
     float zDecollage = 0.0f;
     /// Reception du saut en cours (2026-09-13) : `state = 2` tenu, puis retour a `None`.
     bool receptionEnCours = false;

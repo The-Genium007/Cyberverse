@@ -9314,6 +9314,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         static constexpr float kReceptionBreveS = 0.25f;   // clip jump_walk_startup v3 (reception breve, type 23, F-PLY-706)
         static constexpr float kReceptionLourdeS = 0.59f;  // HardLand de V = 0,59 s (type 24, F-PLY-706)
         static constexpr float kHauteurLourdeM = 5.5f;     // 23 jusqu'a 4,7 m, 24 a 6,2 m : seuil entre les deux (F-PLY-706)
+        static constexpr float kHauteurReceptionSeuleM = 1.0f; // chute SANS vol pousse : reception seulement au-dela de 1 m (decision 2026-10-05, option b)
         static constexpr float kVitesseCourseMS = 2.5f;    // marche 1,78 / course 3,5 / sprint 7,5 m/s : famille sprint des 2,5 (F-PLY-705)
         static constexpr double kFenetreAnnonceS = 0.3;    // message ACTION_SAUT <= 0,3 s avant le decollage affiche = saut, sinon chute
         // ⭐ LA CHUTE (Lucas, 2026-09-15 : « pareil pour la chute ») — le jeu derive range `fall_loop` et
@@ -9404,7 +9405,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             const bool annonce = ageAnnonce >= 0.0 && ageAnnonce <= kFenetreAnnonceS;
             const int32_t famille = enVolMaintenant ? (suiviPosture.vhLissee >= kVitesseCourseMS ? 2 : 0)
                                                     : (suiviPosture.chute ? 2 : 0);
-            const bool poussable = !enVolMaintenant || annonce || famille == 2;
+            // Decision du 2026-10-05 (question 1 du chantier saut, option b) : la RECEPTION ne se pousse que si le
+            // decollage a POUSSE un vol, ou si la chute depasse kHauteurReceptionSeuleM. Sans quoi V qui descend un
+            // trottoir (ni message, ni course : aucun vol pousse) recevrait une reception sur rien.
+            const bool poussable = enVolMaintenant ? (annonce || famille == 2)
+                                                   : (suiviPosture.volPousse || hauteurChute >= kHauteurReceptionSeuleM);
             if (parAction)
             {
                 if (enVolMaintenant && !g_suiviAvatars[networkId].impulsionParMessage)
@@ -9426,6 +9431,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 Red::CallVirtual(this, "TesseraPousserFranchissement", franchi, entityId, true,
                                  suiviPosture.phaseFranchissement, famille);
             }
+            // Le drapeau vit du decollage au contact : vrai si le vol a ete pousse, remis a faux au contact.
+            suiviPosture.volPousse = enVolMaintenant && poussable;
             }
             // ⛔ PLUS D'EVENEMENT `ActionStartup` / `ActionLoop` / `ActionRecovery` (retire le 2026-09-19, F-PLY-542).
             // Ils appartiennent a la machine `ActionAnimation` des PNJ, pas au saut (F-PLY-494) — et ils la
@@ -9447,9 +9454,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             if (!enVolMaintenant)
             {
                 // ⚗️ La RECEPTION ne s'affiche pas (F-PLY-528) : on veut savoir si la poussee part vraiment.
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECEPTION famille=%d hauteur=%.2f duree=%.2f",
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECEPTION famille=%d hauteur=%.2f duree=%.2f pousse=%d",
                                    static_cast<unsigned long long>(networkId), famille, hauteurChute,
-                                   suiviPosture.chute ? kReceptionLourdeS : kReceptionBreveS);
+                                   suiviPosture.chute ? kReceptionLourdeS : kReceptionBreveS, poussable ? 1 : 0);
             }
             g_telemetrie.Evenement("franchissement", networkId,
                                    enVolMaintenant ? (franchi ? "decollage" : "decollage_refuse")
