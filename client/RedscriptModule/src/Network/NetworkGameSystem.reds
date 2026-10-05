@@ -344,6 +344,36 @@ public native class NetworkGameSystem extends IGameSystem {
     // Renvoie true si le message est PARTI — jamais qu'il a été accepté.
     public native func Tessera_VehiculeVerbe(cible: EntityID, verbe: Uint8, param: Uint32) -> Bool;
 
+    // ── BAR ET CIGARETTE (2026-10-05) : voir `Tessera_EnvoyerObjet` dans NetworkGameSystem.h ────
+    // verbe 16 = consommer (cible = TDBID.ToNumber de l'item), 17 = sous-action (param 1 = fumer),
+    // 18 = ouvrir la carte (cible = id du bar). Renvoie true si PARTI, jamais « accepte ».
+    public native func Tessera_EnvoyerObjet(cible: Uint64, verbe: Uint8, param: Uint32) -> Bool;
+    // « Sers-moi l'article `index` de la carte » (choix 17).
+    public native func Tessera_ChoisirBar(bar: Uint64, index: Uint32) -> Bool;
+    public native func Tessera_CarteBarSeq() -> Int32;
+    public native func Tessera_CarteBarId() -> Uint64;
+    public native func Tessera_CarteBarTaille() -> Int32;
+    public native func Tessera_CarteBarArticle(i: Int32) -> String;
+
+    // Ivresse d'un avatar distant (PlayerState.etats bit 0, decidee par le serveur apres N verres).
+    // Poids du wrapper additif `DrunkLocomotion` (F-PLY-341/343 : il ATTEINT le squelette de nos
+    // avatars). L'effet VISIBLE est « non mesure — hypothese » : sonde S5, deux instances.
+    public func TesseraIvresseAvatar(entityId: EntityID, ivre: Bool) -> Bool {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        if !IsDefined(puppet) {
+            return false;
+        }
+        AnimationControllerComponent.SetAnimWrapperWeightOnOwnerAndItems(puppet, n"DrunkLocomotion", ivre ? 1.0 : 0.0);
+        return true;
+    }
+
+    // Sous-action tenue d'un avatar distant (PlayerState.sustained_sub, 1 = fumer). LECTURE seule
+    // pour l'instant : l'effet visuel (fumee) n'est pas pose, voie non mesuree, a sonder (O6).
+    public func TesseraSousActionAvatar(entityId: EntityID, sub: Uint32) -> Bool {
+        this.Tessera_Journal(s"[SousAction] sous-action=\(sub) lue sur l'avatar (effet visuel non pose)");
+        return true;
+    }
+
     // Ce vehicule est-il connu du SERVEUR ? Faux pour la circulation native.
     public native func Tessera_EstVehiculeReseau(cible: EntityID) -> Bool;
 

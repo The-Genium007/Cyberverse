@@ -542,6 +542,9 @@ struct SuiviAvatar
     /// taire la premiere transition d'un avatar qui naît deja assis. Meme piege que le -1 de
     /// l'accroupissement, et meme famille que le `Bool` non initialise de `UiKitPosture.reds`.
     std::uint32_t derniereSustained = 0xFFFFFFFFu;
+    /// Ivresse (`PlayerState.etats` bit 0) et sous-action (`sustained_sub`) deja appliquees.
+    std::int8_t dernierIvre = 0;
+    std::uint32_t derniereSousAction = 0;
     std::uint64_t dernierPostureSpot = 0;
     /// Vrai uniquement si le lecteur redscript a effectivement remis le pantin au workspot.
     /// `sustained` peut nommer une famille encore inconnue ou un emplacement hors catalogue :
@@ -1083,6 +1086,10 @@ private:
     uint64_t m_invocationVehicule = 0;
     std::string m_invocationRecord;
     int32_t m_invocationSeq = 0;
+    /// Carte du bar recue (ui_kind 10) : articles, id du bar, sequence (incrementee EN DERNIER).
+    std::vector<std::string> m_carteBar;
+    uint64_t m_carteBarId = 0;
+    int32_t m_carteBarSeq = 0;
     /// La session d'interaction ouverte par le serveur — a renvoyer telle quelle a la fermeture.
     uint64_t m_coffreSession = 0;
     uint16_t m_coffreCapacite = 0;
@@ -2175,6 +2182,38 @@ public:
     // successifs pour le meme vehicule seraient indiscernables par un drapeau — le second ne
     // partirait jamais.
     int32_t Tessera_InvocationSeq() const { return m_invocationSeq; }
+
+    // ── BAR ET CIGARETTE (decisions de Lucas du 2026-10-05) ──────────────────────────────────
+    /// Verbes d'objet vers le serveur : 16 = consommer (`cible` = TweakDBID de l'item), 17 =
+    /// sous-action tenue (param 1 = fumer, `cible` ignoree), 18 = ouvrir la carte du bar (`cible` =
+    /// id du bar). PLAGE GARDEE comme `Tessera_VehiculeVerbe` : une faute de frappe ne doit pas
+    /// partir en verbe d'ascenseur. Vrai = PARTI, jamais « accepte » (D1) : le serveur relit le sac
+    /// en base et refuse en silence.
+    bool Tessera_EnvoyerObjet(uint64_t cible, uint8_t verbe, uint32_t param)
+    {
+        if (verbe < 16 || verbe > 18 || m_pInterface == nullptr)
+        {
+            return false;
+        }
+        SendVehiculeVerbe(cible, verbe, param);
+        return true;
+    }
+
+    /// « Sers-moi l'article `index` » : `InteractionChoice` choix 17 (`bar.rs::CHOIX_SERVIR_BAR`).
+    bool Tessera_ChoisirBar(uint64_t bar, uint32_t index);
+
+    int32_t Tessera_CarteBarSeq() const { return m_carteBarSeq; }
+    uint64_t Tessera_CarteBarId() const { return m_carteBarId; }
+    int32_t Tessera_CarteBarTaille() const { return static_cast<int32_t>(m_carteBar.size()); }
+    /// Identifiant d'item de l'article `i` (ex. `Items.LowQualityDrink1`), tel que donne par le serveur.
+    Red::CString Tessera_CarteBarArticle(int32_t i) const
+    {
+        if (i < 0 || static_cast<size_t>(i) >= m_carteBar.size())
+        {
+            return Red::CString("");
+        }
+        return Red::CString(m_carteBar[static_cast<size_t>(i)].c_str());
+    }
 
     /// Le record a invoquer. Chaine VIDE quand aucun ordre n'est en cours.
     ///
@@ -3352,6 +3391,12 @@ RTTI_DEFINE_CLASS(NetworkGameSystem, {
     RTTI_METHOD(Tessera_NomConnu);
     RTTI_METHOD(Tessera_EnvoyerAction);
     RTTI_METHOD(Tessera_VehiculeVerbe);
+    RTTI_METHOD(Tessera_EnvoyerObjet);
+    RTTI_METHOD(Tessera_ChoisirBar);
+    RTTI_METHOD(Tessera_CarteBarSeq);
+    RTTI_METHOD(Tessera_CarteBarId);
+    RTTI_METHOD(Tessera_CarteBarTaille);
+    RTTI_METHOD(Tessera_CarteBarArticle);
     RTTI_METHOD(Tessera_EstVehiculeReseau);
     RTTI_METHOD(Tessera_DegatsConnus);
     RTTI_METHOD(Tessera_DegatsEnAttente);

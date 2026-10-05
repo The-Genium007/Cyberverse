@@ -134,6 +134,10 @@ struct Pose
     /// Emplacement serveur exact de la posture tenue. `sustained` nomme la
     /// famille ; cet id choisit le workspot du monde a utiliser.
     std::uint64_t postureSpot = 0;
+    /// Sous-action tenue par-dessus la pose (1 = fumer), `PlayerState.sustained_sub`. Etat discret.
+    std::uint32_t sustainedSub = 0;
+    /// Etats cosmetiques decides par le SERVEUR (`PlayerState.etats`, bit 0 = ivre).
+    std::uint8_t etats = 0;
     /// Le REGARD, en degres — distinct de `yaw`, qui est l'orientation du CORPS.
     /// C'est `lookState.lookDir` de gameMuppetState (spec 2026-08-15). (0,0) = non rapporte.
     float lookYaw = 0.0f;
@@ -177,6 +181,8 @@ struct PoseRendue
     /// pas, il n'y a pas de demi-assise.
     std::uint32_t sustained = 0;
     std::uint64_t postureSpot = 0;
+    std::uint32_t sustainedSub = 0;
+    std::uint8_t etats = 0;
     /// Vrai quand la pose est DEVINÉE (tampon à sec) plutôt qu'interpolée entre deux
     /// échantillons réels. L'appelant a le droit de traiter les deux différemment ; il
     /// n'a pas le droit de l'ignorer sans le savoir.
@@ -574,6 +580,8 @@ private:
         r.moveDir = p.moveDir;
         r.sustained = p.sustained;
         r.postureSpot = p.postureSpot;
+        r.sustainedSub = p.sustainedSub;
+        r.etats = p.etats;
         return r;
     }
 
@@ -603,6 +611,8 @@ private:
         r.moveDir = a.pose.moveDir;
         r.sustained = a.pose.sustained;
         r.postureSpot = a.pose.postureSpot;
+        r.sustainedSub = a.pose.sustainedSub;
+        r.etats = a.pose.etats;
         PoserVitesse(r, a, b, duree);
         return r;
     }

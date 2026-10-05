@@ -769,6 +769,8 @@ constexpr std::uint8_t kFlagAppelTelephonique = 1 << 6;
 // Bit 7 : « a terre », pose par le SERVEUR dans le snapshot (`DRAPEAU_A_TERRE`, `sante.rs`), jamais
 // emis par un client — le serveur l'efface de ce qu'il recoit.
 constexpr std::uint8_t kFlagATerre = 1 << 7;
+// `PlayerState.etats` (champ distinct de `flags`, dont les 8 bits sont pris) : bit 0 = ivre.
+constexpr std::uint8_t kEtatIvre = 1 << 0;
 // bit 7 : RESERVE. Ne pas consommer.
 
 // L'effet declare qui rend l'appel visible sur un avatar distant. Il fait partie des 165
@@ -3799,6 +3801,9 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
             // Toute la moitie « les autres me voient assis » reposait sur un canal a zero lecteur.
             pose.sustained = ps->sustained();
             pose.postureSpot = ps->posture_spot();
+            // Bar et cigarette (2026-10-05) : sous-action tenue et etats decides par le serveur.
+            pose.sustainedSub = ps->sustained_sub();
+            pose.etats = ps->etats();
             // QUI LE PORTE (ADR 0039). `frame` = 0 a pied, sinon l'EntityID de la cabine. On ne
             // s'en sert pas pour placer le corps — la position reste une position MONDE — mais
             // pour savoir qu'un AUTRE systeme le place deja, et lui laisser la verticale.
@@ -5473,6 +5478,42 @@ void NetworkGameSystem::HandleInteractionOpen(const cyberpunk_rp::protocol::Inte
             m_invocationVehicule, m_invocationRecord.c_str(), m_invocationSeq);
         return;
     }
+    // ── LA CARTE DU BAR (ui_kind 10, 2026-10-05) : une boisson par ligne, UTF-8, payload brut. ──
+    // Le serveur est autoritaire sur la carte ; le client l'affiche. Comme l'invocation : la
+    // sequence s'incremente EN DERNIER.
+    constexpr uint8_t kUiKindCarteBar = 10;
+    static_assert(kUiKindCarteBar != kUiKindCoffre && kUiKindCarteBar != kUiKindContenant
+                      && kUiKindCarteBar != kUiKindInvocation,
+                  "deux ui_kind partagent une valeur");
+    if (msg->ui_kind() == kUiKindCarteBar)
+    {
+        m_carteBar.clear();
+        if (const auto* brut = msg->payload(); brut != nullptr)
+        {
+            const std::string texte(reinterpret_cast<const char*>(brut->data()), brut->size());
+            size_t debut = 0;
+            while (debut <= texte.size())
+            {
+                const size_t fin = texte.find('\n', debut);
+                const std::string ligne = texte.substr(
+                    debut, fin == std::string::npos ? std::string::npos : fin - debut);
+                if (!ligne.empty())
+                {
+                    m_carteBar.push_back(ligne);
+                }
+                if (fin == std::string::npos)
+                {
+                    break;
+                }
+                debut = fin + 1;
+            }
+        }
+        m_carteBarId = msg->session_id();
+        ++m_carteBarSeq;
+        SDK->logger->InfoF(PLUGIN, "[bar] carte recue : bar=%llu articles=%zu seq=%d",
+            m_carteBarId, m_carteBar.size(), m_carteBarSeq);
+        return;
+    }
     if (msg->ui_kind() != kUiKindCoffre && msg->ui_kind() != kUiKindContenant)
     {
         // ⚠️ On le DIT. Premiere version : `return` muet. Le serveur repondait, le client ne
@@ -5591,6 +5632,22 @@ void NetworkGameSystem::SendCoffreRapport()
 //    11 -> station de radio, 0 = eteinte (CONDUCTEUR uniquement)
 //    12 -> casse 0..100, MONOTONE        (CONDUCTEUR uniquement)
 //    14 -> ignore                        (le serveur repond par InteractionOpen + CoffreContenu)
+bool NetworkGameSystem::Tessera_ChoisirBar(uint64_t bar, uint32_t index)
+{
+    if (m_pInterface == nullptr)
+    {
+        return false;
+    }
+    flatbuffers::FlatBufferBuilder builder;
+    const auto choix = cyberpunk_rp::protocol::CreateInteractionChoice(builder, bar, 17u, index);
+    const auto env = cyberpunk_rp::protocol::CreateClientEnvelope(
+        builder, cyberpunk_rp::protocol::ClientMsg_InteractionChoice, choix.Union());
+    builder.Finish(env);
+    m_pInterface->SendMessageToConnection(m_hConnection, builder.GetBufferPointer(),
+        builder.GetSize(), k_nSteamNetworkingSend_Reliable, nullptr);
+    return true;
+}
+
 void NetworkGameSystem::SendVehiculeVerbe(uint64_t target, uint8_t verbe, uint32_t param)
 {
     if (m_pInterface == nullptr || target == 0)
@@ -9551,6 +9608,39 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             else if (!aTerre && suiviPosture.dernierATerre == 1)
             {
                 g_avatarsARelever.insert(networkId);
+            }
+        }
+
+        // -- IVRESSE ET SOUS-ACTION, LUES DANS LE SNAPSHOT (2026-10-05, decisions de Lucas) ------
+        //
+        // `etats` bit 0 = ivre, decide par le SERVEUR apres N verres d'alcool (`ivresse.rs`) :
+        // poids du wrapper `DrunkLocomotion` (F-PLY-341/343) sur l'avatar. EFFET NON MESURE --
+        // hypothese, sonde S5 du bloc OBJETS. Sur CHANGEMENT seulement (une ecriture de graphe par
+        // avatar et par frame a fait tomber le jeu, 2026-08-06) ; on retente tant que le pantin
+        // refuse (pas encore attache).
+        {
+            const std::int8_t ivre = (pose.etats & kEtatIvre) != 0 ? 1 : 0;
+            if (ivre != suiviPosture.dernierIvre)
+            {
+                bool ok = false;
+                Red::CallVirtual(this, "TesseraIvresseAvatar", ok, entityId, ivre == 1);
+                if (ok)
+                {
+                    suiviPosture.dernierIvre = ivre;
+                    SDK->logger->InfoF(PLUGIN, "[avatar %llu] IVRE=%d (etats=0x%02X)",
+                        static_cast<unsigned long long>(networkId), static_cast<int>(ivre),
+                        static_cast<unsigned>(pose.etats));
+                }
+            }
+            // Sous-action (fumer) : le serveur ne la publie que par-dessus une pose tenue.
+            if (pose.sustainedSub != suiviPosture.derniereSousAction)
+            {
+                bool ok = false;
+                Red::CallVirtual(this, "TesseraSousActionAvatar", ok, entityId, pose.sustainedSub);
+                suiviPosture.derniereSousAction = pose.sustainedSub;
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] sous-action=%u (lue=%d)",
+                    static_cast<unsigned long long>(networkId),
+                    static_cast<unsigned>(pose.sustainedSub), ok ? 1 : 0);
             }
         }
 

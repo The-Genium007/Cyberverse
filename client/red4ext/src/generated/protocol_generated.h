@@ -1104,7 +1104,9 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_LOOK_PITCH = 26,
     VT_FRAME_POSITION = 28,
     VT_FRAME_POSITION_VALID = 30,
-    VT_POSTURE_SPOT = 32
+    VT_POSTURE_SPOT = 32,
+    VT_SUSTAINED_SUB = 34,
+    VT_ETATS = 36
   };
   uint64_t id() const {
     return GetField<uint64_t>(VT_ID, 0);
@@ -1151,6 +1153,12 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t posture_spot() const {
     return GetField<uint64_t>(VT_POSTURE_SPOT, 0);
   }
+  uint32_t sustained_sub() const {
+    return GetField<uint32_t>(VT_SUSTAINED_SUB, 0);
+  }
+  uint8_t etats() const {
+    return GetField<uint8_t>(VT_ETATS, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1169,6 +1177,8 @@ struct PlayerState FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<cyberpunk_rp::protocol::QVec3>(verifier, VT_FRAME_POSITION, 4) &&
            VerifyField<uint8_t>(verifier, VT_FRAME_POSITION_VALID, 1) &&
            VerifyField<uint64_t>(verifier, VT_POSTURE_SPOT, 8) &&
+           VerifyField<uint32_t>(verifier, VT_SUSTAINED_SUB, 4) &&
+           VerifyField<uint8_t>(verifier, VT_ETATS, 1) &&
            verifier.EndTable();
   }
 };
@@ -1222,6 +1232,12 @@ struct PlayerStateBuilder {
   void add_posture_spot(uint64_t posture_spot) {
     fbb_.AddElement<uint64_t>(PlayerState::VT_POSTURE_SPOT, posture_spot, 0);
   }
+  void add_sustained_sub(uint32_t sustained_sub) {
+    fbb_.AddElement<uint32_t>(PlayerState::VT_SUSTAINED_SUB, sustained_sub, 0);
+  }
+  void add_etats(uint8_t etats) {
+    fbb_.AddElement<uint8_t>(PlayerState::VT_ETATS, etats, 0);
+  }
   explicit PlayerStateBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1249,9 +1265,13 @@ inline ::flatbuffers::Offset<PlayerState> CreatePlayerState(
     int16_t look_pitch = 0,
     const cyberpunk_rp::protocol::QVec3 *frame_position = nullptr,
     bool frame_position_valid = false,
-    uint64_t posture_spot = 0) {
+    uint64_t posture_spot = 0,
+    uint32_t sustained_sub = 0,
+    uint8_t etats = 0) {
   PlayerStateBuilder builder_(_fbb);
   builder_.add_posture_spot(posture_spot);
+  builder_.add_sustained_sub(sustained_sub);
+  builder_.add_etats(etats);
   builder_.add_slot(slot);
   builder_.add_frame(frame);
   builder_.add_id(id);
