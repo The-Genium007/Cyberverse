@@ -19,6 +19,7 @@
 #include "PlayerActionTracker.h"
 #include "PlayerSync/TamponInterpolation.h"
 #include "PlayerSync/IdentiteStatique.h"
+#include "PlayerSync/EcrivainVol.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
 #include "RED4ext/Scripting/Natives/Generated/Vector4.hpp"
 #include "RED4ext/Scripting/Natives/entEntityID.hpp"
@@ -332,6 +333,9 @@ struct SuiviAvatar
     bool ciblePassagerPrecedenteValide = false;
     /// Temps passe avec un ecart > 3 m (palier de recalage, retours du playtest 2).
     float depuisEcartLargeS = 0.0f;
+    /// L'ecrivain du vol et son temoin « qui a ecrit ? » (PlayerSync/EcrivainVol.h, F-PLY-716/717).
+    Tessera::Sync::QueueDeVol queueVol;
+    Tessera::Sync::BilanVol bilanVol;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai

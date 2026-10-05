@@ -9390,7 +9390,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             if (enVolMaintenant)
             {
                 suiviPosture.chute = false;
-                suiviPosture.zDecollage = pose.z;
+                // La premiere image « en l'air » d'une chute est deja sous le rebord (F-PLY-718).
+                suiviPosture.zDecollage = Tessera::Sync::ZDecollage(
+                    pose.z, g_suiviAvatars[networkId].cibleImmobilePrecedente.Z,
+                    g_suiviAvatars[networkId].cibleImmobileConnue);
             }
             else
             {
@@ -9408,8 +9411,13 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // Decision du 2026-10-05 (question 1 du chantier saut, option b) : la RECEPTION ne se pousse que si le
             // decollage a POUSSE un vol, ou si la chute depasse kHauteurReceptionSeuleM. Sans quoi V qui descend un
             // trottoir (ni message, ni course : aucun vol pousse) recevrait une reception sur rien.
-            const bool poussable = enVolMaintenant ? (annonce || famille == 2)
-                                                   : (suiviPosture.volPousse || hauteurChute >= kHauteurReceptionSeuleM);
+            // ⚗️ SONDE `TESSERA_SAUT_SANS_POUSSEE=1` (bloc SAUT-3, F-PLY-719) : aucune poussee d'animation, ni au
+            // decollage ni au contact. Si l'alternance de hauteur en course disparait, le second ecrivain est le
+            // clip pousse (mouvement de racine) ; si elle reste, c'est la marche du moteur.
+            static const bool kSansPoussee = []{ const char* v = std::getenv("TESSERA_SAUT_SANS_POUSSEE"); return v && v[0] == '1'; }();
+            const bool poussable = !kSansPoussee
+                && (enVolMaintenant ? (annonce || famille == 2)
+                                    : (suiviPosture.volPousse || hauteurChute >= kHauteurReceptionSeuleM));
             if (parAction)
             {
                 if (enVolMaintenant && !g_suiviAvatars[networkId].impulsionParMessage)
@@ -9447,12 +9455,21 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // directe. On les annule au decollage.
                 bool annule = false;
                 Red::CallVirtual(this, "TesseraAnnulerPlacements", annule, entityId);
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT famille=%d vh=%.2f annonce=%d",
+                // `pousse=0` = decollage VU mais aucune animation poussee (chute sans annonce) : la ligne sort a
+                // CHAQUE decollage, c'est `pousse` qui dit s'il y a eu un saut (F-PLY-718).
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT famille=%d vh=%.2f annonce=%d pousse=%d",
                                    static_cast<unsigned long long>(networkId), famille,
-                                   suiviPosture.vhLissee, annonce ? 1 : 0);
+                                   suiviPosture.vhLissee, annonce ? 1 : 0, poussable ? 1 : 0);
+                g_suiviAvatars[networkId].bilanVol = Tessera::Sync::BilanVol{};
             }
             if (!enVolMaintenant)
             {
+                // Le bilan du temoin « qui a ecrit ? » : sur combien d'images du vol le corps lu etait-il
+                // exactement ce que nous avions ecrit a l'image d'avant ?
+                const auto& bilan = g_suiviAvatars[networkId].bilanVol;
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] VOL images=%d nous=%d autre=%d pire=%.3fm",
+                                   static_cast<unsigned long long>(networkId), bilan.images, bilan.nous,
+                                   bilan.autre, bilan.pireEcartM);
                 // ⚗️ La RECEPTION ne s'affiche pas (F-PLY-528) : on veut savoir si la poussee part vraiment.
                 SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECEPTION famille=%d hauteur=%.2f duree=%.2f pousse=%d",
                                    static_cast<unsigned long long>(networkId), famille, hauteurChute,
@@ -9635,10 +9652,11 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // On ne rattrape donc pas la vitesse — on retire l'extrapolation la ou son hypothese
             // est fausse. Au sol, la cible EST le sol : il n'y a rien a predire.
             const float avanceTemoin = avance;   // ce que l'ancienne regle aurait pose
-            if (pose.locomotion != 6)
-            {
-                avance = 0.0f;
-            }
+            // ⭐⭐ ET SEULEMENT POUR UN CORPS PORTE (2026-10-05, F-PLY-716). `locomotion = 6` couvre le passager
+            // ET le sauteur. Sur un arc, cette avance a vitesse constante vaut +0,46 m au sommet et -0,48 m au
+            // contact : c'est tout l'echec du bloc SAUT-2 (sommet 1,43 m pour 0,97). Le serveur dit qui est porte.
+            avance = Tessera::Sync::AvanceVerticale(
+                vzCible, delai, deltaTime, pose.locomotion == 6 && g_porteurParAvatar.count(networkId) != 0);
             if (suiviVert.imagesAtterrissage > 0)
             {
                 SDK->logger->InfoF(PLUGIN,
@@ -9713,7 +9731,30 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ⭐ La posture, elle, est portee par le poids de wrapper, pousse AILLEURS et une seule fois :
     // la figer ici ne l'enleve pas. L'allure 5 (`CrouchMove`) reste en suivi : elle implique
     // un deplacement, et le suivi est alors le bon chemin.
+    // ⭐ UN SEUL ECRIVAIN DU VOL, DU DECOLLAGE A 0,15 s APRES LE CONTACT (F-PLY-717). Sans la queue, le corps
+    // restait a la hauteur de sa derniere image de vol : sous 0,5 m d'ecart vertical aucune branche ne le replace
+    // avant le rattrapage a 0,25 s ([F-PLY-557], garde en filet). Avancee UNE fois par image, avant les branches.
+    const bool ecrivainVol = g_suiviAvatars[networkId].queueVol.Avancer(deltaTime, pose.locomotion == 6)
+        && SautDirectActif() && !g_suspendreCorrections;
     const bool immobileAuSol = pose.locomotion == 0 || pose.locomotion == 4;
+    if (immobileAuSol && ecrivainVol)
+    {
+        // Reception sur place : la cible descend encore deux ou trois images, on la suit par l'ecriture directe.
+        auto& s = g_suiviAvatars[networkId];
+        const auto lue = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
+        const float ecritPrecedentZ = s.bilanVol.ecritPrecedentZ;
+        const auto qui = s.bilanVol.Noter(positionVoulue.Z, lue.Z);
+        int32_t raison = -1;
+        Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", raison, entityId, positionVoulue);
+        if (std::getenv("TESSERA_SAUT_TRACE") != nullptr)
+        {
+            SDK->logger->InfoF(PLUGIN,
+                "[saut-direct %llu] i=%d raison=%d loco=%u QUEUE ecrit.z=%.3f | image d'avant : ecrit.z=%.3f "
+                "lu.z=%.3f ecart=%+.3f ecrivain=%s",
+                networkId, s.bilanVol.images, raison, static_cast<unsigned>(pose.locomotion), positionVoulue.Z,
+                ecritPrecedentZ, lue.Z, lue.Z - ecritPrecedentZ, Tessera::Sync::NomEcrivain(qui));
+        }
+    }
     if (immobileAuSol)
     {
         // ⚠️ IL FAUT ANNULER L'ORDRE, PAS SEULEMENT CESSER D'EN DONNER.
@@ -10728,7 +10769,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ce qui avait fait tomber le jeu a 60 Hz par avatar le 2026-08-06. Ici on reste sous 33 Hz,
     // et SEULEMENT pour un avatar en l'air — un etat rare et bref hors ascenseur.
     static constexpr float kPeriodePlacementVolS = 0.03f;
-    if (!g_suspendreCorrections && enLair && derive <= kSautFrancM)
+    // `ecrivainVol` (pose avant les branches) : en l'air, ou dans la queue de 0,15 s apres un contact en mouvement.
+    if (!g_suspendreCorrections && (enLair || ecrivainVol) && derive <= kSautFrancM)
     {
         auto& s = g_suiviAvatars[networkId];
         // ── ⭐ A LA VITESSE DE POINTE, ON CORRIGE A CHAQUE IMAGE ────────────────────────────
@@ -10779,14 +10821,24 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 1.0f};
             int32_t raison = -1;
             Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", raison, entityId, volDirect);
+            // Le temoin : `position` (lue AVANT cette ecriture) est-elle ce qu'on a ecrit a l'image d'avant ?
+            const float ecritPrecedentZ = s.bilanVol.ecritPrecedentZ;
+            const auto qui = s.bilanVol.Noter(volDirect.Z, position.Z);
             s.depuisLogS += deltaTime;
-            if (std::getenv("TESSERA_SAUT_TRACE") != nullptr || (std::fabs(volDirect.Z - position.Z) > 0.05f && s.depuisLogS >= 0.2f))
+            // `TESSERA_SAUT_TRACE=1` : UNE LIGNE PAR IMAGE du vol, qui NOMME l'ecrivain (bloc SAUT-3). Sans elle,
+            // une ligne au plus toutes les 0,2 s, et le bilan `VOL images= nous= autre=` a chaque contact.
+            static const bool kTrace = std::getenv("TESSERA_SAUT_TRACE") != nullptr;
+            if (kTrace || (std::fabs(volDirect.Z - position.Z) > 0.05f && s.depuisLogS >= 0.2f))
             {
                 s.depuisLogS = 0.0f;
                 const auto relu = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
                 SDK->logger->InfoF(PLUGIN,
-                    "[saut-direct %llu] raison=%d visee.z=%.3f avant.z=%.3f APRES.z=%.3f",
-                    networkId, raison, volDirect.Z, position.Z, relu.Z);
+                    "[saut-direct %llu] i=%d raison=%d loco=%u ecrit=(%.3f %.3f %.3f) relu.z=%.3f | image d'avant : "
+                    "ecrit.z=%.3f lu=(%.3f %.3f %.3f) ecart=%+.3f ecrivain=%s | fil.z=%.3f dt=%.4f",
+                    networkId, s.bilanVol.images, raison, static_cast<unsigned>(pose.locomotion),
+                    volDirect.X, volDirect.Y, volDirect.Z, relu.Z, ecritPrecedentZ,
+                    position.X, position.Y, position.Z, position.Z - ecritPrecedentZ,
+                    Tessera::Sync::NomEcrivain(qui), pose.z, deltaTime);
             }
         }
         const bool placerMaintenant = !kSautDirect && (kPeriodeSautAB > 0.0f
