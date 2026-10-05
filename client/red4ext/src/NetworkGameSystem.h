@@ -336,6 +336,7 @@ struct SuiviAvatar
     /// L'ecrivain du vol et son temoin « qui a ecrit ? » (PlayerSync/EcrivainVol.h, F-PLY-716/717).
     Tessera::Sync::QueueDeVol queueVol;
     Tessera::Sync::BilanVol bilanVol;
+    Tessera::Sync::GardeMarcheVol gardeMarcheVol;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai

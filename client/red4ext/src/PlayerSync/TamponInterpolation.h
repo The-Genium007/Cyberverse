@@ -168,6 +168,11 @@ struct PoseRendue
     float vy = 0.0f;
     float vz = 0.0f;
     std::uint8_t locomotion = 0;
+    /// L'allure telle que RENDUE (echantillon d'avant l'instant rendu) et celle de l'echantillon d'apres.
+    /// `locomotion` peut etre remplacee par l'appelant (entrees du dernier echantillon recu, sans retard) ;
+    /// ces deux-la ne le sont jamais : elles sont en phase avec la POSITION (F-PLY-723).
+    std::uint8_t locomotionRendue = 0;
+    std::uint8_t locomotionSuivante = 0;
     /// Le bitfield d'etats binaires (visee, accroupi, appel...). Discret comme
     /// `locomotion` : on prend celui de l'echantillon courant, on ne l'interpole pas.
     std::uint8_t flags = 0;
@@ -570,6 +575,8 @@ private:
         r.frameZ = p.frameZ;
         r.framePositionValid = p.framePositionValid;
         r.locomotion = p.locomotion;
+        r.locomotionRendue = p.locomotion;
+        r.locomotionSuivante = p.locomotion;
         r.flags = p.flags;
         r.moveDir = p.moveDir;
         r.sustained = p.sustained;
@@ -599,6 +606,8 @@ private:
             r.framePositionValid = true;
         }
         r.locomotion = a.pose.locomotion;
+        r.locomotionRendue = a.pose.locomotion;
+        r.locomotionSuivante = b.pose.locomotion;
         r.flags = a.pose.flags;
         r.moveDir = a.pose.moveDir;
         r.sustained = a.pose.sustained;

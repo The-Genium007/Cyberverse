@@ -88,4 +88,66 @@ inline float ZDecollage(float zPremiereImageVol, float zImagePrecedente, bool pr
     return (precedenteConnue && zImagePrecedente > zPremiereImageVol) ? zImagePrecedente : zPremiereImageVol;
 }
 
+/// « En l'air » lu sur la pose RENDUE (en retard d'un tampon, comme la position), pas sur le dernier
+/// echantillon recu : `rendue` = allure de l'echantillon d'avant l'instant rendu, `suivante` = celle d'apres.
+/// Le vol couvre tout segment qui touche un echantillon en l'air : il commence quand le corps quitte le sol
+/// et finit quand il le touche. (Lu sur le dernier echantillon, le saut partait 0,05 a 0,1 s avant l'arc et
+/// la hauteur de chute se lisait 0,3 a 1,1 m trop court, F-PLY-723.)
+inline bool EnVolRendu(unsigned char rendue, unsigned char suivante)
+{
+    return rendue == 6 || suivante == 6;
+}
+
+/// Coupe la marche du moteur pendant le vol, et le VERIFIE a chaque image (F-PLY-721 : en course, le moteur
+/// reecrit hauteur et avance, 307 images sur 380 ; l'annulation du decollage est acceptee sans effet visible).
+/// L'appelant lit l'etat des commandes d'IA (`IsCommandExecuting` / `IsCommandWaiting`) et applique les actions.
+struct GardeMarcheVol
+{
+    enum Action : unsigned { Rien = 0, Annuler = 1, Tenir = 2, Reemettre = 4 };
+    /// Une tenue expiree se reemet au plus a cette cadence : une commande d'IA par image a deja fait tomber le jeu.
+    static constexpr float kPeriodeTenueS = 0.25f;
+
+    bool enVol = false;
+    float depuisTenueS = 0.0f;
+    int images = 0, marcheVue = 0, annulations = 0, tenues = 0;
+
+    /// `vol` = l'ecrivain du vol a la main (vol + queue). `marcheActive` / `tenueActive` = une commande de
+    /// marche / de tenue est en cours ou en attente, lue AVANT d'agir. `tenir` = poser une tenue (defaut) ou
+    /// seulement annuler (A/B).
+    unsigned Avancer(float dtS, bool vol, bool marcheActive, bool tenueActive, bool tenir)
+    {
+        unsigned action = Rien;
+        if (vol && !enVol)
+        {
+            images = marcheVue = annulations = tenues = 0;
+            depuisTenueS = 0.0f;
+            action = Annuler | (tenir ? Tenir : Rien);
+            marcheVue += marcheActive ? 1 : 0;
+        }
+        else if (vol)
+        {
+            depuisTenueS += dtS;
+            if (marcheActive)
+            {
+                ++marcheVue;
+                action |= Annuler;
+            }
+            if (tenir && !tenueActive && depuisTenueS >= kPeriodeTenueS)
+            {
+                depuisTenueS = 0.0f;
+                action |= Tenir;
+            }
+        }
+        else if (enVol)
+        {
+            action = Reemettre;
+        }
+        images += vol ? 1 : 0;
+        annulations += (action & Annuler) ? 1 : 0;
+        tenues += (action & Tenir) ? 1 : 0;
+        enVol = vol;
+        return action;
+    }
+};
+
 } // namespace Tessera::Sync

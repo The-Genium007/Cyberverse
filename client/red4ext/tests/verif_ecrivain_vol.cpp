@@ -115,12 +115,54 @@ static void Decollage()
     Verifier(ZDecollage(29.29f, 0.0f, false) == 29.29f, "sans image precedente : la premiere image de vol");
 }
 
+static void VolRendu()
+{
+    // Le saut se LIT sur la pose rendue (en retard d'un tampon), pas sur le dernier echantillon recu : sinon
+    // l'animation part 0,05 a 0,1 s avant l'arc, et la hauteur de chute se lit 1 m au-dessus du sol (F-PLY-723).
+    Verifier(!EnVolRendu(0, 0), "sol -> sol : pas en vol");
+    Verifier(EnVolRendu(0, 6), "sol -> air : le segment rendu quitte le sol, en vol");
+    Verifier(EnVolRendu(6, 6), "air -> air : en vol");
+    Verifier(EnVolRendu(6, 0), "air -> sol : encore en vol tant que le segment descend");
+    Verifier(!EnVolRendu(2, 3), "course -> sprint : pas en vol");
+}
+
+static void Marche()
+{
+    using A = GardeMarcheVol;
+    // Decollage : on coupe (annuler + tenir). Avec tenir = faux, on annule seulement.
+    A g;
+    Verifier(g.Avancer(0.02f, false, true, false, true) == A::Rien, "au sol : la garde ne touche a rien");
+    Verifier(g.Avancer(0.02f, true, true, false, true) == (A::Annuler | A::Tenir), "decollage : annuler ET tenir");
+    // Image suivante : la marche a disparu, la tenue est la. Rien a faire.
+    Verifier(g.Avancer(0.02f, true, false, true, true) == A::Rien, "en vol, marche absente, tenue vue : rien");
+    // La marche REVIENT (annulation acceptee sans etre executee, ou reemise par ailleurs) : on la recoupe.
+    Verifier(g.Avancer(0.02f, true, true, true, true) == A::Annuler, "en vol, marche revenue : annuler, a CHAQUE image");
+    Verifier(g.Avancer(0.02f, true, true, true, true) == A::Annuler, "encore la : encore annuler");
+    // La tenue a expire (chute longue) : on la reemet, mais pas a chaque image (une commande par image a deja
+    // fait tomber le jeu) — au plus une toutes les 0,25 s.
+    Verifier(g.Avancer(0.02f, true, false, false, true) == A::Rien, "tenue absente depuis peu : on attend");
+    unsigned vu = A::Rien;
+    for (int i = 0; i < 12 && vu == A::Rien; ++i) vu = g.Avancer(0.02f, true, false, false, true);
+    Verifier(vu == A::Tenir, "tenue absente 0,25 s : on la reemet");
+    Verifier(g.Avancer(0.02f, true, false, false, true) == A::Rien, "et pas deux fois de suite");
+    // Contact (fin de la queue) : la marche est reemise, une fois.
+    Verifier(g.Avancer(0.02f, false, false, true, true) == A::Reemettre, "fin du vol : reemettre la marche");
+    Verifier(g.Avancer(0.02f, false, false, false, true) == A::Rien, "une seule fois");
+    Verifier(g.images == 15 && g.marcheVue == 3 && g.annulations == 3 && g.tenues == 2, "le bilan compte images, retours, annulations, tenues");
+    // Sans tenue (A/B) : jamais de Tenir, et le bilan repart de zero au decollage suivant.
+    Verifier(g.Avancer(0.02f, true, false, false, false) == A::Annuler, "decollage sans tenue : annuler seul");
+    Verifier(g.images == 1 && g.marcheVue == 0 && g.annulations == 1 && g.tenues == 0, "bilan remis a zero au decollage");
+    for (int i = 0; i < 30; ++i) Verifier(g.Avancer(0.02f, true, false, false, false) == A::Rien, "sans tenue : jamais de Tenir");
+}
+
 int main()
 {
     Avance();
     Queue();
     Temoin();
     Decollage();
+    VolRendu();
+    Marche();
     std::printf("%d verification(s), %d echec(s)\n", g_verifs, g_echecs);
     return g_echecs == 0 ? 0 : 1;
 }

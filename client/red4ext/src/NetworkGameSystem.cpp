@@ -9297,7 +9297,10 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // MEME REGLE QUE LA POSTURE : sur CHANGEMENT, jamais en continu. Un saut dure moins d'une
         // seconde ; le pousser a chaque frame ferait 60 ecritures de graphe pour un geste qui en
         // demande deux -- et c'est le regime qui a fait tomber le jeu deux fois le 2026-08-06.
-        const bool enVolMaintenant = pose.locomotion == 6;
+        // ⭐ LE VOL SE LIT SUR LA POSE RENDUE (F-PLY-723). `pose.locomotion` est celle du DERNIER echantillon recu
+        // (sans le retard d'interpolation) ; la position, elle, est rendue 0,1 s plus tard. Lu sur la premiere,
+        // le saut etait pousse avant l'arc, et la hauteur de chute lue quand le corps etait encore a 1 m du sol.
+        const bool enVolMaintenant = Tessera::Sync::EnVolRendu(pose.locomotionRendue, pose.locomotionSuivante);
         // ⚗️ BALAYAGE DE LA PHASE (`exploration.state`) — le jeu d'exploration porte `startup`,
         // `loop` et `recover` (F-PLY-475) et rien ne dit quelle valeur designe laquelle. On change
         // de valeur a CHAQUE decollage : saut 1 -> phase 0, saut 2 -> phase 1, etc. Une video de
@@ -9405,7 +9408,9 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
             // vh >= 2,5, sinon AUCUNE poussee (V qui tombe d'un trottoir ne saute pas : le gel du playtest 2).
             const double maintenantS = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
             const double ageAnnonce = maintenantS - suiviPosture.sautAnnonceS;
-            const bool annonce = ageAnnonce >= 0.0 && ageAnnonce <= kFenetreAnnonceS;
+            // Le decollage est maintenant vu avec le retard du tampon : la fenetre s'allonge d'autant.
+            const bool annonce = ageAnnonce >= 0.0
+                && ageAnnonce <= kFenetreAnnonceS + std::clamp(g_horlogeRendu.DelaiCourant(), 0.0, 0.3) + 0.06;
             const int32_t famille = enVolMaintenant ? (suiviPosture.vhLissee >= kVitesseCourseMS ? 2 : 0)
                                                     : (suiviPosture.chute ? 2 : 0);
             // Decision du 2026-10-05 (question 1 du chantier saut, option b) : la RECEPTION ne se pousse que si le
@@ -9454,7 +9459,8 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                 // et ramenerait le corps au sol : mesure 2026-09-15, z qui retombe a 27,5 m pendant l'ecriture
                 // directe. On les annule au decollage.
                 bool annule = false;
-                Red::CallVirtual(this, "TesseraAnnulerPlacements", annule, entityId);
+                // Les seuls placements : la marche et la tenue appartiennent a la garde du vol (GardeMarcheVol).
+                Red::CallVirtual(this, "TesseraAnnulerTeleports", annule, entityId);
                 // `pousse=0` = decollage VU mais aucune animation poussee (chute sans annonce) : la ligne sort a
                 // CHAQUE decollage, c'est `pousse` qui dit s'il y a eu un saut (F-PLY-718).
                 SDK->logger->InfoF(PLUGIN, "[avatar %llu] SAUT famille=%d vh=%.2f annonce=%d pousse=%d",
@@ -9734,8 +9740,58 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ⭐ UN SEUL ECRIVAIN DU VOL, DU DECOLLAGE A 0,15 s APRES LE CONTACT (F-PLY-717). Sans la queue, le corps
     // restait a la hauteur de sa derniere image de vol : sous 0,5 m d'ecart vertical aucune branche ne le replace
     // avant le rattrapage a 0,25 s ([F-PLY-557], garde en filet). Avancee UNE fois par image, avant les branches.
-    const bool ecrivainVol = g_suiviAvatars[networkId].queueVol.Avancer(deltaTime, pose.locomotion == 6)
+    // « En vol » = le dernier echantillon recu le dit (on coupe la marche au plus tot) OU la pose rendue le dit
+    // (le corps est encore en l'air a l'ecran, F-PLY-723).
+    const bool volTeteOuRendu = pose.locomotion == 6
+        || Tessera::Sync::EnVolRendu(pose.locomotionRendue, pose.locomotionSuivante);
+    const bool ecrivainVol = g_suiviAvatars[networkId].queueVol.Avancer(deltaTime, volTeteOuRendu)
         && SautDirectActif() && !g_suspendreCorrections;
+    // ⭐ LA MARCHE DU MOTEUR EST COUPEE PENDANT LE VOL, ET ON LE VERIFIE A CHAQUE IMAGE (decision de Lucas du
+    // 2026-10-05, F-PLY-721/724). En course, le moteur reecrivait hauteur et avance 307 images sur 380 : annuler
+    // `AIMoveToCommand` au decollage ne suffisait pas. On lit donc l'etat des commandes d'IA a chaque image du
+    // vol, on reannule toute marche revenue, et on tient le corps par `AIHoldPositionCommand` — l'etat dans lequel
+    // l'ecriture directe TIENT (saut sur place : 18 vols, autre=0, F-PLY-720). `TESSERA_SAUT_TENIR=0` : annuler
+    // seulement (A/B). Au contact, la marche est reemise tout de suite, sans rejouer le depart.
+    {
+        static const bool kTenir = []{ const char* v = std::getenv("TESSERA_SAUT_TENIR"); return !(v && v[0] == '0'); }();
+        static const bool kTraceMarche = std::getenv("TESSERA_SAUT_TRACE") != nullptr;
+        auto& sv = g_suiviAvatars[networkId];
+        int32_t etatMarche = 0;
+        if (ecrivainVol || sv.gardeMarcheVol.enVol)
+        {
+            Red::CallVirtual(this, "TesseraEtatMarche", etatMarche, entityId);
+        }
+        const bool marcheActive = etatMarche > 0 && (etatMarche & 3) != 0;
+        const bool tenueActive = etatMarche > 0 && (etatMarche & 12) != 0;
+        const unsigned action = sv.gardeMarcheVol.Avancer(deltaTime, ecrivainVol, marcheActive, tenueActive, kTenir);
+        using Garde = Tessera::Sync::GardeMarcheVol;
+        bool fait = false;
+        if ((action & Garde::Annuler) != 0)
+        {
+            Red::CallVirtual(this, "TesseraAnnulerMarche", fait, entityId);
+        }
+        if ((action & Garde::Tenir) != 0)
+        {
+            Red::CallVirtual(this, "TesseraFigerAvatar", fait, entityId);
+        }
+        if ((action & Garde::Reemettre) != 0)
+        {
+            // Au plafond de relance : la prochaine passe reemet la marche vers la visee COURANTE. `commande` reste
+            // vrai, donc `useStart` reste faux : pas de depart rejoue.
+            sv.depuisS = 1.0e3f;
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] MARCHE_VOL images=%d marche_vue=%d annulations=%d tenues=%d tenir=%d",
+                               static_cast<unsigned long long>(networkId), sv.gardeMarcheVol.images,
+                               sv.gardeMarcheVol.marcheVue, sv.gardeMarcheVol.annulations, sv.gardeMarcheVol.tenues,
+                               kTenir ? 1 : 0);
+        }
+        if (kTraceMarche && (action != Garde::Rien || (ecrivainVol && etatMarche != 0)))
+        {
+            // etat : 1 marche en cours, 2 marche en attente, 4 tenue en cours, 8 tenue en attente, -1 pas de controleur
+            SDK->logger->InfoF(PLUGIN, "[marche-vol %llu] i=%d etat=%d action=%u loco=%u",
+                               static_cast<unsigned long long>(networkId), sv.gardeMarcheVol.images, etatMarche,
+                               action, static_cast<unsigned>(pose.locomotion));
+        }
+    }
     const bool immobileAuSol = pose.locomotion == 0 || pose.locomotion == 4;
     if (immobileAuSol && ecrivainVol)
     {
@@ -11311,7 +11367,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // marche, pour qu'un test de placement ne soit pas defait par notre propre boucle.
     // En vol, une commande de marche RECOLLE le corps au sol une image sur deux (mesure 2026-09-15, D1P contre
     // D1S) : on n'en emet pas tant que l'ecriture directe porte le saut.
-    if (g_suspendreCommandes || (SautDirectActif() && enLair))
+    if (g_suspendreCommandes || (SautDirectActif() && (enLair || ecrivainVol)))
     {
         return;
     }

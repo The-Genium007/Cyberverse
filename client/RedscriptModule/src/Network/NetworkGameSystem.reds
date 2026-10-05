@@ -3859,6 +3859,55 @@ public native class NetworkGameSystem extends IGameSystem {
         return true;
     }
 
+    // ── LA MARCHE COUPEE PENDANT LE VOL, ET VERIFIEE A CHAQUE IMAGE (F-PLY-721/724) ──────────────────────
+    // `CancelOrInterruptCommand` rend vrai sans dire si la commande s'est arretee. Ces lecteurs, eux, disent ce
+    // que la file de l'IA porte VRAIMENT : c'est l'annulation qui s'observe. Codeware ne couvre pas ce besoin
+    // (ce sont des natifs de `AIComponent`, deja exposes au script).
+    /// 1 = marche en cours, 2 = marche en attente, 4 = tenue en cours, 8 = tenue en attente (somme) ; -1 = pas de controleur.
+    public func TesseraEtatMarche(entityId: EntityID) -> Int32 {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        let controleur = IsDefined(puppet) ? puppet.GetAIControllerComponent() : null;
+        if !IsDefined(controleur) {
+            return -1;
+        }
+        let etat: Int32 = 0;
+        if controleur.IsCommandExecuting(n"AIMoveToCommand", true) {
+            etat += 1;
+        }
+        if controleur.IsCommandWaiting(n"AIMoveToCommand", true) {
+            etat += 2;
+        }
+        if controleur.IsCommandExecuting(n"AIHoldPositionCommand", true) {
+            etat += 4;
+        }
+        if controleur.IsCommandWaiting(n"AIHoldPositionCommand", true) {
+            etat += 8;
+        }
+        return etat;
+    }
+
+    /// Annule la seule commande de marche (ni les placements, ni la tenue).
+    public func TesseraAnnulerMarche(entityId: EntityID) -> Bool {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        let controleur = IsDefined(puppet) ? puppet.GetAIControllerComponent() : null;
+        if !IsDefined(controleur) {
+            return false;
+        }
+        controleur.CancelOrInterruptCommand(n"AIMoveToCommand", true, false);
+        return true;
+    }
+
+    /// Annule les seuls placements en file (un `AITeleportCommand` au sol se resoudrait en vol).
+    public func TesseraAnnulerTeleports(entityId: EntityID) -> Bool {
+        let puppet = TesseraCorpsDeLEntite(entityId) as ScriptedPuppet;
+        let controleur = IsDefined(puppet) ? puppet.GetAIControllerComponent() : null;
+        if !IsDefined(controleur) {
+            return false;
+        }
+        controleur.CancelOrInterruptCommand(n"AITeleportCommand", true, false);
+        return true;
+    }
+
     public func TesseraGesteObjet(entityId: EntityID) -> TweakDBID {
         let i = this.TesseraGesteIndex(entityId);
         if i < 0 {

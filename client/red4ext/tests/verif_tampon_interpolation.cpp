@@ -546,10 +546,29 @@ static void UneDiffusionUnTickSurDeuxNeProduitAucuneGigue()
            1e-3f);
 }
 
+static void LAllureRendueEstEnPhaseAvecLaPosition()
+{
+    // Un saut : sol (100), air (101, 102), sol (103). L'allure RENDUE et la SUIVANTE encadrent l'instant rendu.
+    TamponPose t;
+    t.Pousser(100, PoseXY(0.0f, 0.0f, 0.0f, 0));
+    t.Pousser(101, PoseXY(0.0f, 0.0f, 0.0f, 6));
+    t.Pousser(102, PoseXY(0.0f, 0.0f, 0.0f, 6));
+    t.Pousser(103, PoseXY(0.0f, 0.0f, 0.0f, 0));
+    PoseRendue r;
+    Verifier(t.Echantillonner(T(100.5), r), "echantillonnage possible");
+    Verifier(r.locomotionRendue == 0 && r.locomotionSuivante == 6, "decollage : rendue 0, suivante 6");
+    Verifier(t.Echantillonner(T(101.5), r) && r.locomotionRendue == 6 && r.locomotionSuivante == 6, "plein vol : 6 et 6");
+    Verifier(t.Echantillonner(T(102.5), r) && r.locomotionRendue == 6 && r.locomotionSuivante == 0, "descente : rendue 6, suivante 0");
+    Verifier(t.Echantillonner(T(103.5), r) && r.locomotionRendue == 0 && r.locomotionSuivante == 0, "au-dela du dernier : celle du dernier");
+    t.Pousser(104, PoseXY(0.0f, 0.0f, 0.0f, 2));
+    Verifier(t.Echantillonner(T(110.0), r) && r.locomotionRendue == 2 && r.locomotionSuivante == 2, "tampon a sec : celle du dernier");
+}
+
 int main()
 {
     std::printf("=== Verification du tampon d'interpolation ===\n\n");
     InterpoleExactementEntreDeuxEchantillons();
+    LAllureRendueEstEnPhaseAvecLaPosition();
     LeYawPrendLePlusCourtChemin();
     UnEchantillonPerimeEstIgnore();
     ExtrapolationBorneePuisGel();
