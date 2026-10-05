@@ -43,3 +43,8 @@ if(MSVC)
   target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<CONFIG:Release>:/Zi>)
   target_link_options(${CMAKE_PROJECT_NAME} PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OPT:ICF>)
 endif()
+
+# Relais d'essai HORS JEU du pont staff (tests/relais_staff_essai.cpp). Jamais livre, jamais
+# construit par defaut : cmake --build <dir> --target relais_staff_essai
+add_library(relais_staff_essai SHARED EXCLUDE_FROM_ALL ../tests/relais_staff_essai.cpp)
+target_link_libraries(relais_staff_essai PRIVATE GameNetworkingSockets::shared flatbuffers_hdr)
