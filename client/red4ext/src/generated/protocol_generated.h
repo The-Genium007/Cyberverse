@@ -247,6 +247,9 @@ struct StaffWarningBuilder;
 struct StaffWarningAck;
 struct StaffWarningAckBuilder;
 
+struct VoiceSession;
+struct VoiceSessionBuilder;
+
 struct ClientEnvelope;
 struct ClientEnvelopeBuilder;
 
@@ -512,11 +515,12 @@ enum ServerMsg : uint8_t {
   ServerMsg_VehicleMountResult = 30,
   ServerMsg_StaffEvent = 31,
   ServerMsg_StaffWarning = 32,
+  ServerMsg_VoiceSession = 33,
   ServerMsg_MIN = ServerMsg_NONE,
-  ServerMsg_MAX = ServerMsg_StaffWarning
+  ServerMsg_MAX = ServerMsg_VoiceSession
 };
 
-inline const ServerMsg (&EnumValuesServerMsg())[33] {
+inline const ServerMsg (&EnumValuesServerMsg())[34] {
   static const ServerMsg values[] = {
     ServerMsg_NONE,
     ServerMsg_Snapshot,
@@ -550,13 +554,14 @@ inline const ServerMsg (&EnumValuesServerMsg())[33] {
     ServerMsg_Rendu,
     ServerMsg_VehicleMountResult,
     ServerMsg_StaffEvent,
-    ServerMsg_StaffWarning
+    ServerMsg_StaffWarning,
+    ServerMsg_VoiceSession
   };
   return values;
 }
 
 inline const char * const *EnumNamesServerMsg() {
-  static const char * const names[34] = {
+  static const char * const names[35] = {
     "NONE",
     "Snapshot",
     "Kicked",
@@ -590,13 +595,14 @@ inline const char * const *EnumNamesServerMsg() {
     "VehicleMountResult",
     "StaffEvent",
     "StaffWarning",
+    "VoiceSession",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameServerMsg(ServerMsg e) {
-  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_StaffWarning)) return "";
+  if (::flatbuffers::IsOutRange(e, ServerMsg_NONE, ServerMsg_VoiceSession)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesServerMsg()[index];
 }
@@ -731,6 +737,10 @@ template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaffEvent> {
 
 template<> struct ServerMsgTraits<cyberpunk_rp::protocol::StaffWarning> {
   static const ServerMsg enum_value = ServerMsg_StaffWarning;
+};
+
+template<> struct ServerMsgTraits<cyberpunk_rp::protocol::VoiceSession> {
+  static const ServerMsg enum_value = ServerMsg_VoiceSession;
 };
 
 template <bool B = false>
@@ -6781,6 +6791,82 @@ inline ::flatbuffers::Offset<StaffWarningAck> CreateStaffWarningAck(
   return builder_.Finish();
 }
 
+struct VoiceSession FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef VoiceSessionBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_CID = 4,
+    VT_RELAY_PORT = 6,
+    VT_KEY = 8
+  };
+  uint64_t cid() const {
+    return GetField<uint64_t>(VT_CID, 0);
+  }
+  uint16_t relay_port() const {
+    return GetField<uint16_t>(VT_RELAY_PORT, 0);
+  }
+  const ::flatbuffers::Vector<uint8_t> *key() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_KEY);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_CID, 8) &&
+           VerifyField<uint16_t>(verifier, VT_RELAY_PORT, 2) &&
+           VerifyOffset(verifier, VT_KEY) &&
+           verifier.VerifyVector(key()) &&
+           verifier.EndTable();
+  }
+};
+
+struct VoiceSessionBuilder {
+  typedef VoiceSession Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_cid(uint64_t cid) {
+    fbb_.AddElement<uint64_t>(VoiceSession::VT_CID, cid, 0);
+  }
+  void add_relay_port(uint16_t relay_port) {
+    fbb_.AddElement<uint16_t>(VoiceSession::VT_RELAY_PORT, relay_port, 0);
+  }
+  void add_key(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> key) {
+    fbb_.AddOffset(VoiceSession::VT_KEY, key);
+  }
+  explicit VoiceSessionBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<VoiceSession> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<VoiceSession>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<VoiceSession> CreateVoiceSession(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t cid = 0,
+    uint16_t relay_port = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> key = 0) {
+  VoiceSessionBuilder builder_(_fbb);
+  builder_.add_cid(cid);
+  builder_.add_key(key);
+  builder_.add_relay_port(relay_port);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<VoiceSession> CreateVoiceSessionDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t cid = 0,
+    uint16_t relay_port = 0,
+    const std::vector<uint8_t> *key = nullptr) {
+  auto key__ = key ? _fbb.CreateVector<uint8_t>(*key) : 0;
+  return cyberpunk_rp::protocol::CreateVoiceSession(
+      _fbb,
+      cid,
+      relay_port,
+      key__);
+}
+
 struct ClientEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef ClientEnvelopeBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
@@ -7133,6 +7219,9 @@ struct ServerEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const cyberpunk_rp::protocol::StaffWarning *msg_as_StaffWarning() const {
     return msg_type() == cyberpunk_rp::protocol::ServerMsg_StaffWarning ? static_cast<const cyberpunk_rp::protocol::StaffWarning *>(msg()) : nullptr;
   }
+  const cyberpunk_rp::protocol::VoiceSession *msg_as_VoiceSession() const {
+    return msg_type() == cyberpunk_rp::protocol::ServerMsg_VoiceSession ? static_cast<const cyberpunk_rp::protocol::VoiceSession *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -7269,6 +7358,10 @@ template<> inline const cyberpunk_rp::protocol::StaffEvent *ServerEnvelope::msg_
 
 template<> inline const cyberpunk_rp::protocol::StaffWarning *ServerEnvelope::msg_as<cyberpunk_rp::protocol::StaffWarning>() const {
   return msg_as_StaffWarning();
+}
+
+template<> inline const cyberpunk_rp::protocol::VoiceSession *ServerEnvelope::msg_as<cyberpunk_rp::protocol::VoiceSession>() const {
+  return msg_as_VoiceSession();
 }
 
 struct ServerEnvelopeBuilder {
@@ -7565,6 +7658,10 @@ inline bool VerifyServerMsg(::flatbuffers::VerifierTemplate<B> &verifier, const 
     }
     case ServerMsg_StaffWarning: {
       auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::StaffWarning *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case ServerMsg_VoiceSession: {
+      auto ptr = reinterpret_cast<const cyberpunk_rp::protocol::VoiceSession *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
