@@ -232,8 +232,9 @@ int main(int argc, char** argv)
             long long port = -1;
             try
             {
-                const auto p = ParsePortFromCommandLine(l);
-                port = p.has_value() ? static_cast<long long>(p.value()) : -1;
+                bool refuse = false;
+                const auto p = ParsePortFromCommandLine(l, &refuse);
+                port = refuse ? -2 : (p.has_value() ? static_cast<long long>(p.value()) : -1);
             }
             catch (...)
             {

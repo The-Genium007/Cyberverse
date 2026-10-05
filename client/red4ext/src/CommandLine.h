@@ -27,16 +27,33 @@ inline std::optional<std::string> ParseHostFromCommandLine(char* commandLine) {
     return ArgumentFromCommandLineUntilNextSpace(commandLine, needle, needleLen);
 }
 
-inline std::optional<uint16_t> ParsePortFromCommandLine(char* commandLine) {
+// Port : 1..65535, sinon REFUS PROPRE (nullopt + *refuse = true). Avant, `std::stoi` levait sur une
+// valeur non numerique (le client tombait au demarrage) et `70000` etait tronque en silence en 4464
+// (F-PLF-332). Un refus n'est pas une absence : l'appelant journalise la difference.
+inline std::optional<uint16_t> ParsePortFromCommandLine(char* commandLine, bool* refuse = nullptr) {
     constexpr auto needle = "--cyberverse-server-port=";
     constexpr auto needleLen = std::char_traits<char>::length(needle);
+    if (refuse != nullptr) { *refuse = false; }
     const auto portString = ArgumentFromCommandLineUntilNextSpace(commandLine, needle, needleLen);
     if (!portString.has_value())
     {
         return {};
     }
 
-    return std::stoi(portString.value());
+    unsigned long long v = 0;
+    std::size_t i = 0;
+    const auto& s = portString.value();
+    for (; i < s.size() && s[i] >= '0' && s[i] <= '9'; ++i)
+    {
+        v = v * 10 + static_cast<unsigned>(s[i] - '0');
+        if (v > 65535) { break; }
+    }
+    if (i == 0 || v < 1 || v > 65535)
+    {
+        if (refuse != nullptr) { *refuse = true; }
+        return {};
+    }
+    return static_cast<uint16_t>(v);
 }
 
 // MODE DÉVELOPPEMENT — `--tessera-dev` sur la ligne de commande.

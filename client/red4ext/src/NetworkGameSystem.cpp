@@ -371,7 +371,12 @@ void NetworkGameSystem::OnNetworkUpdate(RED4ext::FrameInfo& frame_info, RED4ext:
                                    : g_telemetrie.CheminUtilise().c_str());
         }
         const auto host = ParseHostFromCommandLine(commandLine);
-        const auto port = ParsePortFromCommandLine(commandLine);
+        bool portRefuse = false;
+        const auto port = ParsePortFromCommandLine(commandLine, &portRefuse);
+        if (portRefuse)
+        {
+            SDK->logger->Warn(PLUGIN, "[net] --cyberverse-server-port= REFUSE (non numerique ou hors 1..65535) : pas de connexion");
+        }
         if (host.has_value() && port.has_value())
         {
             SDK->logger->InfoF(PLUGIN, "[net] args OK : host=%s port=%d", host->c_str(), port.value());
