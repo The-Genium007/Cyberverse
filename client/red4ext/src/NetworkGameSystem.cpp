@@ -3519,6 +3519,16 @@ static void AsseoirAvatar(uint64_t avatarReseau, RED4ext::ent::EntityID vehicule
             }
         }
     }
+    if (!corpsPlace && evenementAiPoste)
+    {
+        // La voie des avatars est l'evenement IA ; `MountToVehicle` est celle du JOUEUR et refuse
+        // ici par construction. Le verdict est celui de la relecture (`assis CONFIRME`).
+        SDK->logger->InfoF(PLUGIN,
+            "[occupation] avatar %llu -> vehicule %llu siege %u : evenement IA poste (voie des "
+            "avatars) ; MountToVehicle (voie du joueur) refuse, attendu - verdict a la relecture",
+            avatarReseau, vehiculeReseau, static_cast<uint32_t>(siege));
+        return;
+    }
     SDK->logger->InfoF(PLUGIN,
         "[occupation] avatar %llu -> vehicule %llu siege %u (corps %s, %s, evenement IA %s)%s",
         avatarReseau, vehiculeReseau, static_cast<uint32_t>(siege),
@@ -4212,6 +4222,8 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
         /// l'instant rejoue forcement un etat vieux de plusieurs secondes, meme si le serveur
         /// vient de nous l'annoncer : il etait deja assis avant qu'on le voie.
         static std::set<uint64_t> s_corpsConnus;
+        /// Avatars dont le jeu a deja confirme l'assise (une ligne de journal par montage).
+        static std::set<uint64_t> s_assisConfirme;
         static std::chrono::steady_clock::time_point s_dernierBalayage{};
         const auto maintenant = std::chrono::steady_clock::now();
         const bool balayage = (maintenant - s_dernierBalayage) >= std::chrono::seconds(1);
@@ -4269,6 +4281,7 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                     DescendreAvatar(avatarReseau, corps->second, observe);
                 }
                 s_candidats.erase(avatarReseau);
+                s_assisConfirme.erase(avatarReseau);
                 g_avatarsAssis.erase(avatarReseau);
                 continue;
             }
@@ -4286,8 +4299,29 @@ void NetworkGameSystem::HandleSnapshot(const cyberpunk_rp::protocol::Snapshot* s
                 && observe.parent.hash == caisse->second.hash;
             if (bonVehicule && observe.slot == siegeVoulu)
             {
+                // Verdict du jeu, une fois par montage : sans cette ligne, « assis » et
+                // « relecture jamais faite » donnent le meme silence.
+                if (s_assisConfirme.insert(avatarReseau).second)
+                {
+                    const auto eAvatar = Cyberverse::Utils::GetDynamicEntity(corps->second);
+                    const auto eCaisse = Cyberverse::Utils::GetDynamicEntity(caisse->second);
+                    float ecart = -1.0f;
+                    if (eAvatar.has_value() && eCaisse.has_value())
+                    {
+                        const auto pa = Cyberverse::Utils::Entity_GetWorldPosition(eAvatar.value());
+                        const auto pv = Cyberverse::Utils::Entity_GetWorldPosition(eCaisse.value());
+                        const float dx = pa.X - pv.X, dy = pa.Y - pv.Y, dz = pa.Z - pv.Z;
+                        ecart = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    }
+                    SDK->logger->InfoF(PLUGIN,
+                        "[occupation] avatar %llu assis CONFIRME par le jeu : vehicule %llu siege "
+                        "%u, monte=true, ecart a l'origine du vehicule=%.2f m",
+                        avatarReseau, cible->second.vehicule,
+                        static_cast<uint32_t>(cible->second.siege), ecart);
+                }
                 continue; // déjà exactement là où il doit être : rien à faire.
             }
+            s_assisConfirme.erase(avatarReseau); // pas (ou plus) au bon siege : a reconfirmer
 
             // ⚠️ UN CHANGEMENT DE PLACE N'EST PAS UNE DESCENTE SUIVIE D'UNE MONTÉE. Le jeu a une
             // opération dédiée (`workspotSystem.script:34`, employée par
