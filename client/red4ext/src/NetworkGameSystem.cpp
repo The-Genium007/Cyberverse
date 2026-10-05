@@ -9467,15 +9467,24 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
                                    static_cast<unsigned long long>(networkId), famille,
                                    suiviPosture.vhLissee, annonce ? 1 : 0, poussable ? 1 : 0);
                 g_suiviAvatars[networkId].bilanVol = Tessera::Sync::BilanVol{};
+                g_suiviAvatars[networkId].politiqueVol = -9;
             }
             if (!enVolMaintenant)
             {
                 // Le bilan du temoin « qui a ecrit ? » : sur combien d'images du vol le corps lu etait-il
                 // exactement ce que nous avions ecrit a l'image d'avant ?
                 const auto& bilan = g_suiviAvatars[networkId].bilanVol;
-                SDK->logger->InfoF(PLUGIN, "[avatar %llu] VOL images=%d nous=%d autre=%d pire=%.3fm",
+                // Deux temoins de l'ANIMATION (F-PLY-725 : en vol, l'avatar affichait la premiere image d'un clip
+                // d'ECHELLE, figee). `politique` = ce que la machine de deplacement du moteur faisait a 0,3 s du
+                // decollage (1 Exploration, 2 Idle, 5 Start, 6 Move, 7 Stop ; +100 politique evaluee, +1000 au repos).
+                // `clip_vol` = la duree de `jump_walk_loop` telle que CHARGEE pour ce corps : 2,5 s = la recette,
+                // 0,567 s = le clip d'origine (l'archive derivee n'est pas prise), -1 = clip inconnu.
+                float dureeClipVol = -9.0f;
+                Red::CallVirtual(this, "TesseraDureeClip", dureeClipVol, entityId, Red::CName("jump_walk_loop"));
+                SDK->logger->InfoF(PLUGIN, "[avatar %llu] VOL images=%d nous=%d autre=%d pire=%.3fm politique=%d clip_vol=%.3f",
                                    static_cast<unsigned long long>(networkId), bilan.images, bilan.nous,
-                                   bilan.autre, bilan.pireEcartM);
+                                   bilan.autre, bilan.pireEcartM, g_suiviAvatars[networkId].politiqueVol,
+                                   dureeClipVol);
                 // ⚗️ La RECEPTION ne s'affiche pas (F-PLY-528) : on veut savoir si la poussee part vraiment.
                 SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECEPTION famille=%d hauteur=%.2f duree=%.2f pousse=%d",
                                    static_cast<unsigned long long>(networkId), famille, hauteurChute,
@@ -9489,6 +9498,12 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         {
             suiviPosture.depuisDecollageS += deltaTime;
             suiviPosture.zDecollage = std::max(suiviPosture.zDecollage, pose.z);
+            if (g_suiviAvatars[networkId].politiqueVol == -9 && suiviPosture.depuisDecollageS >= 0.3f)
+            {
+                int32_t politique = -8;
+                Red::CallVirtual(this, "TesseraEtatPolitique", politique, entityId);
+                g_suiviAvatars[networkId].politiqueVol = politique;
+            }
             if (parAction && !suiviPosture.boucleVolDemandee && suiviPosture.depuisDecollageS >= kSautVolDebutS)
             {
                 suiviPosture.boucleVolDemandee = true;

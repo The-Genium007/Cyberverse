@@ -337,6 +337,8 @@ struct SuiviAvatar
     Tessera::Sync::QueueDeVol queueVol;
     Tessera::Sync::BilanVol bilanVol;
     Tessera::Sync::GardeMarcheVol gardeMarcheVol;
+    /// Etat de la machine de deplacement du moteur a 0,3 s du decollage (-9 = pas encore lu).
+    int32_t politiqueVol = -9;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai
