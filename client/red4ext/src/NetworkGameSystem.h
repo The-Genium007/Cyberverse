@@ -547,6 +547,13 @@ struct SuiviAvatar
     /// Evenement externe du vol : `ActionLoop` se demande une fois, ~0,2 s apres le decollage.
     float depuisDecollageS = 0.0f;
     bool boucleVolDemandee = false;
+    /// Reconstruction du saut (2026-10-01, F-PLY-705/706) : horodatage (secondes, horloge steady) du dernier message
+    /// ACTION_SAUT 18-21 - il n'arme que la distinction saut/chute, il ne pousse rien.
+    double sautAnnonceS = -1.0e9;
+    /// Vitesse horizontale lissee de la pose rendue, mise a jour AU SOL seulement (en l'air elle monte : on veut
+    /// celle d'avant le decollage). x/y precedents pour la difference finie.
+    float vhPrecX = 0.0f, vhPrecY = 0.0f, vhLissee = 0.0f;
+    bool vhConnue = false;
     /// Descente sous le point de decollage : bascule `exploration.movementType = 2` (chute, `fall_loop` + `landing_hard`).
     bool chute = false;
     float zDecollage = 0.0f;
