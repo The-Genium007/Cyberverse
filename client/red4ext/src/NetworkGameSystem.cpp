@@ -714,6 +714,33 @@ static constexpr float kSautReceptionS = 0.5f;    // absorption + retour debout
 // invisible), clips du jeu de REACTIONS (corps deforme).
 static constexpr const char* kActionSautNom = "CallSquad";
 
+/// Sonde F-PLY-601 : une correction douce isolee (voir la branche douce de `PiloterAvatar`).
+static bool SondeDouceUneActive()
+{
+    static const bool actif = std::getenv("TESSERA_SONDE_DOUCE_UNE") != nullptr;
+    return actif;
+}
+
+/// Suivi direct d'un corps en marche : ecriture a CHAQUE image (A/B, ETEINT par defaut, non vu en jeu).
+static bool SuiviDirectActif()
+{
+    static const bool actif = []() {
+        const char* v = std::getenv("TESSERA_SUIVI_DIRECT");
+        return v != nullptr && std::string(v) == "1";
+    }();
+    return actif;
+}
+
+/// Garde de marche plantee : ALLUMEE par defaut, `TESSERA_GARDE_MARCHE=0` la coupe.
+static bool GardeMarcheActive()
+{
+    static const bool actif = []() {
+        const char* v = std::getenv("TESSERA_GARDE_MARCHE");
+        return v == nullptr || std::string(v) != "0";
+    }();
+    return actif;
+}
+
 static bool SautDirectActif()
 {
     static const bool actif = []() {
@@ -4521,7 +4548,7 @@ void NetworkGameSystem::HandlePositionCorrection(const cyberpunk_rp::protocol::P
         DequantPos(pos->x()), DequantPos(pos->y()), DequantPos(pos->z()), 1.0f
     };
     const float yaw = DequantYaw(correction->yaw());
-    const uint8_t reason = correction->reason(); // 0=Spawn, 1=AntiCheat, 2=Resync (diagnostic uniquement)
+    const uint8_t reason = correction->reason(); // 0=Spawn, 1=AntiCheat, 2=Resync, 3=Blocage entre joueurs
 
     // Téléporte le JOUEUR LOCAL à la position autoritaire du serveur. Même facilité que pour les
     // avatars distants (confirmée fonctionnelle en jeu, cf. SetEntityPosition) mais appliquée au
@@ -4534,7 +4561,18 @@ void NetworkGameSystem::HandlePositionCorrection(const cyberpunk_rp::protocol::P
         return;
     }
 
-    const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yaw };
+    // reason 3 = BLOCAGE entre joueurs (serveur, 2026-09-30) : le serveur refuse l'avance et renvoie le
+    // joueur au bord du contact, SUR SON PROPRE CHEMIN d'approche (jamais de cote : pas de mur). Le recul
+    // est petit (vitesse x aller-retour) et on GARDE l'orientation courante : imposer le yaw du serveur
+    // ferait tourner la camera a chaque contact.
+    float yawApplique = yaw;
+    if (reason == 3)
+    {
+        const auto orientation = Cyberverse::Utils::Entity_GetWorldOrientation(player);
+        const auto [Roll, Pitch, YawCourant] = Cyberverse::Utils::Quaternion_ToEulerAngles(orientation);
+        yawApplique = YawCourant;
+    }
+    const RED4ext::EulerAngles angles = { 0.0f, 0.0f, yawApplique };
     const auto teleportFacility = Red::GetGameSystem<RED4ext::TeleportationFacility>();
     if (!Red::CallVirtual(teleportFacility, "Teleport", player, worldPosition, angles))
     {
@@ -11277,6 +11315,30 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // ce qui avait fait tomber le jeu a 60 Hz par avatar le 2026-08-06. Ici on reste sous 33 Hz,
     // et SEULEMENT pour un avatar en l'air — un etat rare et bref hors ascenseur.
     static constexpr float kPeriodePlacementVolS = 0.03f;
+    // ── SUIVI DIRECT (`TESSERA_SUIVI_DIRECT=1`, A/B) : corps en marche AU SOL, ecriture a CHAQUE image,
+    // a la place de la correction douce et du palier (voir PlayerSync/SuiviDirect.h). Non vu en jeu.
+    bool suiviDirectFait = false;
+    if (SuiviDirectActif() && !g_suspendreCorrections && !enLair && derive <= kSautFrancM)
+    {
+        const auto pas = Tessera::Sync::PasSuiviDirect({position.X, position.Y, position.Z},
+            {positionVoulue.X, positionVoulue.Y, positionVoulue.Z}, kFractionCorrection);
+        const RED4ext::Vector4 ecrit{pas.x, pas.y, pas.z, 1.0f};
+        int32_t raison = -1;
+        Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", raison, entityId, ecrit);
+        if (raison == 0)
+        {
+            suiviDirectFait = true;
+            auto& s = g_suiviAvatars[networkId];
+            s.placeX = ecrit.X; s.placeY = ecrit.Y; s.placeZ = ecrit.Z; s.depuisPlaceS = 0.0f; s.placeValide = true;
+            s.depuisSuiviLogS += deltaTime;
+            if (s.depuisSuiviLogS >= 0.5f)
+            {
+                s.depuisSuiviLogS = 0.0f;
+                SDK->logger->InfoF(PLUGIN, "[suivi-direct %llu] raison=%d derive=%.2fm dz=%+.2f ecrit=(%.2f %.2f %.2f)",
+                                   networkId, raison, derive, dz, ecrit.X, ecrit.Y, ecrit.Z);
+            }
+        }
+    }
     if (!g_suspendreCorrections && enLair && derive <= kSautFrancM)
     {
         auto& s = g_suiviAvatars[networkId];
@@ -11391,7 +11453,7 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // du playtest (lignes `[vert 6]`, branche mobile) : 50 relevés sur 321 au-delà d'un mètre,
     // dont `dh=0.088 ECART.z=-2.197` en course dans une montée. Le seuil vertical reste celui de
     // `corrigeZ` (0,5 m) : en dessous, le sol appartient toujours au moteur.
-    else if (!g_suspendreCorrections
+    else if (!g_suspendreCorrections && !suiviDirectFait
              && (deriveHorizontale > kCorrectionMiniM || std::fabs(dz) > kSeuilVerticalM)
              && derive <= kSautFrancM)
     {
@@ -11430,12 +11492,42 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
         // x 200 = 8000 commandes/s, ce qui est DANS la zone qui a fait tomber le jeu. Une commande
         // de teleport n'est pas une commande de marche et rien ne dit qu'elle coute pareil — mais
         // tant que ce n'est pas mesure, ce chemin n'est valide qu'a faible densite.
-        SetEntityPosition(entityId, pas, pose.yaw);
+        // ⚗️ SONDE F-PLY-601 (`TESSERA_SONDE_DOUCE_UNE=1`, eteinte par defaut) : UNE seule correction
+        // douce, pleine (sur la cible), puis plus rien pendant 1 s, et la derive a chaque image.
+        // Tranche la contradiction F-PLY-328 / F-PLY-085 : une marche de >= 0,5 m en une image entre
+        // 150 et 350 ms apres l'appel = l'`AITeleportCommand` isole est lu (et la famine par
+        // reemission est reelle) ; aucune marche = il ne l'est pas, et ce qui deplace l'avatar est ailleurs.
+        const bool kSondeDouceUne = SondeDouceUneActive();
+        auto& sonde = g_suiviAvatars[networkId];
+        const bool sondeRetient = kSondeDouceUne && sonde.sondeDouceS >= 0.0f;
+        if (!sondeRetient)
+        {
+        const RED4ext::Vector4 cibleSonde = kSondeDouceUne ? positionVoulue : pas;
+        SetEntityPosition(entityId, cibleSonde, pose.yaw);
+        if (kSondeDouceUne)
+        {
+            sonde.sondeDouceS = 0.0f;
+            SDK->logger->InfoF(PLUGIN, "[sonde-douce %llu] APPEL derive=%.2fm", networkId, derive);
+        }
         { auto& s = g_suiviAvatars[networkId];
-          s.placeX = pas.X; s.placeY = pas.Y; s.depuisPlaceS = 0.0f; s.placeZ = pas.Z; s.placeValide = true;
+          s.placeX = cibleSonde.X; s.placeY = cibleSonde.Y; s.depuisPlaceS = 0.0f; s.placeZ = cibleSonde.Z; s.placeValide = true;
           const auto relupas = Cyberverse::Utils::Entity_GetWorldPosition(entite.value());
-          const float rpasx = relupas.X - pas.X, rpasy = relupas.Y - pas.Y, rpasz = relupas.Z - pas.Z;
+          const float rpasx = relupas.X - cibleSonde.X, rpasy = relupas.Y - cibleSonde.Y, rpasz = relupas.Z - cibleSonde.Z;
           g_ecartApresPose = std::sqrt(rpasx * rpasx + rpasy * rpasy + rpasz * rpasz); }
+        }
+    }
+    if (SondeDouceUneActive())
+    {
+        auto& sonde = g_suiviAvatars[networkId];
+        if (sonde.sondeDouceS >= 0.0f)
+        {
+            sonde.sondeDouceS += deltaTime;
+            SDK->logger->InfoF(PLUGIN, "[sonde-douce %llu] t=%.3fs derive=%.2fm", networkId, sonde.sondeDouceS, derive);
+            if (sonde.sondeDouceS >= 1.0f)
+            {
+                sonde.sondeDouceS = -1.0f;
+            }
+        }
     }
 
     // ⛔ RETOURS DU PLAYTEST 2 (2026-09-26, R4 « complètement à côté ») — UN PALIER entre la
@@ -11448,13 +11540,76 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     static constexpr float kPalierTenuS = 0.5f;
     auto& suiviPalier = g_suiviAvatars[networkId];
     suiviPalier.depuisEcartLargeS =
-        (derive > kPalierM && !enLair) ? suiviPalier.depuisEcartLargeS + deltaTime : 0.0f;
+        (derive > kPalierM && !enLair && !suiviDirectFait) ? suiviPalier.depuisEcartLargeS + deltaTime : 0.0f;
+    // L'instrument du palier : la derive relue a l'image SUIVANTE (l'ecriture du moveComponent n'est
+    // visible dans la transformation monde qu'a la passe d'apres). `apres` < 0,5 m = le placement a pris.
+    if (suiviPalier.palierAvantM >= 0.0f)
+    {
+        SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER suivi avant=%.2fm apres=%.2fm", networkId,
+                           suiviPalier.palierAvantM, derive);
+        suiviPalier.palierAvantM = -1.0f;
+    }
+    // Le meme palier relu 1 et 3 images plus tard : la relecture a une image mentait (corps revenu ensuite).
+    if (suiviPalier.palierImages >= 0)
+    {
+        ++suiviPalier.palierImages;
+        if (suiviPalier.palierImages == 1)
+        {
+            suiviPalier.palierApres1M = derive;
+        }
+        else if (suiviPalier.palierImages >= 3)
+        {
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER tenu avant=%.2fm apres1=%.2fm apres3=%.2fm", networkId,
+                               suiviPalier.palierTenuAvantM, suiviPalier.palierApres1M, derive);
+            suiviPalier.palierImages = -1;
+        }
+    }
     const bool palierAtteint = suiviPalier.depuisEcartLargeS >= kPalierTenuS;
     if (palierAtteint)
     {
         suiviPalier.depuisEcartLargeS = 0.0f;
         SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER derive=%.2fm tenue > %.1fs", networkId, derive,
                            kPalierTenuS);
+    }
+    // ⛔ LES PALIERS EN SERIE (bloc 1 du 2026-09-30 : 5,51 -> 4,80 -> 4,35 -> 4,02 -> 3,48 m, un par
+    // 0,5 s, en sprint). Fiche du consommateur (ADR 0034) du placement franc par `SetEntityPosition` :
+    //   Cible        : `AITeleportCommand.position`, via `TeleportPuppet` (+ facility, inerte sur un
+    //                  pantin a IA, F-PLY-070/506)
+    //   Lecteurs     : 1 — `TeleportCommandHandler`, premiere `Update` 200 a 267 ms apres `Activate`
+    //                  (F-PLY-328, source CDPR)
+    //   Alimente     : la position du corps, a la destination FIGEE a l'empilage
+    //   Domaine      : une position monde, lue une fois, >= 200 ms apres l'envoi
+    //   Hors domaine : annulee avant lecture -> rien
+    //   Qui d'AUTRE  : ⛔ NOUS, A L'IMAGE SUIVANTE. Avec 3 m d'ecart, la correction douce ci-dessus
+    //                  tourne a chaque image (`deriveHorizontale > 0,25 m`) et son `TeleportPuppet`
+    //                  fait `CancelOrInterruptCommand(n"AITeleportCommand")` AVANT d'envoyer le sien
+    //                  (NetworkGameSystem.reds). Le teleport du palier vit donc UNE image (~16 ms),
+    //                  jamais les 200 ms qu'il faut a son lecteur. Le palier n'etait qu'une correction
+    //                  douce de plus — d'ou ~0,5 m gagne par 0,5 s, la vitesse de rattrapage de la
+    //                  marche. Et `commande = false` relancait la marche (phase de depart en course).
+    // On ecrit donc le palier dans l'entree active du moveComponent (F-PLY-337 : la seule ecriture de
+    // position prouvee, sans commande d'IA, donc rien a annuler) et on NE TOUCHE PAS a la marche. Le
+    // franc > 15 m garde `SetEntityPosition` (spawn, reapparition). Repli sur l'ancien chemin si le
+    // natif refuse. ⚠️ Non vu en jeu : `PALIER suivi ... apres=` le tranche (F-PLY-337 a ete mesure sur
+    // un corps IMMOBILE ; sur un corps en marche, c'est la question ouverte).
+    if (!g_suspendreCorrections && palierAtteint && derive <= kSautFrancM)
+    {
+        int32_t raison = -1;
+        const bool appel =
+            Red::CallVirtual(this, "TesseraEcrirePositionRepresentation", raison, entityId, positionVoulue);
+        if (appel && raison == 0)
+        {
+            ++g_statsRoster.recalagesAvatar;
+            suiviPalier.palierAvantM = derive;
+            suiviPalier.palierTenuAvantM = derive;
+            suiviPalier.palierImages = 0;
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] RECALAGE derive=%.2fm allure=%u ech=%zu direct%s", networkId,
+                               derive, static_cast<unsigned>(pose.locomotion), g_tamponsJoueurs[networkId].Nombre(),
+                               pose.extrapolee ? " EXTRAPOLE" : "");
+            return;
+        }
+        SDK->logger->InfoF(PLUGIN, "[avatar %llu] PALIER direct refuse raison=%d -> AITeleportCommand", networkId,
+                           raison);
     }
     if (!g_suspendreCorrections && (derive > kSautFrancM || palierAtteint))
     {
@@ -11690,6 +11845,25 @@ void NetworkGameSystem::PiloterAvatar(uint64_t networkId, RED4ext::ent::EntityID
     // sans cout visible : `useStart` ne vaut vrai que si `!suivi.commande`, donc pas de depart
     // rejoue sur une marche en cours.
     static constexpr float kRelanceMaxS = 2.0f;
+    // ── MARCHE PLANTEE : une commande emise a un demi-tour peut ne jamais demarrer (`SendCommand` accepte
+    // != execute) ; le corps freine et reste plante, et rien ne la reemet tant que `suivi.commande` est
+    // vrai. Corps sous 0,5 m/s pendant 0,25 s alors qu'un deplacement est commande -> on fait sauter les
+    // deux gardes de non-reemission (depuisS) SANS rejouer le depart (`commande` reste vrai : useStart=false).
+    // Inactive avec le suivi direct (la position lue y est la notre).
+    if (GardeMarcheActive() && !SuiviDirectActif())
+    {
+        float vCorps = 1e9f;
+        if (suivi.gardeValide && deltaTime > 1e-4f)
+        {
+            vCorps = std::hypot(position.X - suivi.gardeX, position.Y - suivi.gardeY) / deltaTime;
+        }
+        suivi.gardeX = position.X; suivi.gardeY = position.Y; suivi.gardeValide = true;
+        if (suivi.gardeMarche.Avancer(deltaTime, pose.locomotion != 0 && suivi.commande, vCorps))
+        {
+            SDK->logger->InfoF(PLUGIN, "[avatar %llu] MARCHE PLANTEE v=%.2f m/s -> reemission", networkId, vCorps);
+            suivi.depuisS = kRelanceMaxS;
+        }
+    }
     if (g_marcheSansRelance && g_pilotageParEntrees && suivi.commande && suivi.viseeValide
         && !entreeAChange && !allureAChange && suivi.depuisS < kRelanceMaxS)
     {

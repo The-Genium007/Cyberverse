@@ -19,6 +19,7 @@
 #include "PlayerActionTracker.h"
 #include "PlayerSync/TamponInterpolation.h"
 #include "PlayerSync/IdentiteStatique.h"
+#include "PlayerSync/SuiviDirect.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
 #include "RED4ext/Scripting/Natives/Generated/Vector4.hpp"
 #include "RED4ext/Scripting/Natives/entEntityID.hpp"
@@ -344,6 +345,21 @@ struct SuiviAvatar
     bool ciblePassagerPrecedenteValide = false;
     /// Temps passe avec un ecart > 3 m (palier de recalage, retours du playtest 2).
     float depuisEcartLargeS = 0.0f;
+    /// Derive au moment du dernier palier ecrit en direct ; >= 0 = a relire a l'image suivante (instrument).
+    float palierAvantM = -1.0f;
+    /// Sonde F-PLY-601 (`TESSERA_SONDE_DOUCE_UNE`) : temps depuis l'unique correction douce ; < 0 = libre.
+    float sondeDouceS = -1.0f;
+    /// Instrument du palier (relecture a 1 et 3 images) : images ecoulees depuis le palier (< 0 = libre).
+    int32_t palierImages = -1;
+    float palierTenuAvantM = 0.0f;
+    float palierApres1M = 0.0f;
+    /// Suivi direct (`TESSERA_SUIVI_DIRECT`) : echantillonnage du journal.
+    float depuisSuiviLogS = 0.0f;
+    /// Garde de marche plantee : vitesse du corps = deplacement horizontal entre deux passages.
+    Tessera::Sync::GardeMarchePlantee gardeMarche;
+    float gardeX = 0.0f;
+    float gardeY = 0.0f;
+    bool gardeValide = false;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai
@@ -2218,14 +2234,27 @@ public:
 
     int32_t Tessera_CoffreSeq() const { return m_coffreSeq; }
 
-    /// L'`EntityID` LOCALE du vehicule dont on tient le coffre — pas l'id reseau. C'est celle-la
+    /// L'`EntityID` LOCALE du contenant dont on tient le coffre — pas l'id reseau. C'est celle-la
     /// que redscript sait manipuler ; la traduction vit ici, ou vit la table.
+    ///
+    /// ⚠️ CORRIGE LE 2026-09-30 (F-DEV-031). `m_coffreVehicule` porte DEUX SORTES d'identifiants
+    /// (voir `protocol.fbs` sur `CoffreContenu.contenant`, et le commentaire au-dessus de
+    /// `m_coffreEstContenant`) : l'id RESEAU d'un vehicule (a traduire via
+    /// `m_networkedEntitiesLookup`), OU l'`EntityID` de JEU d'un appareil du monde — deja locale,
+    /// deja directement utilisable. Chercher la seconde dans la table des vehicules reseau ne la
+    /// trouve jamais : la native rendait `vide`, et `VehiculeCoffre.reds` abandonnait
+    /// "definitivement" a chaque ouverture de caisse. Le genre de session (`m_coffreEstContenant`)
+    /// dit laquelle des deux on tient — c'est la seule information qui le dise.
     RED4ext::ent::EntityID Tessera_CoffreVehicule() const
     {
         RED4ext::ent::EntityID vide{};
         if (m_coffreVehicule == 0)
         {
             return vide;
+        }
+        if (m_coffreEstContenant)
+        {
+            return RED4ext::ent::EntityID{m_coffreVehicule};
         }
         const auto it = m_networkedEntitiesLookup.find(m_coffreVehicule);
         return (it == m_networkedEntitiesLookup.end()) ? vide : it->second;
