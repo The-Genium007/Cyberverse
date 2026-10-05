@@ -19,6 +19,7 @@
 #include "PlayerActionTracker.h"
 #include "PlayerSync/TamponInterpolation.h"
 #include "PlayerSync/IdentiteStatique.h"
+#include "PlayerSync/SuiviDirect.h"
 #include "RED4ext/Scripting/Natives/Generated/AI/Command.hpp"
 #include "RED4ext/Scripting/Natives/Generated/Vector4.hpp"
 #include "RED4ext/Scripting/Natives/entEntityID.hpp"
@@ -336,6 +337,17 @@ struct SuiviAvatar
     float palierAvantM = -1.0f;
     /// Sonde F-PLY-601 (`TESSERA_SONDE_DOUCE_UNE`) : temps depuis l'unique correction douce ; < 0 = libre.
     float sondeDouceS = -1.0f;
+    /// Instrument du palier (relecture a 1 et 3 images) : images ecoulees depuis le palier (< 0 = libre).
+    int32_t palierImages = -1;
+    float palierTenuAvantM = 0.0f;
+    float palierApres1M = 0.0f;
+    /// Suivi direct (`TESSERA_SUIVI_DIRECT`) : echantillonnage du journal.
+    float depuisSuiviLogS = 0.0f;
+    /// Garde de marche plantee : vitesse du corps = deplacement horizontal entre deux passages.
+    Tessera::Sync::GardeMarchePlantee gardeMarche;
+    float gardeX = 0.0f;
+    float gardeY = 0.0f;
+    bool gardeValide = false;
     bool commande = false;
     /// Dernière allure commandée. Un changement d'allure est un ÉVÉNEMENT : il déclenche une
     /// réémission immédiate au lieu d'attendre le créneau — c'est ce qui supprime le « petit délai
